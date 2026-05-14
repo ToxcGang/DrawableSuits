@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -9,6 +10,8 @@ internal static class PauseMenuButtonInjector
 {
     private const string ButtonName = "DrawableSuitsButton";
     private const string ButtonText = "DrawableSuits";
+    private const float MinimumRowSpacing = 36f;
+    private const float FallbackRowSpacing = 92f;
 
     public static void EnsureButton(QuickMenuManager quickMenu)
     {
@@ -17,11 +20,20 @@ internal static class PauseMenuButtonInjector
             return;
         }
 
-        var panel = quickMenu.mainButtonsPanel.transform;
+        var panel = quickMenu.mainButtonsPanel.GetComponent<RectTransform>();
+        if (panel == null)
+        {
+            return;
+        }
+
+        var rows = CollectRows(panel);
         var buttonObject = FindExistingButton(panel);
         if (buttonObject == null)
         {
-            buttonObject = CloneExistingButton(panel) ?? CreateFallbackButton(panel);
+            var template = ChooseTemplateRow(rows);
+            buttonObject = template != null
+                ? CloneTemplate(template)
+                : CreateFallbackButton(panel);
         }
 
         if (buttonObject == null)
@@ -30,12 +42,15 @@ internal static class PauseMenuButtonInjector
             return;
         }
 
+        RemoveDuplicateButtons(panel, buttonObject);
         ConfigureButton(buttonObject, quickMenu);
+        PlaceButtonAndRows(panel, buttonObject);
+        RebuildNavigation(panel);
     }
 
     public static void SelectIfNeeded(QuickMenuManager quickMenu)
     {
-        if (quickMenu == null || !quickMenu.isMenuOpen || EventSystem.current == null)
+        if (quickMenu == null || !quickMenu.isMenuOpen || quickMenu.mainButtonsPanel == null || EventSystem.current == null)
         {
             return;
         }
@@ -45,12 +60,11 @@ internal static class PauseMenuButtonInjector
             return;
         }
 
-        var buttonObject = quickMenu.mainButtonsPanel != null
-            ? FindExistingButton(quickMenu.mainButtonsPanel.transform)
-            : null;
-        if (buttonObject != null)
+        var panel = quickMenu.mainButtonsPanel.GetComponent<RectTransform>();
+        var rows = GetRowsInVisualOrder(panel);
+        if (rows.Count > 0)
         {
-            EventSystem.current.SetSelectedGameObject(buttonObject);
+            EventSystem.current.SetSelectedGameObject(rows[0].GameObject);
         }
     }
 
@@ -68,24 +82,39 @@ internal static class PauseMenuButtonInjector
         return null;
     }
 
-    private static GameObject CloneExistingButton(Transform panel)
+    private static void RemoveDuplicateButtons(Transform panel, GameObject keep)
     {
         var buttons = panel.GetComponentsInChildren<Button>(true);
         foreach (var button in buttons)
         {
-            if (button == null || button.gameObject.name == ButtonName)
+            if (button == null || button.gameObject == keep || button.gameObject.name != ButtonName)
             {
                 continue;
             }
 
-            var clone = Object.Instantiate(button.gameObject, panel, false);
-            clone.name = ButtonName;
-            clone.transform.SetAsLastSibling();
-            clone.SetActive(true);
-            return clone;
+            button.gameObject.SetActive(false);
+            Object.Destroy(button.gameObject);
+        }
+    }
+
+    private static GameObject CloneTemplate(MenuRow template)
+    {
+        var clone = Object.Instantiate(template.GameObject, template.RectTransform.parent, false);
+        clone.name = ButtonName;
+        clone.transform.SetAsLastSibling();
+        clone.SetActive(true);
+
+        var cloneRect = clone.GetComponent<RectTransform>();
+        if (cloneRect != null)
+        {
+            cloneRect.anchorMin = template.RectTransform.anchorMin;
+            cloneRect.anchorMax = template.RectTransform.anchorMax;
+            cloneRect.pivot = template.RectTransform.pivot;
+            cloneRect.sizeDelta = template.RectTransform.sizeDelta;
+            cloneRect.localScale = template.RectTransform.localScale;
         }
 
-        return null;
+        return clone;
     }
 
     private static GameObject CreateFallbackButton(Transform panel)
@@ -95,15 +124,15 @@ internal static class PauseMenuButtonInjector
         root.transform.SetAsLastSibling();
 
         var rect = root.GetComponent<RectTransform>();
-        rect.sizeDelta = new Vector2(220f, 42f);
+        rect.sizeDelta = new Vector2(260f, 54f);
 
         var image = root.GetComponent<Image>();
         image.color = new Color(0.08f, 0.08f, 0.08f, 0.86f);
 
         var layout = root.GetComponent<LayoutElement>();
-        layout.preferredWidth = 220f;
-        layout.preferredHeight = 42f;
-        layout.minHeight = 36f;
+        layout.preferredWidth = 260f;
+        layout.preferredHeight = 54f;
+        layout.minHeight = 42f;
 
         var labelObject = new GameObject("Label", typeof(RectTransform), typeof(TextMeshProUGUI));
         labelObject.transform.SetParent(root.transform, false);
@@ -115,7 +144,7 @@ internal static class PauseMenuButtonInjector
 
         var label = labelObject.GetComponent<TextMeshProUGUI>();
         label.alignment = TextAlignmentOptions.Center;
-        label.fontSize = 20f;
+        label.fontSize = 24f;
         label.color = Color.white;
 
         var templateLabel = panel.GetComponentInChildren<TextMeshProUGUI>(true);
@@ -160,6 +189,278 @@ internal static class PauseMenuButtonInjector
         }
     }
 
+    private static void PlaceButtonAndRows(RectTransform panel, GameObject buttonObject)
+    {
+        var rows = CollectRows(panel);
+        var drawable = FindRowFor(buttonObject, rows);
+        if (drawable == null)
+        {
+            return;
+        }
+
+        var layoutGroup = panel.GetComponent<LayoutGroup>();
+        if (layoutGroup != null && layoutGroup.enabled)
+        {
+            InsertAfterResumeBySibling(rows, drawable);
+            LayoutRebuilder.ForceRebuildLayoutImmediate(panel);
+            return;
+        }
+
+        PlaceRowsExplicitly(rows, drawable);
+    }
+
+    private static void InsertAfterResumeBySibling(List<MenuRow> rows, MenuRow drawable)
+    {
+        var resume = FindResumeRow(rows) ?? FirstNonDrawableRow(rows);
+        if (resume == null)
+        {
+            drawable.RectTransform.SetAsLastSibling();
+            return;
+        }
+
+        drawable.RectTransform.SetSiblingIndex(resume.RectTransform.GetSiblingIndex() + 1);
+    }
+
+    private static void PlaceRowsExplicitly(List<MenuRow> rows, MenuRow drawable)
+    {
+        var sameParentRows = new List<MenuRow>();
+        foreach (var row in rows)
+        {
+            if (row.RectTransform.parent == drawable.RectTransform.parent)
+            {
+                sameParentRows.Add(row);
+            }
+        }
+
+        if (sameParentRows.Count == 0)
+        {
+            return;
+        }
+
+        var resume = FindResumeRow(sameParentRows) ?? FirstNonDrawableRow(sameParentRows);
+        if (resume == null)
+        {
+            return;
+        }
+
+        CopyRectTemplate(resume.RectTransform, drawable.RectTransform);
+
+        sameParentRows.Sort(CompareTopToBottom);
+        var order = new List<MenuRow>();
+        foreach (var row in sameParentRows)
+        {
+            if (!row.IsDrawable)
+            {
+                order.Add(row);
+            }
+        }
+
+        var resumeIndex = order.IndexOf(resume);
+        if (resumeIndex < 0)
+        {
+            resumeIndex = 0;
+        }
+
+        order.Insert(Mathf.Min(resumeIndex + 1, order.Count), drawable);
+
+        var spacing = DetectRowSpacing(sameParentRows);
+        var topY = order[0].RectTransform.anchoredPosition.y;
+        var firstSibling = order[0].RectTransform.GetSiblingIndex();
+        for (var i = 0; i < order.Count; i++)
+        {
+            var row = order[i];
+            var position = row.RectTransform.anchoredPosition;
+            position.y = topY - i * spacing;
+            if (row.IsDrawable)
+            {
+                position.x = resume.RectTransform.anchoredPosition.x;
+            }
+
+            row.RectTransform.anchoredPosition = position;
+            row.RectTransform.SetSiblingIndex(firstSibling + i);
+        }
+    }
+
+    private static void CopyRectTemplate(RectTransform source, RectTransform target)
+    {
+        target.anchorMin = source.anchorMin;
+        target.anchorMax = source.anchorMax;
+        target.pivot = source.pivot;
+        target.sizeDelta = source.sizeDelta;
+        target.localScale = source.localScale;
+    }
+
+    private static float DetectRowSpacing(List<MenuRow> rows)
+    {
+        var yValues = new List<float>();
+        foreach (var row in rows)
+        {
+            yValues.Add(row.RectTransform.anchoredPosition.y);
+        }
+
+        yValues.Sort((a, b) => b.CompareTo(a));
+        var diffs = new List<float>();
+        for (var i = 0; i < yValues.Count - 1; i++)
+        {
+            var diff = Mathf.Abs(yValues[i] - yValues[i + 1]);
+            if (diff >= MinimumRowSpacing && diff <= 240f)
+            {
+                diffs.Add(diff);
+            }
+        }
+
+        if (diffs.Count > 0)
+        {
+            diffs.Sort();
+            return Mathf.Max(MinimumRowSpacing, diffs[diffs.Count / 2]);
+        }
+
+        var maxHeight = 0f;
+        foreach (var row in rows)
+        {
+            maxHeight = Mathf.Max(maxHeight, row.RectTransform.rect.height, row.RectTransform.sizeDelta.y);
+        }
+
+        return Mathf.Max(FallbackRowSpacing, maxHeight + 24f);
+    }
+
+    private static void RebuildNavigation(RectTransform panel)
+    {
+        var rows = GetRowsInVisualOrder(panel);
+        if (rows.Count == 0)
+        {
+            return;
+        }
+
+        for (var i = 0; i < rows.Count; i++)
+        {
+            var button = rows[i].Button;
+            var navigation = button.navigation;
+            navigation.mode = Navigation.Mode.Explicit;
+            navigation.selectOnUp = i > 0 ? rows[i - 1].Button : null;
+            navigation.selectOnDown = i < rows.Count - 1 ? rows[i + 1].Button : null;
+            navigation.selectOnLeft = null;
+            navigation.selectOnRight = null;
+            button.navigation = navigation;
+        }
+    }
+
+    private static List<MenuRow> GetRowsInVisualOrder(RectTransform panel)
+    {
+        var rows = CollectRows(panel);
+        rows.Sort(CompareTopToBottom);
+        return rows;
+    }
+
+    private static List<MenuRow> CollectRows(Transform root)
+    {
+        var result = new List<MenuRow>();
+        if (root == null)
+        {
+            return result;
+        }
+
+        var buttons = root.GetComponentsInChildren<Button>(true);
+        foreach (var button in buttons)
+        {
+            if (button == null || !button.gameObject.activeSelf)
+            {
+                continue;
+            }
+
+            var rectTransform = button.GetComponent<RectTransform>();
+            if (rectTransform == null)
+            {
+                continue;
+            }
+
+            var labelText = GetLabelText(button.gameObject);
+            if (string.IsNullOrWhiteSpace(labelText) && button.gameObject.name != ButtonName)
+            {
+                continue;
+            }
+
+            result.Add(new MenuRow(button.gameObject, rectTransform, button, labelText));
+        }
+
+        return result;
+    }
+
+    private static string GetLabelText(GameObject gameObject)
+    {
+        var tmp = gameObject.GetComponentInChildren<TextMeshProUGUI>(true);
+        if (tmp != null)
+        {
+            return tmp.text ?? string.Empty;
+        }
+
+        var text = gameObject.GetComponentInChildren<Text>(true);
+        return text != null ? text.text ?? string.Empty : string.Empty;
+    }
+
+    private static MenuRow ChooseTemplateRow(List<MenuRow> rows)
+    {
+        return FindRowContaining(rows, "settings")
+            ?? FindRowContaining(rows, "invite")
+            ?? FindRowContaining(rows, "lethalconfig")
+            ?? FirstNonDrawableRow(rows);
+    }
+
+    private static MenuRow FindResumeRow(List<MenuRow> rows)
+    {
+        return FindRowContaining(rows, "resume");
+    }
+
+    private static MenuRow FindRowContaining(List<MenuRow> rows, string token)
+    {
+        foreach (var row in rows)
+        {
+            if (!row.IsDrawable && Normalize(row.LabelText).Contains(token))
+            {
+                return row;
+            }
+        }
+
+        return null;
+    }
+
+    private static MenuRow FirstNonDrawableRow(List<MenuRow> rows)
+    {
+        foreach (var row in rows)
+        {
+            if (!row.IsDrawable)
+            {
+                return row;
+            }
+        }
+
+        return null;
+    }
+
+    private static MenuRow FindRowFor(GameObject gameObject, List<MenuRow> rows)
+    {
+        foreach (var row in rows)
+        {
+            if (row.GameObject == gameObject)
+            {
+                return row;
+            }
+        }
+
+        return null;
+    }
+
+    private static int CompareTopToBottom(MenuRow a, MenuRow b)
+    {
+        var yCompare = b.RectTransform.anchoredPosition.y.CompareTo(a.RectTransform.anchoredPosition.y);
+        return yCompare != 0 ? yCompare : a.RectTransform.GetSiblingIndex().CompareTo(b.RectTransform.GetSiblingIndex());
+    }
+
+    private static string Normalize(string value)
+    {
+        return (value ?? string.Empty).Replace(" ", string.Empty).Replace("\n", string.Empty).ToLowerInvariant();
+    }
+
     private static void OpenEditorFromPauseMenu(QuickMenuManager quickMenu)
     {
         try
@@ -174,5 +475,22 @@ internal static class PauseMenuButtonInjector
         DrawableSuitsPlugin.Editor?.OpenEditor();
         Cursor.visible = true;
         Cursor.lockState = CursorLockMode.None;
+    }
+
+    private sealed class MenuRow
+    {
+        public MenuRow(GameObject gameObject, RectTransform rectTransform, Button button, string labelText)
+        {
+            GameObject = gameObject;
+            RectTransform = rectTransform;
+            Button = button;
+            LabelText = labelText ?? string.Empty;
+        }
+
+        public GameObject GameObject { get; }
+        public RectTransform RectTransform { get; }
+        public Button Button { get; }
+        public string LabelText { get; }
+        public bool IsDrawable => GameObject.name == ButtonName || Normalize(LabelText).Contains("drawablesuits");
     }
 }
