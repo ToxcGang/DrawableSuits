@@ -1,0 +1,9 @@
+{
+  "name": "DrawableSuits",
+  "version_number": "0.1.0",
+  "website_url": "https://github.com/ToxcGang/DrawableSuits",
+  "description": "Draw, erase, decal, save, load, and sync custom suit designs in-game for Lethal Company v81.",
+  "dependencies": [
+    "BepInEx-BepInExPack-5.4.2305"
+  ]
+}
