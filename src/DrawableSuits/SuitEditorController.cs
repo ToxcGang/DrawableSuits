@@ -42,6 +42,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private bool _cursorStateCaptured;
     private bool _previousCursorVisible;
     private CursorLockMode _previousCursorLockState;
+    private bool _controllerOpenChordWasHeld;
 
     private GameObject _previewRoot;
     private Mesh _previewMesh;
@@ -60,8 +61,9 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void Update()
     {
-        if (UnityEngine.Input.GetKeyDown(DrawableSuitsPlugin.ModConfig.OpenEditorKey.Value) || WasControllerOpenPressed())
+        if (WasOpenShortcutPressed())
         {
+            DrawableSuitsPlugin.ModLogger.LogInfo("DrawableSuits editor toggle requested from fallback shortcut.");
             ToggleEditor();
         }
 
@@ -96,6 +98,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     public void OpenEditor()
     {
+        DrawableSuitsPlugin.ModLogger.LogInfo("DrawableSuits editor open requested.");
         SetOpen(true);
     }
 
@@ -119,28 +122,33 @@ internal sealed class SuitEditorController : MonoBehaviour
         _isOpen = value;
         if (_isOpen)
         {
+            DrawableSuitsPlugin.ModLogger.LogInfo("Opening DrawableSuits editor.");
             CaptureAndUnlockCursor();
             var localSuitId = DrawableSuitsPlugin.Registry.GetLocalSuitId();
             _selectedSuitId = localSuitId >= 0 ? localSuitId : FirstKnownSuitId();
             if (_selectedSuitId < 0)
             {
-                _statusMessage = "No editable suit is available yet. Join a lobby and equip a suit, then reopen this editor.";
+                SetStatus("No editable suit is available yet. Join a lobby and equip a suit, then reopen this editor.", true);
             }
             else if (DrawableSuitsPlugin.Registry.GetOrCreateState(_selectedSuitId) == null)
             {
-                _statusMessage = "The selected suit does not expose an editable suit material.";
+                SetStatus("The selected suit does not expose an editable suit material.", true);
             }
             else
             {
-                _statusMessage = string.Empty;
+                SetStatus(string.Empty, false);
             }
 
             _cursor = new Vector2(Screen.width * 0.5f, Screen.height * 0.5f);
             RefreshFileLists();
-            RebuildPreview();
+            if (_selectedSuitId >= 0 && string.IsNullOrWhiteSpace(_statusMessage))
+            {
+                RebuildPreview();
+            }
         }
         else
         {
+            DrawableSuitsPlugin.ModLogger.LogInfo("Closing DrawableSuits editor.");
             DestroyPreview();
             _strokeActive = false;
             RestoreCursorState();
@@ -252,6 +260,15 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         Cursor.visible = true;
         Cursor.lockState = CursorLockMode.None;
+    }
+
+    private void SetStatus(string message, bool warn)
+    {
+        _statusMessage = message ?? string.Empty;
+        if (warn && !string.IsNullOrWhiteSpace(_statusMessage))
+        {
+            DrawableSuitsPlugin.ModLogger.LogWarning(_statusMessage);
+        }
     }
 
     private void RestoreCursorState()
@@ -737,7 +754,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         var source = player?.thisPlayerModel;
         if (source == null)
         {
-            _statusMessage = "Player model unavailable. Open the editor after joining a game.";
+            SetStatus("Player model unavailable. Open the editor after joining a game.", true);
             return;
         }
 
@@ -754,7 +771,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         _previewCollider.sharedMesh = _previewMesh;
         if (string.IsNullOrWhiteSpace(_statusMessage) || _statusMessage.StartsWith("Player model unavailable"))
         {
-            _statusMessage = string.Empty;
+            SetStatus(string.Empty, false);
         }
 
         UpdatePreviewTransform();
@@ -794,10 +811,42 @@ internal sealed class SuitEditorController : MonoBehaviour
         _previewRenderer = null;
     }
 
-    private static bool WasControllerOpenPressed()
+    private bool WasOpenShortcutPressed()
+    {
+        var keyboard = Keyboard.current;
+        if (keyboard != null && keyboard.f8Key.wasPressedThisFrame)
+        {
+            return true;
+        }
+
+        try
+        {
+            if (UnityEngine.Input.GetKeyDown(DrawableSuitsPlugin.ModConfig.OpenEditorKey.Value))
+            {
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            DrawableSuitsPlugin.ModLogger.LogDebug($"Legacy shortcut polling failed: {ex.Message}");
+        }
+
+        return WasControllerOpenPressed();
+    }
+
+    private bool WasControllerOpenPressed()
     {
         var gamepad = Gamepad.current;
-        return gamepad != null && gamepad.selectButton.isPressed && gamepad.buttonNorth.wasPressedThisFrame;
+        if (gamepad == null)
+        {
+            _controllerOpenChordWasHeld = false;
+            return false;
+        }
+
+        var chordHeld = gamepad.selectButton.isPressed && gamepad.buttonNorth.isPressed;
+        var pressed = chordHeld && !_controllerOpenChordWasHeld;
+        _controllerOpenChordWasHeld = chordHeld;
+        return pressed;
     }
 
     private static bool WasGamepadPressed(Func<Gamepad, ButtonControl> accessor)
