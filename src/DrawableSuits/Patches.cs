@@ -72,3 +72,22 @@ internal static class PlayerControllerBPatches
         DrawableSuitsPlugin.Registry?.ApplyToPlayer(__instance);
     }
 }
+
+[HarmonyPatch(typeof(QuickMenuManager))]
+internal static class QuickMenuManagerPatches
+{
+    [HarmonyPostfix]
+    [HarmonyPatch("Start")]
+    private static void StartPostfix(QuickMenuManager __instance)
+    {
+        PauseMenuButtonInjector.EnsureButton(__instance);
+    }
+
+    [HarmonyPostfix]
+    [HarmonyPatch(nameof(QuickMenuManager.OpenQuickMenu))]
+    private static void OpenQuickMenuPostfix(QuickMenuManager __instance)
+    {
+        PauseMenuButtonInjector.EnsureButton(__instance);
+        PauseMenuButtonInjector.SelectIfNeeded(__instance);
+    }
+}
