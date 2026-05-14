@@ -38,6 +38,10 @@ internal sealed class SuitEditorController : MonoBehaviour
     private float _decalSize = 128f;
     private float _decalRotation;
     private bool _strokeActive;
+    private string _statusMessage = string.Empty;
+    private bool _cursorStateCaptured;
+    private bool _previousCursorVisible;
+    private CursorLockMode _previousCursorLockState;
 
     private GameObject _previewRoot;
     private Mesh _previewMesh;
@@ -58,7 +62,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         if (UnityEngine.Input.GetKeyDown(DrawableSuitsPlugin.ModConfig.OpenEditorKey.Value) || WasControllerOpenPressed())
         {
-            SetOpen(!_isOpen);
+            ToggleEditor();
         }
 
         if (!_isOpen)
@@ -68,7 +72,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         if (UnityEngine.Input.GetKeyDown(KeyCode.Escape) || WasGamepadPressed(g => g.buttonEast))
         {
-            SetOpen(false);
+            CloseEditor();
             return;
         }
 
@@ -90,14 +94,47 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawVirtualCursor();
     }
 
+    public void OpenEditor()
+    {
+        SetOpen(true);
+    }
+
+    public void CloseEditor()
+    {
+        SetOpen(false);
+    }
+
+    public void ToggleEditor()
+    {
+        SetOpen(!_isOpen);
+    }
+
     private void SetOpen(bool value)
     {
+        if (_isOpen == value)
+        {
+            return;
+        }
+
         _isOpen = value;
         if (_isOpen)
         {
+            CaptureAndUnlockCursor();
             var localSuitId = DrawableSuitsPlugin.Registry.GetLocalSuitId();
             _selectedSuitId = localSuitId >= 0 ? localSuitId : FirstKnownSuitId();
-            DrawableSuitsPlugin.Registry.GetOrCreateState(_selectedSuitId);
+            if (_selectedSuitId < 0)
+            {
+                _statusMessage = "No editable suit is available yet. Join a lobby and equip a suit, then reopen this editor.";
+            }
+            else if (DrawableSuitsPlugin.Registry.GetOrCreateState(_selectedSuitId) == null)
+            {
+                _statusMessage = "The selected suit does not expose an editable suit material.";
+            }
+            else
+            {
+                _statusMessage = string.Empty;
+            }
+
             _cursor = new Vector2(Screen.width * 0.5f, Screen.height * 0.5f);
             RefreshFileLists();
             RebuildPreview();
@@ -106,12 +143,18 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             DestroyPreview();
             _strokeActive = false;
+            RestoreCursorState();
         }
     }
 
     private void DrawWindow(int id)
     {
         GUILayout.Label($"Suit: {DrawableSuitsPlugin.Registry.GetSuitName(_selectedSuitId)} ({_selectedSuitId})");
+        if (!string.IsNullOrWhiteSpace(_statusMessage))
+        {
+            GUILayout.Label(_statusMessage);
+        }
+
         GUILayout.BeginHorizontal();
         if (GUILayout.Button("Previous"))
         {
@@ -196,6 +239,31 @@ internal sealed class SuitEditorController : MonoBehaviour
         GUILayout.Space(8);
         GUILayout.Label("Controller: View/Back+Y open, left stick cursor, right trigger paint, bumpers rotate, Y tool, X undo, Start save, A apply.");
         GUI.DragWindow(new Rect(0, 0, 10000, 20));
+    }
+
+    private void CaptureAndUnlockCursor()
+    {
+        if (!_cursorStateCaptured)
+        {
+            _previousCursorVisible = Cursor.visible;
+            _previousCursorLockState = Cursor.lockState;
+            _cursorStateCaptured = true;
+        }
+
+        Cursor.visible = true;
+        Cursor.lockState = CursorLockMode.None;
+    }
+
+    private void RestoreCursorState()
+    {
+        if (!_cursorStateCaptured)
+        {
+            return;
+        }
+
+        Cursor.visible = _previousCursorVisible;
+        Cursor.lockState = _previousCursorLockState;
+        _cursorStateCaptured = false;
     }
 
     private void DrawColorControls()
@@ -669,6 +737,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         var source = player?.thisPlayerModel;
         if (source == null)
         {
+            _statusMessage = "Player model unavailable. Open the editor after joining a game.";
             return;
         }
 
@@ -683,6 +752,10 @@ internal sealed class SuitEditorController : MonoBehaviour
         _previewRenderer.sharedMaterial = DrawableSuitsPlugin.Registry.GetRuntimeMaterial(_selectedSuitId);
         _previewCollider = _previewRoot.AddComponent<MeshCollider>();
         _previewCollider.sharedMesh = _previewMesh;
+        if (string.IsNullOrWhiteSpace(_statusMessage) || _statusMessage.StartsWith("Player model unavailable"))
+        {
+            _statusMessage = string.Empty;
+        }
 
         UpdatePreviewTransform();
     }
