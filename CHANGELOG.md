@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2
+
+- Fixed the pause-menu `DrawableSuits` button overlapping Resume and other menu rows.
+- Added explicit controller navigation for the injected pause-menu button.
+- Improved `F8` and `View/Back + Y` fallback shortcut reliability through Unity Input System polling.
+- Added clearer warnings when the editor cannot open because a player model or editable suit is unavailable.
+- Updated README troubleshooting for pause-menu placement and player-model load timing.
+
 ## 0.1.1
 
 - Added a `DrawableSuits` button to the in-game pause menu.
