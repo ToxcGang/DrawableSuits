@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1
+
+- Added a `DrawableSuits` button to the in-game pause menu.
+- Improved editor opening reliability for keyboard and controller users.
+- Kept `F8` and `View/Back + Y` as fallback editor shortcuts.
+- Updated README documentation for the pause-menu opening flow.
+
 ## 0.1.0
 
 - Initial DrawableSuits implementation.
