@@ -4,8 +4,8 @@ DrawableSuits is a Lethal Company v81 BepInEx mod that lets players draw on suit
 
 ## Features
 
-- In-game suit editor opened from the pause menu with the `DrawableSuits` button.
-- Fallback shortcuts: `F8` on keyboard or `View/Back + Y` on controller.
+- In-game suit editor opened from the pause menu with the `DrawableSuits` button below Resume.
+- Fallback shortcuts: `F8` on keyboard or `View/Back + Y` on controller, handled through Unity's Input System with legacy input as a backup.
 - Controller support: use the pause-menu button or shortcut to open the editor, left stick moves the virtual cursor, right trigger paints, bumpers rotate the preview, `Y` cycles tools, `X` undoes, `Start` saves, and `A` applies.
 - Paint, erase, undo, redo, reset, and adjustable brush size, color, and opacity.
 - 3D suit preview painting by raycasting against a baked suit mesh and writing to the suit texture UVs.
@@ -57,6 +57,8 @@ The BepInEx config file controls:
 
 - The editor uses the local player model as the baked preview mesh. If no player model is available yet, open the editor after joining a game.
 - If keyboard or controller shortcuts do not open the editor, use the `DrawableSuits` button in the pause menu.
+- If the editor opens with a player-model warning, join a lobby and wait until the local player model has spawned before opening it again.
+- If the pause-menu button overlaps another menu item after updating, restart the game so the old injected menu object is cleared.
 - Cross-suit loading depends on UV compatibility.
 - Very large decal images are resized to the configured maximum texture size.
 - Multiplayer sync is designed for applied designs, not every brush stroke.
