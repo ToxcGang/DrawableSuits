@@ -6,6 +6,7 @@ namespace DrawableSuits;
 internal sealed class DrawableSuitsConfig
 {
     public ConfigEntry<KeyCode> OpenEditorKey { get; }
+    public ConfigEntry<KeyCode> EmergencyOpenKey { get; }
     public ConfigEntry<int> MaxTextureSize { get; }
     public ConfigEntry<int> MaxUndoStates { get; }
     public ConfigEntry<int> MaxSyncBytes { get; }
@@ -17,6 +18,7 @@ internal sealed class DrawableSuitsConfig
     public DrawableSuitsConfig(ConfigFile config)
     {
         OpenEditorKey = config.Bind("Input", "OpenEditorKey", KeyCode.F8, "Keyboard key that opens or closes the suit editor.");
+        EmergencyOpenKey = config.Bind("Input", "EmergencyOpenKey", KeyCode.F10, "Keyboard key that opens the diagnostics editor overlay even when suit/player detection is incomplete.");
         ControllerCursorSpeed = config.Bind("Input", "ControllerCursorSpeed", 900f, "Virtual cursor speed in pixels per second.");
         MaxTextureSize = config.Bind("Textures", "MaxTextureSize", 1024, "Maximum width and height for editable and synced suit textures.");
         MaxUndoStates = config.Bind("Editor", "MaxUndoStates", 12, "Maximum undo snapshots kept while editing.");
