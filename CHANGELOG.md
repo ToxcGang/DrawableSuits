@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.4
+
+- Added deep diagnostics to BepInEx logs and `BepInEx/config/DrawableSuits/Logs/diagnostics.log`.
+- Made the editor overlay open as a diagnostic shell even when suit, player model, camera, or preview detection is incomplete.
+- Added visible editor diagnostics for selected suit id, suit count, local player, player model, camera, and preview collider state.
+- Changed pause-menu opening to close the quick menu first, then open DrawableSuits on the next frame with detailed click and row-placement logging.
+- Added `F10` emergency diagnostics overlay shortcut.
+- Added a fallback Unity `Text` diagnostics canvas if TMP editor canvas construction fails.
+
 ## 0.1.3
 
 - Replaced the drawing menu renderer with a Unity UI overlay canvas.
