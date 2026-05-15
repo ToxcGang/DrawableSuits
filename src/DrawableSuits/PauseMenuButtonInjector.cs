@@ -17,28 +17,36 @@ internal static class PauseMenuButtonInjector
     {
         if (quickMenu == null || quickMenu.mainButtonsPanel == null)
         {
+            DrawableSuitsDiagnostics.Warn($"EnsureButton skipped. quickMenuNull={quickMenu == null}; mainButtonsPanelNull={quickMenu?.mainButtonsPanel == null}");
             return;
         }
 
         var panel = quickMenu.mainButtonsPanel.GetComponent<RectTransform>();
         if (panel == null)
         {
+            DrawableSuitsDiagnostics.Warn("EnsureButton skipped because QuickMenuManager.mainButtonsPanel has no RectTransform.");
             return;
         }
 
         var rows = CollectRows(panel);
+        DrawableSuitsDiagnostics.Info($"EnsureButton started. menuOpen={quickMenu.isMenuOpen}; panel={panel.name}; rowsFound={rows.Count}; labels=[{DescribeRows(rows)}]");
         var buttonObject = FindExistingButton(panel);
         if (buttonObject == null)
         {
             var template = ChooseTemplateRow(rows);
+            DrawableSuitsDiagnostics.Info($"No existing DrawableSuits pause button. template={(template != null ? template.LabelText + "/" + template.GameObject.name : "none")}.");
             buttonObject = template != null
                 ? CloneTemplate(template)
                 : CreateFallbackButton(panel);
         }
+        else
+        {
+            DrawableSuitsDiagnostics.Info($"Reusing existing DrawableSuits pause button. active={buttonObject.activeSelf}; siblingIndex={buttonObject.transform.GetSiblingIndex()}");
+        }
 
         if (buttonObject == null)
         {
-            DrawableSuitsPlugin.ModLogger.LogWarning("Could not create pause-menu DrawableSuits button.");
+            DrawableSuitsDiagnostics.Warn("Could not create pause-menu DrawableSuits button.");
             return;
         }
 
@@ -46,6 +54,8 @@ internal static class PauseMenuButtonInjector
         ConfigureButton(buttonObject, quickMenu);
         PlaceButtonAndRows(panel, buttonObject);
         RebuildNavigation(panel);
+        var buttonRect = buttonObject.GetComponent<RectTransform>();
+        DrawableSuitsDiagnostics.Info($"EnsureButton complete. exists={buttonObject != null}; active={buttonObject.activeSelf}; anchoredPosition={buttonRect?.anchoredPosition.ToString() ?? "null"}; siblingIndex={buttonObject.transform.GetSiblingIndex()}; rowsAfter={CollectRows(panel).Count}");
     }
 
     public static void SelectIfNeeded(QuickMenuManager quickMenu)
@@ -55,10 +65,10 @@ internal static class PauseMenuButtonInjector
             return;
         }
 
-        if (EventSystem.current.currentSelectedGameObject != null)
-        {
-            return;
-        }
+            if (EventSystem.current.currentSelectedGameObject != null)
+            {
+                return;
+            }
 
         var panel = quickMenu.mainButtonsPanel.GetComponent<RectTransform>();
         var rows = GetRowsInVisualOrder(panel);
@@ -103,6 +113,7 @@ internal static class PauseMenuButtonInjector
         clone.name = ButtonName;
         clone.transform.SetAsLastSibling();
         clone.SetActive(true);
+        DrawableSuitsDiagnostics.Info($"Cloned pause-menu template '{template.LabelText}' into {ButtonName}.");
 
         var cloneRect = clone.GetComponent<RectTransform>();
         if (cloneRect != null)
@@ -122,6 +133,7 @@ internal static class PauseMenuButtonInjector
         var root = new GameObject(ButtonName, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(Button), typeof(LayoutElement));
         root.transform.SetParent(panel, false);
         root.transform.SetAsLastSibling();
+        DrawableSuitsDiagnostics.Warn("Created fallback pause-menu DrawableSuits button because no cloneable row template was found.");
 
         var rect = root.GetComponent<RectTransform>();
         rect.sizeDelta = new Vector2(260f, 54f);
@@ -169,6 +181,7 @@ internal static class PauseMenuButtonInjector
         button.interactable = true;
         button.onClick = new Button.ButtonClickedEvent();
         button.onClick.AddListener(() => OpenEditorFromPauseMenu(quickMenu));
+        DrawableSuitsDiagnostics.Info($"Configured pause-menu button listener. button={buttonObject.name}; interactable={button.interactable}; targetQuickMenuNull={quickMenu == null}");
 
         var navigation = button.navigation;
         navigation.mode = Navigation.Mode.Automatic;
@@ -195,17 +208,20 @@ internal static class PauseMenuButtonInjector
         var drawable = FindRowFor(buttonObject, rows);
         if (drawable == null)
         {
+            DrawableSuitsDiagnostics.Warn("PlaceButtonAndRows could not find the DrawableSuits row after collection.");
             return;
         }
 
         var layoutGroup = panel.GetComponent<LayoutGroup>();
         if (layoutGroup != null && layoutGroup.enabled)
         {
+            DrawableSuitsDiagnostics.Info($"PlaceButtonAndRows using layout group {layoutGroup.GetType().Name}.");
             InsertAfterResumeBySibling(rows, drawable);
             LayoutRebuilder.ForceRebuildLayoutImmediate(panel);
             return;
         }
 
+        DrawableSuitsDiagnostics.Info("PlaceButtonAndRows using explicit anchored positions.");
         PlaceRowsExplicitly(rows, drawable);
     }
 
@@ -234,12 +250,14 @@ internal static class PauseMenuButtonInjector
 
         if (sameParentRows.Count == 0)
         {
+            DrawableSuitsDiagnostics.Warn("PlaceRowsExplicitly found no same-parent rows.");
             return;
         }
 
         var resume = FindResumeRow(sameParentRows) ?? FirstNonDrawableRow(sameParentRows);
         if (resume == null)
         {
+            DrawableSuitsDiagnostics.Warn("PlaceRowsExplicitly found no resume or non-Drawable row.");
             return;
         }
 
@@ -266,6 +284,7 @@ internal static class PauseMenuButtonInjector
         var spacing = DetectRowSpacing(sameParentRows);
         var topY = order[0].RectTransform.anchoredPosition.y;
         var firstSibling = order[0].RectTransform.GetSiblingIndex();
+        DrawableSuitsDiagnostics.Info($"PlaceRowsExplicitly orderCount={order.Count}; resume={resume.LabelText}; spacing={spacing}; topY={topY}; firstSibling={firstSibling}");
         for (var i = 0; i < order.Count; i++)
         {
             var row = order[i];
@@ -329,6 +348,7 @@ internal static class PauseMenuButtonInjector
         var rows = GetRowsInVisualOrder(panel);
         if (rows.Count == 0)
         {
+            DrawableSuitsDiagnostics.Warn("RebuildNavigation skipped because no rows were collected.");
             return;
         }
 
@@ -343,6 +363,7 @@ internal static class PauseMenuButtonInjector
             navigation.selectOnRight = null;
             button.navigation = navigation;
         }
+        DrawableSuitsDiagnostics.Info($"RebuildNavigation complete. rowCount={rows.Count}; rows=[{DescribeRows(rows)}]");
     }
 
     private static List<MenuRow> GetRowsInVisualOrder(RectTransform panel)
@@ -463,21 +484,40 @@ internal static class PauseMenuButtonInjector
 
     private static void OpenEditorFromPauseMenu(QuickMenuManager quickMenu)
     {
+        DrawableSuitsDiagnostics.Info($"Pause-menu DrawableSuits button clicked. quickMenuNull={quickMenu == null}; menuOpenBeforeClose={quickMenu?.isMenuOpen}; cursorVisible={Cursor.visible}; cursorLock={Cursor.lockState}");
         try
         {
             quickMenu?.CloseQuickMenu();
+            DrawableSuitsDiagnostics.Info($"Quick menu close requested. menuOpenAfterClose={quickMenu?.isMenuOpen}");
         }
         catch (System.Exception ex)
         {
-            DrawableSuitsPlugin.ModLogger.LogWarning($"Failed to close quick menu before opening editor: {ex.Message}");
+            DrawableSuitsDiagnostics.Exception("Failed to close quick menu before opening editor", ex);
         }
 
-        var opened = DrawableSuitsPlugin.Editor != null && DrawableSuitsPlugin.Editor.OpenEditor();
-        if (opened)
+        if (DrawableSuitsPlugin.Editor == null)
         {
-            Cursor.visible = true;
-            Cursor.lockState = CursorLockMode.None;
+            DrawableSuitsDiagnostics.Warn("Pause-menu click could not open editor because DrawableSuitsPlugin.Editor is null.");
+            return;
         }
+
+        DrawableSuitsPlugin.Editor.OpenFromPauseMenuNextFrame(quickMenu);
+    }
+
+    private static string DescribeRows(List<MenuRow> rows)
+    {
+        if (rows == null || rows.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var parts = new List<string>();
+        foreach (var row in rows)
+        {
+            parts.Add($"{row.LabelText}/{row.GameObject.name}@{row.RectTransform.anchoredPosition}");
+        }
+
+        return string.Join(", ", parts);
     }
 
     private sealed class MenuRow
