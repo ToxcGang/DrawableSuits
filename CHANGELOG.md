@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.3
+
+- Replaced the drawing menu renderer with a Unity UI overlay canvas.
+- Prevented cursor-only failed opens by making editor opening report success or an explicit failure reason.
+- Added EventSystem fallback creation for the DrawableSuits overlay when the game scene does not expose one.
+- Updated README troubleshooting for cursor-only editor failures.
+
 ## 0.1.2
 
 - Fixed the pause-menu `DrawableSuits` button overlapping Resume and other menu rows.
