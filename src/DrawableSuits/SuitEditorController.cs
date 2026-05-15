@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using GameNetcodeStuff;
@@ -19,6 +20,14 @@ internal sealed class SuitEditorController : MonoBehaviour
         Paint,
         Erase,
         Decal
+    }
+
+    private enum OpenShortcutSource
+    {
+        None,
+        Keyboard,
+        Controller,
+        Emergency
     }
 
     private readonly Stack<Color32[]> _undo = new();
@@ -44,6 +53,13 @@ internal sealed class SuitEditorController : MonoBehaviour
     private bool _previousCursorVisible;
     private CursorLockMode _previousCursorLockState;
     private bool _controllerOpenChordWasHeld;
+    private bool _hasEditableSuit;
+    private bool _hasLocalPlayer;
+    private bool _hasPlayerModel;
+    private bool _hasCamera;
+    private bool _hasPreviewCollider;
+    private bool _canPaint;
+    private int _knownSuitCount;
 
     private GameObject _previewRoot;
     private Mesh _previewMesh;
@@ -62,6 +78,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private RectTransform _decalListContent;
     private TextMeshProUGUI _suitLabel;
     private TextMeshProUGUI _statusLabel;
+    private TextMeshProUGUI _diagnosticsLabel;
+    private Text _fallbackDiagnosticsLabel;
     private TextMeshProUGUI _brushSizeLabel;
     private TextMeshProUGUI _brushOpacityLabel;
     private TextMeshProUGUI _decalSizeLabel;
@@ -78,20 +96,25 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Button _paintButton;
     private Button _eraseButton;
     private Button _decalButton;
+    private Button _applyButton;
+    private Button _saveButton;
+    private Button _loadButton;
+    private Button _resetButton;
 
     private void Start()
     {
         _cursor = new Vector2(Screen.width * 0.5f, Screen.height * 0.5f);
         RefreshFileLists();
-        EnsureEditorCanvas(out _);
+        DrawableSuitsDiagnostics.Info($"SuitEditorController.Start complete. Screen={Screen.width}x{Screen.height}; designFiles={_designFiles.Count}; decalFiles={_decalFiles.Count}");
     }
 
     private void Update()
     {
-        if (WasOpenShortcutPressed())
+        var openSource = GetOpenShortcutSource();
+        if (openSource != OpenShortcutSource.None)
         {
-            DrawableSuitsPlugin.ModLogger.LogInfo("DrawableSuits editor toggle requested from fallback shortcut.");
-            ToggleEditor();
+            DrawableSuitsDiagnostics.Info($"Editor toggle requested from input path: {openSource}.");
+            ToggleEditor(openSource.ToString());
         }
 
         if (!_isOpen)
@@ -114,34 +137,39 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     public bool OpenEditor()
     {
-        DrawableSuitsPlugin.ModLogger.LogInfo("DrawableSuits editor open requested.");
+        return OpenEditor("Direct");
+    }
+
+    public bool OpenEditor(string source)
+    {
+        DrawableSuitsDiagnostics.Info($"OpenEditor requested. source={source}; isOpen={_isOpen}; activeScene={UnityEngine.SceneManagement.SceneManager.GetActiveScene().name}");
         if (_isOpen)
         {
+            RefreshEditorReadiness("open request while already open");
+            UpdateUiState();
+            LogCanvasState("already-open");
             return true;
         }
 
-        if (!PrepareEditorForOpen(out var failureReason))
+        if (!EnsureEditorCanvas(out var failureReason))
         {
-            DrawableSuitsPlugin.ModLogger.LogWarning(failureReason);
-            return false;
-        }
-
-        if (!EnsureEditorCanvas(out failureReason))
-        {
-            DrawableSuitsPlugin.ModLogger.LogWarning(failureReason);
+            DrawableSuitsDiagnostics.Warn(failureReason);
             return false;
         }
 
         EnsureEventSystem();
+        RefreshEditorReadiness($"before show ({source})");
         CaptureAndUnlockCursor();
         _isOpen = true;
         _editorCanvasObject.SetActive(true);
         _cursor = new Vector2(Screen.width * 0.5f, Screen.height * 0.5f);
         RefreshFileLists();
-        UpdateUiState();
-        RebuildPreview();
+        TryRebuildPreviewForCurrentReadiness(source);
+        RefreshEditorReadiness($"after preview ({source})");
         UpdateCursorMarker();
-        DrawableSuitsPlugin.ModLogger.LogInfo("DrawableSuits editor opened.");
+        UpdateUiState();
+        LogCanvasState($"opened from {source}");
+        DrawableSuitsDiagnostics.Info("DrawableSuits editor overlay opened.");
         return true;
     }
 
@@ -152,7 +180,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        DrawableSuitsPlugin.ModLogger.LogInfo("Closing DrawableSuits editor.");
+        DrawableSuitsDiagnostics.Info("Closing DrawableSuits editor.");
         _isOpen = false;
         if (_editorCanvasObject != null)
         {
@@ -166,44 +194,94 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     public bool ToggleEditor()
     {
+        return ToggleEditor("Direct");
+    }
+
+    public bool ToggleEditor(string source)
+    {
         if (_isOpen)
         {
+            DrawableSuitsDiagnostics.Info($"ToggleEditor closing from source={source}.");
             CloseEditor();
             return true;
         }
 
-        return OpenEditor();
+        DrawableSuitsDiagnostics.Info($"ToggleEditor opening from source={source}.");
+        return OpenEditor(source);
     }
 
-    private bool PrepareEditorForOpen(out string failureReason)
+    public void OpenFromPauseMenuNextFrame(QuickMenuManager quickMenu)
     {
-        failureReason = string.Empty;
-        var localSuitId = DrawableSuitsPlugin.Registry.GetLocalSuitId();
-        _selectedSuitId = localSuitId >= 0 ? localSuitId : FirstKnownSuitId();
-        if (_selectedSuitId < 0)
-        {
-            failureReason = "DrawableSuits editor cannot open: no editable suit is available. Join a lobby and equip a suit first.";
-            SetStatus(failureReason, false);
-            return false;
-        }
+        DrawableSuitsDiagnostics.Info($"Pause-menu open scheduled for next frame. quickMenuNull={quickMenu == null}; menuOpen={quickMenu?.isMenuOpen}");
+        StartCoroutine(OpenFromPauseMenuNextFrameRoutine(quickMenu));
+    }
 
-        if (DrawableSuitsPlugin.Registry.GetOrCreateState(_selectedSuitId) == null)
+    private IEnumerator OpenFromPauseMenuNextFrameRoutine(QuickMenuManager quickMenu)
+    {
+        yield return null;
+        DrawableSuitsDiagnostics.Info($"Pause-menu next-frame open running. quickMenuNull={quickMenu == null}; menuOpen={quickMenu?.isMenuOpen}; cursorVisible={Cursor.visible}; cursorLock={Cursor.lockState}");
+        OpenEditor("PauseMenuButton");
+    }
+
+    private void RefreshEditorReadiness(string context)
+    {
+        var localSuitId = DrawableSuitsPlugin.Registry.GetLocalSuitId();
+        var suitIds = DrawableSuitsPlugin.Registry.GetSuitIds();
+        _knownSuitCount = suitIds.Count;
+        if (localSuitId >= 0)
         {
-            failureReason = "DrawableSuits editor cannot open: the selected suit does not expose an editable suit material.";
-            SetStatus(failureReason, false);
-            return false;
+            _selectedSuitId = localSuitId;
+        }
+        else if (_selectedSuitId < 0)
+        {
+            _selectedSuitId = FirstKnownSuitId();
         }
 
         var player = StartOfRound.Instance?.localPlayerController;
-        if (player?.thisPlayerModel == null)
+        _hasLocalPlayer = player != null;
+        _hasPlayerModel = player?.thisPlayerModel != null;
+        _hasCamera = Camera.main != null;
+        _hasPreviewCollider = _previewCollider != null;
+        _hasEditableSuit = _selectedSuitId >= 0 && DrawableSuitsPlugin.Registry.GetOrCreateState(_selectedSuitId) != null;
+        _canPaint = _hasEditableSuit && _hasPlayerModel && _hasCamera && _hasPreviewCollider;
+
+        SetStatus(BuildReadinessStatus(), false);
+        DrawableSuitsDiagnostics.Info($"Readiness[{context}]: selectedSuitId={_selectedSuitId}; suitCount={_knownSuitCount}; hasEditableSuit={_hasEditableSuit}; hasLocalPlayer={_hasLocalPlayer}; hasPlayerModel={_hasPlayerModel}; hasCamera={_hasCamera}; hasPreviewCollider={_hasPreviewCollider}; canPaint={_canPaint}; status='{_statusMessage}'");
+    }
+
+    private string BuildReadinessStatus()
+    {
+        var missing = new List<string>();
+        if (_knownSuitCount == 0)
         {
-            failureReason = "DrawableSuits editor cannot open: local player model is not loaded yet.";
-            SetStatus(failureReason, false);
-            return false;
+            missing.Add("no suits registered yet");
+        }
+        if (_selectedSuitId < 0)
+        {
+            missing.Add("no selected suit");
+        }
+        if (!_hasEditableSuit)
+        {
+            missing.Add("selected suit has no editable material/texture");
+        }
+        if (!_hasLocalPlayer)
+        {
+            missing.Add("local player not found");
+        }
+        if (!_hasPlayerModel)
+        {
+            missing.Add("local player model not loaded");
+        }
+        if (!_hasCamera)
+        {
+            missing.Add("main camera not found");
+        }
+        if (_hasEditableSuit && _hasPlayerModel && _hasCamera && !_hasPreviewCollider)
+        {
+            missing.Add("preview collider not built yet");
         }
 
-        SetStatus(string.Empty, false);
-        return true;
+        return missing.Count == 0 ? "Ready." : "Diagnostics: " + string.Join("; ", missing);
     }
 
     private bool EnsureEditorCanvas(out string failureReason)
@@ -211,26 +289,53 @@ internal sealed class SuitEditorController : MonoBehaviour
         failureReason = string.Empty;
         if (_editorCanvasObject != null)
         {
+            LogCanvasState("ensure-existing");
             return true;
         }
 
         try
         {
+            DrawableSuitsDiagnostics.Info("Building DrawableSuits editor UGUI canvas.");
             BuildEditorCanvas();
+            LogCanvasState("ensure-created");
             return _editorCanvasObject != null;
         }
         catch (Exception ex)
         {
-            failureReason = $"DrawableSuits editor cannot open: failed to build Unity UI overlay ({ex.Message}).";
-            return false;
+            DrawableSuitsDiagnostics.Exception("BuildEditorCanvas failed; attempting fallback diagnostics canvas", ex);
+            if (_editorCanvasObject != null)
+            {
+                Destroy(_editorCanvasObject);
+                _editorCanvasObject = null;
+                _canvasRect = null;
+                _panelRect = null;
+                _cursorMarker = null;
+            }
+
+            try
+            {
+                BuildFallbackDiagnosticsCanvas(ex);
+                LogCanvasState("fallback-created");
+                return _editorCanvasObject != null;
+            }
+            catch (Exception fallbackEx)
+            {
+                DrawableSuitsDiagnostics.Exception("BuildFallbackDiagnosticsCanvas failed", fallbackEx);
+                failureReason = $"DrawableSuits editor cannot open: failed to build Unity UI overlay ({ex.Message}); fallback also failed ({fallbackEx.Message}).";
+                return false;
+            }
         }
     }
 
     private void BuildEditorCanvas()
     {
         _editorCanvasObject = new GameObject("DrawableSuitsEditorCanvas", typeof(RectTransform), typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
-        _editorCanvasObject.transform.SetParent(transform, false);
+        DontDestroyOnLoad(_editorCanvasObject);
         _canvasRect = _editorCanvasObject.GetComponent<RectTransform>();
+        _canvasRect.anchorMin = Vector2.zero;
+        _canvasRect.anchorMax = Vector2.one;
+        _canvasRect.offsetMin = Vector2.zero;
+        _canvasRect.offsetMax = Vector2.zero;
 
         var canvas = _editorCanvasObject.GetComponent<Canvas>();
         canvas.renderMode = RenderMode.ScreenSpaceOverlay;
@@ -268,6 +373,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         _suitLabel = CreateText(panel.transform, string.Empty, 18f, FontStyles.Normal, TextAlignmentOptions.Left, 28f);
         _statusLabel = CreateText(panel.transform, string.Empty, 15f, FontStyles.Normal, TextAlignmentOptions.Left, 42f);
         _statusLabel.color = new Color(1f, 0.58f, 0.28f, 1f);
+        _diagnosticsLabel = CreateText(panel.transform, string.Empty, 13f, FontStyles.Normal, TextAlignmentOptions.Left, 96f);
+        _diagnosticsLabel.color = new Color(0.78f, 0.86f, 1f, 1f);
 
         var suitRow = CreateHorizontalGroup(panel.transform, "SuitRow", 34f);
         CreateButton(suitRow.transform, "Previous", () => SelectAdjacentSuit(-1));
@@ -309,16 +416,16 @@ internal sealed class SuitEditorController : MonoBehaviour
         var editButtons = CreateHorizontalGroup(panel.transform, "EditButtons", 34f);
         CreateButton(editButtons.transform, "Undo", Undo);
         CreateButton(editButtons.transform, "Redo", Redo);
-        CreateButton(editButtons.transform, "Reset", () =>
+        _resetButton = CreateButton(editButtons.transform, "Reset", () =>
         {
             SaveUndo();
             DrawableSuitsPlugin.Registry.ResetSuit(_selectedSuitId);
         });
 
         var applyButtons = CreateHorizontalGroup(panel.transform, "ApplyButtons", 34f);
-        CreateButton(applyButtons.transform, "Apply", () => DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, true));
-        CreateButton(applyButtons.transform, "Save", SaveDesign);
-        CreateButton(applyButtons.transform, "Load", LoadSelectedDesign);
+        _applyButton = CreateButton(applyButtons.transform, "Apply", () => DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, true));
+        _saveButton = CreateButton(applyButtons.transform, "Save", SaveDesign);
+        _loadButton = CreateButton(applyButtons.transform, "Load", LoadSelectedDesign);
 
         CreateText(panel.transform, "Saved Designs", 16f, FontStyles.Bold, TextAlignmentOptions.Left, 24f);
         _designListContent = CreateScrollList(panel.transform, "DesignList", 92f);
@@ -332,6 +439,61 @@ internal sealed class SuitEditorController : MonoBehaviour
         _editorCanvasObject.SetActive(false);
         RefreshListButtons();
         UpdateUiState();
+        DrawableSuitsDiagnostics.Info($"BuildEditorCanvas complete. childCount={_editorCanvasObject.transform.childCount}; panelChildren={panel.transform.childCount}; graphicRaycaster={_editorCanvasObject.GetComponent<GraphicRaycaster>() != null}");
+    }
+
+    private void BuildFallbackDiagnosticsCanvas(Exception originalException)
+    {
+        _editorCanvasObject = new GameObject("DrawableSuitsEditorCanvas", typeof(RectTransform), typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
+        DontDestroyOnLoad(_editorCanvasObject);
+        _canvasRect = _editorCanvasObject.GetComponent<RectTransform>();
+        _canvasRect.anchorMin = Vector2.zero;
+        _canvasRect.anchorMax = Vector2.one;
+        _canvasRect.offsetMin = Vector2.zero;
+        _canvasRect.offsetMax = Vector2.zero;
+
+        var canvas = _editorCanvasObject.GetComponent<Canvas>();
+        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        canvas.sortingOrder = 32767;
+
+        var scaler = _editorCanvasObject.GetComponent<CanvasScaler>();
+        scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+        scaler.referenceResolution = new Vector2(1920f, 1080f);
+        scaler.matchWidthOrHeight = 0.5f;
+
+        var panel = new GameObject("EditorPanelFallback", typeof(RectTransform), typeof(Image));
+        panel.transform.SetParent(_editorCanvasObject.transform, false);
+        _panelRect = panel.GetComponent<RectTransform>();
+        _panelRect.anchorMin = new Vector2(0f, 1f);
+        _panelRect.anchorMax = new Vector2(0f, 1f);
+        _panelRect.pivot = new Vector2(0f, 1f);
+        _panelRect.anchoredPosition = new Vector2(24f, -24f);
+        _panelRect.sizeDelta = new Vector2(560f, 260f);
+        panel.GetComponent<Image>().color = new Color(0.03f, 0.035f, 0.04f, 0.96f);
+
+        var textObject = new GameObject("DiagnosticsTextFallback", typeof(RectTransform), typeof(Text));
+        textObject.transform.SetParent(panel.transform, false);
+        var textRect = textObject.GetComponent<RectTransform>();
+        textRect.anchorMin = Vector2.zero;
+        textRect.anchorMax = Vector2.one;
+        textRect.offsetMin = new Vector2(14f, 14f);
+        textRect.offsetMax = new Vector2(-14f, -14f);
+
+        _fallbackDiagnosticsLabel = textObject.GetComponent<Text>();
+        _fallbackDiagnosticsLabel.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+        _fallbackDiagnosticsLabel.fontSize = 18;
+        _fallbackDiagnosticsLabel.color = Color.white;
+        _fallbackDiagnosticsLabel.alignment = TextAnchor.UpperLeft;
+        _fallbackDiagnosticsLabel.horizontalOverflow = HorizontalWrapMode.Wrap;
+        _fallbackDiagnosticsLabel.verticalOverflow = VerticalWrapMode.Overflow;
+        _fallbackDiagnosticsLabel.text = $"DrawableSuits diagnostics fallback\nUGUI/TMP editor build failed: {originalException.GetType().Name}: {originalException.Message}";
+
+        _cursorMarker = new GameObject("DrawableSuitsCursor", typeof(RectTransform), typeof(Image)).GetComponent<RectTransform>();
+        _cursorMarker.transform.SetParent(_editorCanvasObject.transform, false);
+        _cursorMarker.sizeDelta = new Vector2(14f, 14f);
+        _cursorMarker.GetComponent<Image>().color = Color.white;
+        _editorCanvasObject.SetActive(false);
+        DrawableSuitsDiagnostics.Info("Fallback diagnostics canvas built.");
     }
 
     private static GameObject CreateUiObject(string name, Transform parent, params Type[] components)
@@ -534,13 +696,16 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private static void EnsureEventSystem()
     {
-        if (FindObjectOfType<EventSystem>() != null)
+        var existing = FindObjectOfType<EventSystem>();
+        if (existing != null)
         {
+            DrawableSuitsDiagnostics.Info($"EventSystem already present: {existing.name}; current={EventSystem.current?.name ?? "null"}.");
             return;
         }
 
         var eventSystem = new GameObject("DrawableSuitsEventSystem", typeof(EventSystem), typeof(InputSystemUIInputModule));
         DontDestroyOnLoad(eventSystem);
+        DrawableSuitsDiagnostics.Info("Created fallback DrawableSuitsEventSystem with InputSystemUIInputModule.");
     }
 
     private void CaptureAndUnlockCursor()
@@ -554,6 +719,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         Cursor.visible = true;
         Cursor.lockState = CursorLockMode.None;
+        DrawableSuitsDiagnostics.Info($"Cursor unlocked for editor. previousVisible={_previousCursorVisible}; previousLock={_previousCursorLockState}; currentVisible={Cursor.visible}; currentLock={Cursor.lockState}");
     }
 
     private void SetStatus(string message, bool warn)
@@ -567,7 +733,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         if (warn && !string.IsNullOrWhiteSpace(_statusMessage))
         {
-            DrawableSuitsPlugin.ModLogger.LogWarning(_statusMessage);
+            DrawableSuitsDiagnostics.Warn(_statusMessage);
         }
     }
 
@@ -581,13 +747,16 @@ internal sealed class SuitEditorController : MonoBehaviour
         Cursor.visible = _previousCursorVisible;
         Cursor.lockState = _previousCursorLockState;
         _cursorStateCaptured = false;
+        DrawableSuitsDiagnostics.Info($"Cursor restored after editor close. visible={Cursor.visible}; lock={Cursor.lockState}");
     }
 
     private void UpdateUiState()
     {
         if (_suitLabel != null)
         {
-            _suitLabel.text = $"Suit: {DrawableSuitsPlugin.Registry.GetSuitName(_selectedSuitId)} ({_selectedSuitId})";
+            _suitLabel.text = _selectedSuitId >= 0
+                ? $"Suit: {DrawableSuitsPlugin.Registry.GetSuitName(_selectedSuitId)} ({_selectedSuitId})"
+                : "Suit: none selected";
         }
 
         if (_statusLabel != null)
@@ -609,10 +778,53 @@ internal sealed class SuitEditorController : MonoBehaviour
         if (_decalSizeSlider != null) _decalSizeSlider.value = _decalSize;
         if (_decalRotationSlider != null) _decalRotationSlider.value = _decalRotation;
 
+        if (_diagnosticsLabel != null)
+        {
+            _diagnosticsLabel.text = BuildDiagnosticsSummary();
+        }
+        if (_fallbackDiagnosticsLabel != null)
+        {
+            _fallbackDiagnosticsLabel.text = "DrawableSuits diagnostics\n" + BuildDiagnosticsSummary();
+        }
+
+        var hasEditableTexture = _selectedSuitId >= 0 && DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId) != null;
+        SetInteractable(_paintButton, _canPaint);
+        SetInteractable(_eraseButton, _canPaint);
+        SetInteractable(_decalButton, _canPaint);
+        SetInteractable(_applyButton, hasEditableTexture);
+        SetInteractable(_saveButton, hasEditableTexture);
+        SetInteractable(_resetButton, hasEditableTexture);
+        SetInteractable(_loadButton, hasEditableTexture && _selectedDesignIndex >= 0);
+
         UpdateToolButtons();
         UpdateLabels();
         UpdateColorUi();
         RefreshListButtons();
+    }
+
+    private string BuildDiagnosticsSummary()
+    {
+        var camera = Camera.main;
+        return string.Join("\n", new[]
+        {
+            $"Selected suit id: {_selectedSuitId}",
+            $"Suit count: {_knownSuitCount}",
+            $"Local player found: {_hasLocalPlayer}",
+            $"Player model found: {_hasPlayerModel}",
+            $"Main camera found: {_hasCamera} ({(camera != null ? camera.name : "null")})",
+            $"Preview collider found: {_hasPreviewCollider}",
+            $"Can paint/apply preview: {_canPaint}",
+            $"Canvas active: {(_editorCanvasObject != null && _editorCanvasObject.activeSelf)}",
+            $"Diagnostics log: {DrawableSuitsDiagnostics.LogPath}"
+        });
+    }
+
+    private static void SetInteractable(Selectable selectable, bool interactable)
+    {
+        if (selectable != null)
+        {
+            selectable.interactable = interactable;
+        }
     }
 
     private void UpdateLabels()
@@ -778,6 +990,12 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void HandlePaintingInput()
     {
+        if (!_canPaint)
+        {
+            _strokeActive = false;
+            return;
+        }
+
         var mousePainting = UnityEngine.Input.GetMouseButton(0);
         var gamepadPainting = Gamepad.current?.rightTrigger.ReadValue() > 0.55f;
         var painting = mousePainting || gamepadPainting;
@@ -813,6 +1031,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         var texture = DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId);
         if (texture == null || _previewCollider == null || Camera.main == null)
         {
+            RefreshEditorReadiness("paint preflight failed");
+            UpdateUiState();
             return;
         }
 
@@ -1005,9 +1225,15 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void SaveDesign()
     {
+        DrawableSuitsDiagnostics.Info($"SaveDesign requested. selectedSuitId={_selectedSuitId}; designName={_designName}");
         if (DrawableSuitsPlugin.Registry.SaveDesign(_selectedSuitId, _designName))
         {
             RefreshFileLists();
+            DrawableSuitsDiagnostics.Info("SaveDesign succeeded.");
+        }
+        else
+        {
+            DrawableSuitsDiagnostics.Warn("SaveDesign failed; registry returned false.");
         }
     }
 
@@ -1015,9 +1241,11 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         if (_selectedDesignIndex < 0 || _selectedDesignIndex >= _designFiles.Count)
         {
+            DrawableSuitsDiagnostics.Warn($"LoadSelectedDesign ignored. selectedDesignIndex={_selectedDesignIndex}; designCount={_designFiles.Count}");
             return;
         }
 
+        DrawableSuitsDiagnostics.Info($"LoadSelectedDesign requested. file={_designFiles[_selectedDesignIndex]}; selectedSuitId={_selectedSuitId}");
         SaveUndo();
         if (DrawableSuitsPlugin.Registry.LoadDesign(_selectedSuitId, _designFiles[_selectedDesignIndex]))
         {
@@ -1026,7 +1254,15 @@ internal sealed class SuitEditorController : MonoBehaviour
             {
                 _designNameInput.text = _designName;
             }
-            RebuildPreview();
+            RefreshEditorReadiness("before load design preview");
+            TryRebuildPreviewForCurrentReadiness("LoadSelectedDesign");
+            RefreshEditorReadiness("after load design");
+            UpdateUiState();
+            DrawableSuitsDiagnostics.Info("LoadSelectedDesign succeeded.");
+        }
+        else
+        {
+            DrawableSuitsDiagnostics.Warn("LoadSelectedDesign failed; registry returned false.");
         }
     }
 
@@ -1047,17 +1283,20 @@ internal sealed class SuitEditorController : MonoBehaviour
         _selectedDesignIndex = Mathf.Clamp(_selectedDesignIndex, -1, _designFiles.Count - 1);
         _selectedDecalIndex = Mathf.Clamp(_selectedDecalIndex, -1, _decalFiles.Count - 1);
         RefreshListButtons();
+        DrawableSuitsDiagnostics.Info($"RefreshFileLists complete. designCount={_designFiles.Count}; decalCount={_decalFiles.Count}; savesPath={DrawableSuitsPaths.Saves}; decalsPath={DrawableSuitsPaths.Decals}");
     }
 
     private void ImportDecalFromDialog()
     {
         if (!DrawableSuitsPlugin.ModConfig.EnableOsFileDialog.Value)
         {
+            DrawableSuitsDiagnostics.Info("ImportDecalFromDialog ignored because EnableOsFileDialog=false.");
             return;
         }
 
         if (!WindowsFileDialog.TryOpenImage(out var path) || string.IsNullOrWhiteSpace(path))
         {
+            DrawableSuitsDiagnostics.Info("ImportDecalFromDialog cancelled or returned no file.");
             return;
         }
 
@@ -1074,7 +1313,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
         catch (Exception ex)
         {
-            DrawableSuitsPlugin.ModLogger.LogWarning($"Failed to import decal '{path}': {ex.Message}");
+            DrawableSuitsDiagnostics.Exception($"Failed to import decal '{path}'", ex);
         }
     }
 
@@ -1094,6 +1333,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         _loadedDecal = TextureTools.LoadImageFile(_decalFiles[index], DrawableSuitsPlugin.ModConfig.MaxTextureSize.Value);
         SetTool(EditorTool.Decal);
         RefreshListButtons();
+        DrawableSuitsDiagnostics.Info($"Selected decal index={index}; file={_decalFiles[index]}; loaded={_loadedDecal != null}");
     }
 
     private void SelectAdjacentSuit(int direction)
@@ -1121,6 +1361,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         if (suitId < 0)
         {
+            DrawableSuitsDiagnostics.Warn($"SelectSuit ignored invalid suitId={suitId}.");
             return;
         }
 
@@ -1128,14 +1369,32 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawableSuitsPlugin.Registry.GetOrCreateState(_selectedSuitId);
         _undo.Clear();
         _redo.Clear();
+        DrawableSuitsDiagnostics.Info($"SelectSuit selected suitId={_selectedSuitId}; name={DrawableSuitsPlugin.Registry.GetSuitName(_selectedSuitId)}");
+        RefreshEditorReadiness("after select suit");
         UpdateUiState();
-        RebuildPreview();
+        TryRebuildPreviewForCurrentReadiness("SelectSuit");
+        RefreshEditorReadiness("after select suit preview");
+        UpdateUiState();
     }
 
     private int FirstKnownSuitId()
     {
         var ids = DrawableSuitsPlugin.Registry.GetSuitIds();
         return ids.Count > 0 ? ids[0] : -1;
+    }
+
+    private void TryRebuildPreviewForCurrentReadiness(string context)
+    {
+        if (!_hasEditableSuit || !_hasPlayerModel || !_hasCamera)
+        {
+            DrawableSuitsDiagnostics.Warn($"Skipping preview rebuild [{context}] because dependencies are missing. hasEditableSuit={_hasEditableSuit}; hasPlayerModel={_hasPlayerModel}; hasCamera={_hasCamera}");
+            DestroyPreview();
+            _hasPreviewCollider = false;
+            _canPaint = false;
+            return;
+        }
+
+        RebuildPreview();
     }
 
     private void RebuildPreview()
@@ -1145,10 +1404,12 @@ internal sealed class SuitEditorController : MonoBehaviour
         var source = player?.thisPlayerModel;
         if (source == null)
         {
-            SetStatus("Player model unavailable. Open the editor after joining a game.", true);
+            SetStatus("Diagnostics: local player model not loaded; editor shell remains visible.", true);
+            DrawableSuitsDiagnostics.Warn("RebuildPreview aborted: local player model is null.");
             return;
         }
 
+        DrawableSuitsDiagnostics.Info($"RebuildPreview baking mesh. selectedSuitId={_selectedSuitId}; sourceRenderer={source.name}; verticesBeforeBake={source.sharedMesh?.vertexCount ?? 0}");
         _previewMesh = new Mesh { name = "DrawableSuitsPreviewMesh" };
         source.BakeMesh(_previewMesh, true);
 
@@ -1160,12 +1421,15 @@ internal sealed class SuitEditorController : MonoBehaviour
         _previewRenderer.sharedMaterial = DrawableSuitsPlugin.Registry.GetRuntimeMaterial(_selectedSuitId);
         _previewCollider = _previewRoot.AddComponent<MeshCollider>();
         _previewCollider.sharedMesh = _previewMesh;
+        _hasPreviewCollider = _previewCollider != null;
+        _canPaint = _hasEditableSuit && _hasPlayerModel && _hasCamera && _hasPreviewCollider;
         if (string.IsNullOrWhiteSpace(_statusMessage) || _statusMessage.StartsWith("Player model unavailable"))
         {
             SetStatus(string.Empty, false);
         }
 
         UpdatePreviewTransform();
+        DrawableSuitsDiagnostics.Info($"RebuildPreview complete. meshVertices={_previewMesh.vertexCount}; collider={_previewCollider != null}; material={_previewRenderer.sharedMaterial?.name ?? "null"}");
     }
 
     private void UpdatePreviewTransform()
@@ -1200,29 +1464,61 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         _previewCollider = null;
         _previewRenderer = null;
+        _hasPreviewCollider = false;
+        _canPaint = false;
     }
 
-    private bool WasOpenShortcutPressed()
+    private void LogCanvasState(string context)
+    {
+        if (_editorCanvasObject == null)
+        {
+            DrawableSuitsDiagnostics.Warn($"CanvasState[{context}]: editorCanvasObject=null");
+            return;
+        }
+
+        var canvas = _editorCanvasObject.GetComponent<Canvas>();
+        var raycaster = _editorCanvasObject.GetComponent<GraphicRaycaster>();
+        var eventSystem = FindObjectOfType<EventSystem>();
+        var panelSize = _panelRect != null ? _panelRect.rect.size.ToString() : "null";
+        var canvasSize = _canvasRect != null ? _canvasRect.rect.size.ToString() : "null";
+        DrawableSuitsDiagnostics.Info($"CanvasState[{context}]: activeSelf={_editorCanvasObject.activeSelf}; activeInHierarchy={_editorCanvasObject.activeInHierarchy}; canvasMode={canvas?.renderMode.ToString() ?? "null"}; sortingOrder={canvas?.sortingOrder.ToString() ?? "null"}; childCount={_editorCanvasObject.transform.childCount}; canvasSize={canvasSize}; panelSize={panelSize}; raycaster={raycaster != null && raycaster.enabled}; eventSystem={eventSystem?.name ?? "null"}; currentSelected={EventSystem.current?.currentSelectedGameObject?.name ?? "null"}");
+    }
+
+    private OpenShortcutSource GetOpenShortcutSource()
     {
         var keyboard = Keyboard.current;
+        if (keyboard != null && keyboard.f10Key.wasPressedThisFrame)
+        {
+            DrawableSuitsDiagnostics.Info("Emergency input detected through Unity Input System F10.");
+            return OpenShortcutSource.Emergency;
+        }
+
         if (keyboard != null && keyboard.f8Key.wasPressedThisFrame)
         {
-            return true;
+            DrawableSuitsDiagnostics.Info("Keyboard input detected through Unity Input System F8.");
+            return OpenShortcutSource.Keyboard;
         }
 
         try
         {
+            if (UnityEngine.Input.GetKeyDown(DrawableSuitsPlugin.ModConfig.EmergencyOpenKey.Value))
+            {
+                DrawableSuitsDiagnostics.Info($"Emergency input detected through legacy key {DrawableSuitsPlugin.ModConfig.EmergencyOpenKey.Value}.");
+                return OpenShortcutSource.Emergency;
+            }
+
             if (UnityEngine.Input.GetKeyDown(DrawableSuitsPlugin.ModConfig.OpenEditorKey.Value))
             {
-                return true;
+                DrawableSuitsDiagnostics.Info($"Keyboard input detected through legacy key {DrawableSuitsPlugin.ModConfig.OpenEditorKey.Value}.");
+                return OpenShortcutSource.Keyboard;
             }
         }
         catch (Exception ex)
         {
-            DrawableSuitsPlugin.ModLogger.LogDebug($"Legacy shortcut polling failed: {ex.Message}");
+            DrawableSuitsDiagnostics.Exception("Legacy shortcut polling failed", ex);
         }
 
-        return WasControllerOpenPressed();
+        return WasControllerOpenPressed() ? OpenShortcutSource.Controller : OpenShortcutSource.None;
     }
 
     private bool WasControllerOpenPressed()
@@ -1234,9 +1530,20 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
-        var chordHeld = gamepad.selectButton.isPressed && gamepad.buttonNorth.isPressed;
+        var menuButton = gamepad.selectButton;
+        if (menuButton == null)
+        {
+            menuButton = gamepad.TryGetChildControl<ButtonControl>("backButton");
+        }
+
+        var chordHeld = menuButton != null && menuButton.isPressed && gamepad.buttonNorth.isPressed;
         var pressed = chordHeld && !_controllerOpenChordWasHeld;
         _controllerOpenChordWasHeld = chordHeld;
+        if (pressed)
+        {
+            DrawableSuitsDiagnostics.Info("Controller input detected through View/Back + buttonNorth.");
+        }
+
         return pressed;
     }
 
