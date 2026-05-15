@@ -472,9 +472,12 @@ internal static class PauseMenuButtonInjector
             DrawableSuitsPlugin.ModLogger.LogWarning($"Failed to close quick menu before opening editor: {ex.Message}");
         }
 
-        DrawableSuitsPlugin.Editor?.OpenEditor();
-        Cursor.visible = true;
-        Cursor.lockState = CursorLockMode.None;
+        var opened = DrawableSuitsPlugin.Editor != null && DrawableSuitsPlugin.Editor.OpenEditor();
+        if (opened)
+        {
+            Cursor.visible = true;
+            Cursor.lockState = CursorLockMode.None;
+        }
     }
 
     private sealed class MenuRow
