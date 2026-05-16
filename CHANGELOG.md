@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0
+
+- Rebuilt runtime lifetime around the stable BepInEx plugin host instead of a separate early runtime object.
+- Added `EnsureRuntimeReady()` recreation for registry, sync, editor, and runtime host components.
+- Centralized `F8`, `F10`, and controller open-chord polling in `DrawableSuitsRuntimeHost`.
+- Changed `F10` to open-only emergency behavior so it cannot immediately close the editor.
+- Replaced the debug HUD with a runtime-host-owned bootstrap HUD using built-in Unity UI/Text and `OnGUI`.
+- Simplified the editor to a reliable diagnostic shell while painting/decal/save/load controls are restored after runtime stability is confirmed.
+- Hardened Harmony patch and pause-menu button paths with try/catch diagnostics and runtime recreation before open requests.
+- Added Gale `BepInEx/LogOutput.log` troubleshooting notes.
+
 ## 0.1.5
 
 - Added an independent lightweight debug HUD that appears briefly on startup and can be toggled with `F9`.
