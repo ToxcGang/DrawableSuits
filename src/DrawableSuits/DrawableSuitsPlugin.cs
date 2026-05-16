@@ -14,6 +14,7 @@ public sealed class DrawableSuitsPlugin : BaseUnityPlugin
     internal static DrawableSuitsConfig ModConfig { get; private set; }
     internal static SuitTextureRegistry Registry { get; private set; }
     internal static SuitEditorController Editor { get; private set; }
+    internal static DrawableSuitsDebugOverlay DebugOverlay { get; private set; }
     internal static SuitSyncManager Sync { get; private set; }
 
     private Harmony _harmony;
@@ -26,7 +27,7 @@ public sealed class DrawableSuitsPlugin : BaseUnityPlugin
         ModConfig = new DrawableSuitsConfig(Config);
         DrawableSuitsPaths.EnsureCreated();
         DrawableSuitsDiagnostics.Initialize();
-        DrawableSuitsDiagnostics.Info($"Config OpenEditorKey={ModConfig.OpenEditorKey.Value}; EmergencyOpenKey={ModConfig.EmergencyOpenKey.Value}; ControllerCursorSpeed={ModConfig.ControllerCursorSpeed.Value}; MaxTextureSize={ModConfig.MaxTextureSize.Value}; MaxUndoStates={ModConfig.MaxUndoStates.Value}; NetworkSync={ModConfig.EnableNetworkSync.Value}; MaxSyncBytes={ModConfig.MaxSyncBytes.Value}; SyncChunkBytes={ModConfig.SyncChunkBytes.Value}; OsFileDialog={ModConfig.EnableOsFileDialog.Value}");
+        DrawableSuitsDiagnostics.Info($"Config OpenEditorKey={ModConfig.OpenEditorKey.Value}; EmergencyOpenKey={ModConfig.EmergencyOpenKey.Value}; DebugOverlayKey={ModConfig.DebugOverlayKey.Value}; ShowStartupDiagnostics={ModConfig.ShowStartupDiagnostics.Value}; StartupDiagnosticsSeconds={ModConfig.StartupDiagnosticsSeconds.Value}; ControllerCursorSpeed={ModConfig.ControllerCursorSpeed.Value}; MaxTextureSize={ModConfig.MaxTextureSize.Value}; MaxUndoStates={ModConfig.MaxUndoStates.Value}; NetworkSync={ModConfig.EnableNetworkSync.Value}; MaxSyncBytes={ModConfig.MaxSyncBytes.Value}; SyncChunkBytes={ModConfig.SyncChunkBytes.Value}; OsFileDialog={ModConfig.EnableOsFileDialog.Value}");
 
         _harmony = new Harmony(PluginInfo.Guid);
         try
@@ -50,6 +51,8 @@ public sealed class DrawableSuitsPlugin : BaseUnityPlugin
         DrawableSuitsDiagnostics.Info("Added SuitSyncManager component.");
         Editor = _runtimeObject.AddComponent<SuitEditorController>();
         DrawableSuitsDiagnostics.Info("Added SuitEditorController component.");
+        DebugOverlay = _runtimeObject.AddComponent<DrawableSuitsDebugOverlay>();
+        DrawableSuitsDiagnostics.Info("Added DrawableSuitsDebugOverlay component.");
 
         DrawableSuitsDiagnostics.Info($"{PluginInfo.Name} {PluginInfo.Version} loaded with GUID {PluginInfo.Guid}.");
     }
