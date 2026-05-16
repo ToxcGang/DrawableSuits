@@ -69,7 +69,7 @@ internal sealed class DrawableSuitsRuntimeHost : MonoBehaviour
 
     private void HandleInput()
     {
-        if (WasKeyPressed(Key.F9, DrawableSuitsPlugin.ModConfig.DebugOverlayKey.Value))
+        if (DrawableSuitsInput.WasKeyPressed(Key.F9, DrawableSuitsPlugin.ModConfig.DebugOverlayKey.Value))
         {
             _hudPinned = !_hudPinned;
             DrawableSuitsDiagnostics.Info($"RuntimeHost debug HUD toggled. pinned={_hudPinned}; frame={Time.frameCount}");
@@ -77,7 +77,7 @@ internal sealed class DrawableSuitsRuntimeHost : MonoBehaviour
             UpdateHud(true);
         }
 
-        if (WasKeyPressed(Key.F10, DrawableSuitsPlugin.ModConfig.EmergencyOpenKey.Value))
+        if (DrawableSuitsInput.WasKeyPressed(Key.F10, DrawableSuitsPlugin.ModConfig.EmergencyOpenKey.Value))
         {
             _hudPinned = true;
             DrawableSuitsDiagnostics.Info($"RuntimeHost F10 emergency open. editor={DrawableSuitsPlugin.DescribeUnityObject(DrawableSuitsPlugin.Editor)}");
@@ -86,7 +86,7 @@ internal sealed class DrawableSuitsRuntimeHost : MonoBehaviour
             UpdateHud(true);
         }
 
-        if (WasKeyPressed(Key.F8, DrawableSuitsPlugin.ModConfig.OpenEditorKey.Value))
+        if (DrawableSuitsInput.WasKeyPressed(Key.F8, DrawableSuitsPlugin.ModConfig.OpenEditorKey.Value))
         {
             DrawableSuitsDiagnostics.Info($"RuntimeHost F8 toggle. editor={DrawableSuitsPlugin.DescribeUnityObject(DrawableSuitsPlugin.Editor)}");
             DrawableSuitsPlugin.RequestToggleEditor("F8Keyboard");
@@ -193,33 +193,7 @@ internal sealed class DrawableSuitsRuntimeHost : MonoBehaviour
             $"Registry={DrawableSuitsPlugin.DescribeUnityObject(DrawableSuitsPlugin.Registry)} Sync={DrawableSuitsPlugin.DescribeUnityObject(DrawableSuitsPlugin.Sync)}\n" +
             $"Editor={DrawableSuitsPlugin.DescribeUnityObject(DrawableSuitsPlugin.Editor)} EditorOpen={DrawableSuitsPlugin.Editor?.IsOpenForDiagnostics.ToString() ?? "null"} Canvas={DrawableSuitsPlugin.Editor?.CanvasActiveForDiagnostics.ToString() ?? "null"}\n" +
             $"QuickMenu={DrawableSuitsPlugin.DescribeUnityObject(quickMenu)} QuickMenuOpen={quickMenu?.isMenuOpen.ToString() ?? "null"} EventSystem={EventSystem.current?.name ?? "null"} Camera={Camera.main?.name ?? "null"}\n" +
-            $"Log={DrawableSuitsDiagnostics.LogPath}";
-    }
-
-    private static bool WasKeyPressed(Key inputSystemKey, KeyCode legacyKey)
-    {
-        try
-        {
-            var keyboard = Keyboard.current;
-            if (keyboard != null && keyboard[inputSystemKey].wasPressedThisFrame)
-            {
-                return true;
-            }
-        }
-        catch (Exception ex)
-        {
-            DrawableSuitsDiagnostics.Exception($"Input System key polling failed for {inputSystemKey}", ex);
-        }
-
-        try
-        {
-            return UnityEngine.Input.GetKeyDown(legacyKey);
-        }
-        catch (Exception ex)
-        {
-            DrawableSuitsDiagnostics.Exception($"Legacy key polling failed for {legacyKey}", ex);
-            return false;
-        }
+            "Log=BepInEx/config/DrawableSuits/Logs/diagnostics.log";
     }
 
     private bool WasControllerOpenChordPressed()
