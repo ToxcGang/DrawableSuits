@@ -2,6 +2,7 @@ using BepInEx;
 using BepInEx.Logging;
 using HarmonyLib;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace DrawableSuits;
 
@@ -14,11 +15,10 @@ public sealed class DrawableSuitsPlugin : BaseUnityPlugin
     internal static DrawableSuitsConfig ModConfig { get; private set; }
     internal static SuitTextureRegistry Registry { get; private set; }
     internal static SuitEditorController Editor { get; private set; }
-    internal static DrawableSuitsDebugOverlay DebugOverlay { get; private set; }
+    internal static DrawableSuitsRuntimeHost RuntimeHost { get; private set; }
     internal static SuitSyncManager Sync { get; private set; }
 
     private Harmony _harmony;
-    private GameObject _runtimeObject;
 
     private void Awake()
     {
@@ -27,7 +27,18 @@ public sealed class DrawableSuitsPlugin : BaseUnityPlugin
         ModConfig = new DrawableSuitsConfig(Config);
         DrawableSuitsPaths.EnsureCreated();
         DrawableSuitsDiagnostics.Initialize();
+        DrawableSuitsDiagnostics.Info($"Plugin Awake. pluginInstance={DescribeUnityObject(this)}; pluginGameObject={DescribeUnityObject(gameObject)}; scene={SceneManager.GetActiveScene().name}");
         DrawableSuitsDiagnostics.Info($"Config OpenEditorKey={ModConfig.OpenEditorKey.Value}; EmergencyOpenKey={ModConfig.EmergencyOpenKey.Value}; DebugOverlayKey={ModConfig.DebugOverlayKey.Value}; ShowStartupDiagnostics={ModConfig.ShowStartupDiagnostics.Value}; StartupDiagnosticsSeconds={ModConfig.StartupDiagnosticsSeconds.Value}; ControllerCursorSpeed={ModConfig.ControllerCursorSpeed.Value}; MaxTextureSize={ModConfig.MaxTextureSize.Value}; MaxUndoStates={ModConfig.MaxUndoStates.Value}; NetworkSync={ModConfig.EnableNetworkSync.Value}; MaxSyncBytes={ModConfig.MaxSyncBytes.Value}; SyncChunkBytes={ModConfig.SyncChunkBytes.Value}; OsFileDialog={ModConfig.EnableOsFileDialog.Value}");
+
+        try
+        {
+            DontDestroyOnLoad(gameObject);
+            DrawableSuitsDiagnostics.Info("Marked BepInEx plugin gameObject as DontDestroyOnLoad.");
+        }
+        catch (System.Exception ex)
+        {
+            DrawableSuitsDiagnostics.Exception("Failed to mark plugin gameObject DontDestroyOnLoad", ex);
+        }
 
         _harmony = new Harmony(PluginInfo.Guid);
         try
@@ -42,28 +53,133 @@ public sealed class DrawableSuitsPlugin : BaseUnityPlugin
             throw;
         }
 
-        _runtimeObject = new GameObject("DrawableSuitsRuntime");
-        DontDestroyOnLoad(_runtimeObject);
-        DrawableSuitsDiagnostics.Info("Created DrawableSuitsRuntime object.");
-        Registry = _runtimeObject.AddComponent<SuitTextureRegistry>();
-        DrawableSuitsDiagnostics.Info("Added SuitTextureRegistry component.");
-        Sync = _runtimeObject.AddComponent<SuitSyncManager>();
-        DrawableSuitsDiagnostics.Info("Added SuitSyncManager component.");
-        Editor = _runtimeObject.AddComponent<SuitEditorController>();
-        DrawableSuitsDiagnostics.Info("Added SuitEditorController component.");
-        DebugOverlay = _runtimeObject.AddComponent<DrawableSuitsDebugOverlay>();
-        DrawableSuitsDiagnostics.Info("Added DrawableSuitsDebugOverlay component.");
+        SceneManager.sceneLoaded += OnSceneLoaded;
+        EnsureRuntimeReady("Plugin.Awake");
 
         DrawableSuitsDiagnostics.Info($"{PluginInfo.Name} {PluginInfo.Version} loaded with GUID {PluginInfo.Guid}.");
+    }
+
+    private void Start()
+    {
+        DrawableSuitsDiagnostics.Info($"Plugin Start. plugin={DescribeUnityObject(this)}; host={DescribeUnityObject(RuntimeHost)}; editor={DescribeUnityObject(Editor)}");
+        EnsureRuntimeReady("Plugin.Start");
+    }
+
+    private void Update()
+    {
+        EnsureRuntimeReady("Plugin.Update");
     }
 
     private void OnDestroy()
     {
         DrawableSuitsDiagnostics.Info("DrawableSuitsPlugin.OnDestroy called.");
+        SceneManager.sceneLoaded -= OnSceneLoaded;
         _harmony?.UnpatchSelf();
-        if (_runtimeObject != null)
+    }
+
+    private static void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+    {
+        DrawableSuitsDiagnostics.Info($"Scene loaded. name={scene.name}; buildIndex={scene.buildIndex}; mode={mode}");
+        EnsureRuntimeReady($"SceneLoaded:{scene.name}");
+        Registry?.ReapplyAll();
+    }
+
+    internal static bool EnsureRuntimeReady(string reason)
+    {
+        if (Instance == null)
         {
-            Destroy(_runtimeObject);
+            DrawableSuitsDiagnostics.Warn($"EnsureRuntimeReady({reason}) failed: plugin instance is null.");
+            return false;
         }
+
+        var hostObject = Instance.gameObject;
+        if (hostObject == null)
+        {
+            DrawableSuitsDiagnostics.Warn($"EnsureRuntimeReady({reason}) failed: plugin gameObject is null.");
+            return false;
+        }
+
+        Registry = EnsureComponent(Registry, hostObject, reason, "registry");
+        Sync = EnsureComponent(Sync, hostObject, reason, "sync");
+        Editor = EnsureComponent(Editor, hostObject, reason, "editor");
+        RuntimeHost = EnsureComponent(RuntimeHost, hostObject, reason, "runtime host");
+
+        var ready = Registry != null && Sync != null && Editor != null && RuntimeHost != null;
+        if (!ready)
+        {
+            DrawableSuitsDiagnostics.Warn($"EnsureRuntimeReady({reason}) incomplete. registry={DescribeUnityObject(Registry)}; sync={DescribeUnityObject(Sync)}; editor={DescribeUnityObject(Editor)}; host={DescribeUnityObject(RuntimeHost)}");
+        }
+
+        return ready;
+    }
+
+    internal static bool RequestOpenEditor(string source)
+    {
+        var ready = EnsureRuntimeReady($"RequestOpenEditor:{source}");
+        DrawableSuitsDiagnostics.Info($"RequestOpenEditor source={source}; runtimeReady={ready}; editor={DescribeUnityObject(Editor)}");
+        if (!ready || Editor == null)
+        {
+            return false;
+        }
+
+        var opened = Editor.OpenEditor(source);
+        DrawableSuitsDiagnostics.Info($"RequestOpenEditor result source={source}; opened={opened}; editorOpen={Editor.IsOpenForDiagnostics}; canvasActive={Editor.CanvasActiveForDiagnostics}");
+        return opened;
+    }
+
+    internal static bool RequestToggleEditor(string source)
+    {
+        var ready = EnsureRuntimeReady($"RequestToggleEditor:{source}");
+        DrawableSuitsDiagnostics.Info($"RequestToggleEditor source={source}; runtimeReady={ready}; editor={DescribeUnityObject(Editor)}");
+        if (!ready || Editor == null)
+        {
+            return false;
+        }
+
+        return Editor.IsOpenForDiagnostics ? CloseEditor(source) : RequestOpenEditor(source);
+    }
+
+    internal static bool CloseEditor(string source)
+    {
+        EnsureRuntimeReady($"CloseEditor:{source}");
+        if (Editor == null)
+        {
+            DrawableSuitsDiagnostics.Warn($"CloseEditor source={source} ignored because editor is null.");
+            return false;
+        }
+
+        DrawableSuitsDiagnostics.Info($"CloseEditor source={source}; editor={DescribeUnityObject(Editor)}");
+        Editor.CloseEditor();
+        return true;
+    }
+
+    internal static string DescribeUnityObject(Object unityObject)
+    {
+        if (unityObject == null)
+        {
+            return "null";
+        }
+
+        return $"{unityObject.GetType().Name}(id={unityObject.GetInstanceID()}, name={unityObject.name})";
+    }
+
+    private static T EnsureComponent<T>(T current, GameObject hostObject, string reason, string label)
+        where T : Component
+    {
+        if (current != null)
+        {
+            return current;
+        }
+
+        var existing = hostObject.GetComponent<T>();
+        if (existing != null)
+        {
+            DrawableSuitsDiagnostics.Info($"EnsureRuntimeReady({reason}) recovered existing {label}: {DescribeUnityObject(existing)}");
+            return existing;
+        }
+
+        var created = hostObject.AddComponent<T>();
+        DrawableSuitsDiagnostics.Info($"EnsureRuntimeReady({reason}) created {label}: {DescribeUnityObject(created)} on {DescribeUnityObject(hostObject)}");
+        return created;
     }
 }
