@@ -101,6 +101,9 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Button _loadButton;
     private Button _resetButton;
 
+    internal bool IsOpenForDiagnostics => _isOpen;
+    internal bool CanvasActiveForDiagnostics => _editorCanvasObject != null && _editorCanvasObject.activeSelf;
+
     private void Start()
     {
         _cursor = new Vector2(Screen.width * 0.5f, Screen.height * 0.5f);
