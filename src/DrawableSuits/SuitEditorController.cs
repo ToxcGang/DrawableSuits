@@ -22,14 +22,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         Decal
     }
 
-    private enum OpenShortcutSource
-    {
-        None,
-        Keyboard,
-        Controller,
-        Emergency
-    }
-
     private readonly Stack<Color32[]> _undo = new();
     private readonly Stack<Color32[]> _redo = new();
     private readonly List<string> _designFiles = new();
@@ -52,7 +44,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private bool _cursorStateCaptured;
     private bool _previousCursorVisible;
     private CursorLockMode _previousCursorLockState;
-    private bool _controllerOpenChordWasHeld;
+    private bool _bootstrapShell;
     private bool _hasEditableSuit;
     private bool _hasLocalPlayer;
     private bool _hasPlayerModel;
@@ -113,13 +105,6 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void Update()
     {
-        var openSource = GetOpenShortcutSource();
-        if (openSource != OpenShortcutSource.None)
-        {
-            DrawableSuitsDiagnostics.Info($"Editor toggle requested from input path: {openSource}.");
-            ToggleEditor(openSource.ToString());
-        }
-
         if (!_isOpen)
         {
             return;
@@ -299,7 +284,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         try
         {
             DrawableSuitsDiagnostics.Info("Building DrawableSuits editor UGUI canvas.");
-            BuildEditorCanvas();
+            BuildBootstrapEditorCanvas();
             LogCanvasState("ensure-created");
             return _editorCanvasObject != null;
         }
@@ -328,6 +313,102 @@ internal sealed class SuitEditorController : MonoBehaviour
                 return false;
             }
         }
+    }
+
+    private void BuildBootstrapEditorCanvas()
+    {
+        _bootstrapShell = true;
+        _editorCanvasObject = new GameObject("DrawableSuitsEditorCanvas", typeof(RectTransform), typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
+        DontDestroyOnLoad(_editorCanvasObject);
+        _canvasRect = _editorCanvasObject.GetComponent<RectTransform>();
+        _canvasRect.anchorMin = Vector2.zero;
+        _canvasRect.anchorMax = Vector2.one;
+        _canvasRect.offsetMin = Vector2.zero;
+        _canvasRect.offsetMax = Vector2.zero;
+
+        var canvas = _editorCanvasObject.GetComponent<Canvas>();
+        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        canvas.sortingOrder = 32767;
+
+        var scaler = _editorCanvasObject.GetComponent<CanvasScaler>();
+        scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+        scaler.referenceResolution = new Vector2(1920f, 1080f);
+        scaler.matchWidthOrHeight = 0.5f;
+
+        var panel = new GameObject("EditorPanelBootstrap", typeof(RectTransform), typeof(Image));
+        panel.transform.SetParent(_editorCanvasObject.transform, false);
+        _panelRect = panel.GetComponent<RectTransform>();
+        _panelRect.anchorMin = new Vector2(0f, 1f);
+        _panelRect.anchorMax = new Vector2(0f, 1f);
+        _panelRect.pivot = new Vector2(0f, 1f);
+        _panelRect.anchoredPosition = new Vector2(24f, -24f);
+        _panelRect.sizeDelta = new Vector2(650f, 330f);
+        panel.GetComponent<Image>().color = new Color(0.02f, 0.025f, 0.03f, 0.96f);
+
+        CreateBootstrapText(panel.transform, $"{PluginInfo.Name} {PluginInfo.Version}", 22, new Rect(16f, -12f, 610f, 34f), new Color(1f, 0.62f, 0.25f, 1f));
+        _fallbackDiagnosticsLabel = CreateBootstrapText(panel.transform, string.Empty, 16, new Rect(16f, -54f, 610f, 190f), Color.white);
+
+        var closeButton = CreateBootstrapButton(panel.transform, "Close", new Rect(16f, -266f, 140f, 42f), CloseEditor);
+        closeButton.interactable = true;
+        var applyButton = CreateBootstrapButton(panel.transform, "Apply disabled", new Rect(168f, -266f, 180f, 42f), null);
+        applyButton.interactable = false;
+
+        _cursorMarker = new GameObject("DrawableSuitsCursor", typeof(RectTransform), typeof(Image)).GetComponent<RectTransform>();
+        _cursorMarker.transform.SetParent(_editorCanvasObject.transform, false);
+        _cursorMarker.sizeDelta = new Vector2(14f, 14f);
+        _cursorMarker.GetComponent<Image>().color = Color.white;
+
+        _editorCanvasObject.SetActive(false);
+        UpdateUiState();
+        DrawableSuitsDiagnostics.Info($"Bootstrap editor canvas built. canvas={DrawableSuitsPlugin.DescribeUnityObject(_editorCanvasObject)}; panel={DrawableSuitsPlugin.DescribeUnityObject(panel)}");
+    }
+
+    private static Text CreateBootstrapText(Transform parent, string text, int fontSize, Rect rect, Color color)
+    {
+        var go = new GameObject("BootstrapText", typeof(RectTransform), typeof(Text));
+        go.transform.SetParent(parent, false);
+        var rectTransform = go.GetComponent<RectTransform>();
+        rectTransform.anchorMin = new Vector2(0f, 1f);
+        rectTransform.anchorMax = new Vector2(0f, 1f);
+        rectTransform.pivot = new Vector2(0f, 1f);
+        rectTransform.anchoredPosition = new Vector2(rect.x, rect.y);
+        rectTransform.sizeDelta = new Vector2(rect.width, rect.height);
+
+        var label = go.GetComponent<Text>();
+        label.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+        label.fontSize = fontSize;
+        label.color = color;
+        label.alignment = TextAnchor.UpperLeft;
+        label.horizontalOverflow = HorizontalWrapMode.Wrap;
+        label.verticalOverflow = VerticalWrapMode.Overflow;
+        label.text = text;
+        return label;
+    }
+
+    private static Button CreateBootstrapButton(Transform parent, string text, Rect rect, Action onClick)
+    {
+        var go = new GameObject(text + "Button", typeof(RectTransform), typeof(Image), typeof(Button));
+        go.transform.SetParent(parent, false);
+        var rectTransform = go.GetComponent<RectTransform>();
+        rectTransform.anchorMin = new Vector2(0f, 1f);
+        rectTransform.anchorMax = new Vector2(0f, 1f);
+        rectTransform.pivot = new Vector2(0f, 1f);
+        rectTransform.anchoredPosition = new Vector2(rect.x, rect.y);
+        rectTransform.sizeDelta = new Vector2(rect.width, rect.height);
+
+        var image = go.GetComponent<Image>();
+        image.color = new Color(0.14f, 0.15f, 0.16f, 0.98f);
+
+        var button = go.GetComponent<Button>();
+        button.targetGraphic = image;
+        if (onClick != null)
+        {
+            button.onClick.AddListener(() => onClick());
+        }
+
+        var label = CreateBootstrapText(go.transform, text, 16, new Rect(0f, 0f, rect.width, rect.height), Color.white);
+        label.alignment = TextAnchor.MiddleCenter;
+        return button;
     }
 
     private void BuildEditorCanvas()
@@ -706,9 +787,9 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        var eventSystem = new GameObject("DrawableSuitsEventSystem", typeof(EventSystem), typeof(InputSystemUIInputModule));
+        var eventSystem = new GameObject("DrawableSuitsEventSystem", typeof(EventSystem), typeof(StandaloneInputModule));
         DontDestroyOnLoad(eventSystem);
-        DrawableSuitsDiagnostics.Info("Created fallback DrawableSuitsEventSystem with InputSystemUIInputModule.");
+        DrawableSuitsDiagnostics.Info("Created fallback DrawableSuitsEventSystem with StandaloneInputModule.");
     }
 
     private void CaptureAndUnlockCursor()
@@ -937,6 +1018,11 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void HandleEditorShortcuts()
     {
+        if (_bootstrapShell)
+        {
+            return;
+        }
+
         UpdateLabels();
 
         var gamepad = Gamepad.current;
@@ -993,6 +1079,12 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void HandlePaintingInput()
     {
+        if (_bootstrapShell)
+        {
+            _strokeActive = false;
+            return;
+        }
+
         if (!_canPaint)
         {
             _strokeActive = false;
@@ -1485,69 +1577,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         var panelSize = _panelRect != null ? _panelRect.rect.size.ToString() : "null";
         var canvasSize = _canvasRect != null ? _canvasRect.rect.size.ToString() : "null";
         DrawableSuitsDiagnostics.Info($"CanvasState[{context}]: activeSelf={_editorCanvasObject.activeSelf}; activeInHierarchy={_editorCanvasObject.activeInHierarchy}; canvasMode={canvas?.renderMode.ToString() ?? "null"}; sortingOrder={canvas?.sortingOrder.ToString() ?? "null"}; childCount={_editorCanvasObject.transform.childCount}; canvasSize={canvasSize}; panelSize={panelSize}; raycaster={raycaster != null && raycaster.enabled}; eventSystem={eventSystem?.name ?? "null"}; currentSelected={EventSystem.current?.currentSelectedGameObject?.name ?? "null"}");
-    }
-
-    private OpenShortcutSource GetOpenShortcutSource()
-    {
-        var keyboard = Keyboard.current;
-        if (keyboard != null && keyboard.f10Key.wasPressedThisFrame)
-        {
-            DrawableSuitsDiagnostics.Info("Emergency input detected through Unity Input System F10.");
-            return OpenShortcutSource.Emergency;
-        }
-
-        if (keyboard != null && keyboard.f8Key.wasPressedThisFrame)
-        {
-            DrawableSuitsDiagnostics.Info("Keyboard input detected through Unity Input System F8.");
-            return OpenShortcutSource.Keyboard;
-        }
-
-        try
-        {
-            if (UnityEngine.Input.GetKeyDown(DrawableSuitsPlugin.ModConfig.EmergencyOpenKey.Value))
-            {
-                DrawableSuitsDiagnostics.Info($"Emergency input detected through legacy key {DrawableSuitsPlugin.ModConfig.EmergencyOpenKey.Value}.");
-                return OpenShortcutSource.Emergency;
-            }
-
-            if (UnityEngine.Input.GetKeyDown(DrawableSuitsPlugin.ModConfig.OpenEditorKey.Value))
-            {
-                DrawableSuitsDiagnostics.Info($"Keyboard input detected through legacy key {DrawableSuitsPlugin.ModConfig.OpenEditorKey.Value}.");
-                return OpenShortcutSource.Keyboard;
-            }
-        }
-        catch (Exception ex)
-        {
-            DrawableSuitsDiagnostics.Exception("Legacy shortcut polling failed", ex);
-        }
-
-        return WasControllerOpenPressed() ? OpenShortcutSource.Controller : OpenShortcutSource.None;
-    }
-
-    private bool WasControllerOpenPressed()
-    {
-        var gamepad = Gamepad.current;
-        if (gamepad == null)
-        {
-            _controllerOpenChordWasHeld = false;
-            return false;
-        }
-
-        var menuButton = gamepad.selectButton;
-        if (menuButton == null)
-        {
-            menuButton = gamepad.TryGetChildControl<ButtonControl>("backButton");
-        }
-
-        var chordHeld = menuButton != null && menuButton.isPressed && gamepad.buttonNorth.isPressed;
-        var pressed = chordHeld && !_controllerOpenChordWasHeld;
-        _controllerOpenChordWasHeld = chordHeld;
-        if (pressed)
-        {
-            DrawableSuitsDiagnostics.Info("Controller input detected through View/Back + buttonNorth.");
-        }
-
-        return pressed;
     }
 
     private static bool WasGamepadPressed(Func<Gamepad, ButtonControl> accessor)
