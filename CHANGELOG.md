@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1
+
+- Replaced active editor/runtime keyboard and mouse polling with Unity Input System reads for Lethal Company v81.
+- Stopped repeated legacy `UnityEngine.Input` exceptions when the game is configured for Input System only.
+- Kept a one-time guarded legacy fallback for unusual cases where no Input System keyboard is available.
+- Cleaned up the diagnostic editor shell so the log path uses the readable config-relative path and panel text has more room.
+- Updated troubleshooting notes for the Input System-only runtime path.
+
 ## 0.2.0
 
 - Rebuilt runtime lifetime around the stable BepInEx plugin host instead of a separate early runtime object.
