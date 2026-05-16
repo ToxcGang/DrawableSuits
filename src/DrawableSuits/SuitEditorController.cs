@@ -110,7 +110,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        if (UnityEngine.Input.GetKeyDown(KeyCode.Escape) || WasGamepadPressed(g => g.buttonEast))
+        if (DrawableSuitsInput.WasKeyPressed(Key.Escape) || WasGamepadPressed(g => g.buttonEast))
         {
             CloseEditor();
             return;
@@ -342,15 +342,15 @@ internal sealed class SuitEditorController : MonoBehaviour
         _panelRect.anchorMax = new Vector2(0f, 1f);
         _panelRect.pivot = new Vector2(0f, 1f);
         _panelRect.anchoredPosition = new Vector2(24f, -24f);
-        _panelRect.sizeDelta = new Vector2(650f, 330f);
+        _panelRect.sizeDelta = new Vector2(760f, 360f);
         panel.GetComponent<Image>().color = new Color(0.02f, 0.025f, 0.03f, 0.96f);
 
-        CreateBootstrapText(panel.transform, $"{PluginInfo.Name} {PluginInfo.Version}", 22, new Rect(16f, -12f, 610f, 34f), new Color(1f, 0.62f, 0.25f, 1f));
-        _fallbackDiagnosticsLabel = CreateBootstrapText(panel.transform, string.Empty, 16, new Rect(16f, -54f, 610f, 190f), Color.white);
+        CreateBootstrapText(panel.transform, $"{PluginInfo.Name} {PluginInfo.Version}", 22, new Rect(16f, -12f, 720f, 34f), new Color(1f, 0.62f, 0.25f, 1f));
+        _fallbackDiagnosticsLabel = CreateBootstrapText(panel.transform, string.Empty, 16, new Rect(16f, -54f, 720f, 216f), Color.white);
 
-        var closeButton = CreateBootstrapButton(panel.transform, "Close", new Rect(16f, -266f, 140f, 42f), CloseEditor);
+        var closeButton = CreateBootstrapButton(panel.transform, "Close", new Rect(16f, -304f, 140f, 42f), CloseEditor);
         closeButton.interactable = true;
-        var applyButton = CreateBootstrapButton(panel.transform, "Apply disabled", new Rect(168f, -266f, 180f, 42f), null);
+        var applyButton = CreateBootstrapButton(panel.transform, "Apply unavailable in diagnostic shell", new Rect(168f, -304f, 294f, 42f), null);
         applyButton.interactable = false;
 
         _cursorMarker = new GameObject("DrawableSuitsCursor", typeof(RectTransform), typeof(Image)).GetComponent<RectTransform>();
@@ -899,7 +899,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             $"Preview collider found: {_hasPreviewCollider}",
             $"Can paint/apply preview: {_canPaint}",
             $"Canvas active: {(_editorCanvasObject != null && _editorCanvasObject.activeSelf)}",
-            $"Diagnostics log: {DrawableSuitsDiagnostics.LogPath}"
+            "Diagnostics log: BepInEx/config/DrawableSuits/Logs/diagnostics.log"
         });
     }
 
@@ -1007,7 +1007,10 @@ internal sealed class SuitEditorController : MonoBehaviour
         var gamepad = Gamepad.current;
         if (gamepad == null)
         {
-            _cursor = new Vector2(UnityEngine.Input.mousePosition.x, UnityEngine.Input.mousePosition.y);
+            if (DrawableSuitsInput.TryGetMousePosition(out var mousePosition))
+            {
+                _cursor = mousePosition;
+            }
             return;
         }
 
@@ -1054,15 +1057,15 @@ internal sealed class SuitEditorController : MonoBehaviour
             }
         }
 
-        if (UnityEngine.Input.GetMouseButton(1))
+        if (DrawableSuitsInput.IsRightMousePressed())
         {
-            _previewYaw += UnityEngine.Input.GetAxis("Mouse X") * 3f;
+            _previewYaw += DrawableSuitsInput.MouseDeltaX() * 3f;
         }
 
-        var scroll = UnityEngine.Input.mouseScrollDelta.y;
+        var scroll = DrawableSuitsInput.MouseScrollY();
         if (Mathf.Abs(scroll) > 0.01f)
         {
-            if (UnityEngine.Input.GetKey(KeyCode.LeftControl) || UnityEngine.Input.GetKey(KeyCode.RightControl))
+            if (DrawableSuitsInput.IsKeyPressed(Key.LeftCtrl) || DrawableSuitsInput.IsKeyPressed(Key.RightCtrl))
             {
                 _previewScale = Mathf.Clamp(_previewScale + scroll * 0.05f, 0.35f, 1.8f);
             }
@@ -1091,7 +1094,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        var mousePainting = UnityEngine.Input.GetMouseButton(0);
+        var mousePainting = DrawableSuitsInput.IsLeftMousePressed();
         var gamepadPainting = Gamepad.current?.rightTrigger.ReadValue() > 0.55f;
         var painting = mousePainting || gamepadPainting;
 
