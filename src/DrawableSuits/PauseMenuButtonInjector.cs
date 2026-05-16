@@ -495,13 +495,10 @@ internal static class PauseMenuButtonInjector
             DrawableSuitsDiagnostics.Exception("Failed to close quick menu before opening editor", ex);
         }
 
-        if (DrawableSuitsPlugin.Editor == null)
-        {
-            DrawableSuitsDiagnostics.Warn("Pause-menu click could not open editor because DrawableSuitsPlugin.Editor is null.");
-            return;
-        }
-
-        DrawableSuitsPlugin.Editor.OpenFromPauseMenuNextFrame(quickMenu);
+        var runtimeReady = DrawableSuitsPlugin.EnsureRuntimeReady("PauseMenuButton.Click");
+        var editorBefore = DrawableSuitsPlugin.DescribeUnityObject(DrawableSuitsPlugin.Editor);
+        var opened = DrawableSuitsPlugin.RequestOpenEditor("PauseMenuButton");
+        DrawableSuitsDiagnostics.Info($"Pause-menu open request complete. runtimeReady={runtimeReady}; editorBefore={editorBefore}; editorAfter={DrawableSuitsPlugin.DescribeUnityObject(DrawableSuitsPlugin.Editor)}; opened={opened}");
     }
 
     private static string DescribeRows(List<MenuRow> rows)
