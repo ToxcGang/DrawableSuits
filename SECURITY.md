@@ -30,7 +30,7 @@ Please avoid sharing exploit details publicly until the issue has been reviewed 
 
 DrawableSuits is a Lethal Company v81 BepInEx mod that lets players draw on suits, place decals, save and load designs, and apply edited textures to vanilla or modded suits.
 
-The mod stores local saves, textures, and decal images under the BepInEx config directory. Multiplayer sync is intended for applied or saved designs, not constant brush-stroke streaming. :contentReference[oaicite:1]{index=1}
+The mod stores local saves, textures, and decal images under the BepInEx config directory. Multiplayer sync is intended for applied or saved designs, not constant brush-stroke streaming.
 
 ## Security Principles
 
