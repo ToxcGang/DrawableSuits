@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.5
+
+- Added an independent lightweight debug HUD that appears briefly on startup and can be toggled with `F9`.
+- Added a second forced `F10` emergency-open path outside the editor controller so input/editor failures are easier to separate.
+- Logged debug HUD state, active scene, quick-menu state, editor canvas state, EventSystem, camera, and diagnostics log path.
+- Documented how to tell the difference between "plugin is not loading" and "editor canvas is not opening."
+
 ## 0.1.4
 
 - Added deep diagnostics to BepInEx logs and `BepInEx/config/DrawableSuits/Logs/diagnostics.log`.
