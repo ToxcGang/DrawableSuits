@@ -43,6 +43,10 @@ internal sealed class SuitEditorController : MonoBehaviour
     private bool _cursorStateCaptured;
     private bool _previousCursorVisible;
     private CursorLockMode _previousCursorLockState;
+    private bool _playerInputStateCaptured;
+    private bool _previousDisableMoveInput;
+    private bool _previousDisableLookInput;
+    private PlayerControllerB _inputLockedPlayer;
     private bool _bootstrapShell;
     private bool _hasEditableSuit;
     private bool _hasLocalPlayer;
@@ -115,6 +119,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
+        ReapplyPlayerInputLock();
         HandleControllerCursor();
         UpdateCursorMarker();
         HandleEditorShortcuts();
@@ -147,6 +152,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         EnsureEventSystem();
         RefreshEditorReadiness($"before show ({source})");
         CaptureAndUnlockCursor();
+        CaptureAndLockPlayerInput();
         _isOpen = true;
         _editorCanvasObject.SetActive(true);
         _cursor = new Vector2(Screen.width * 0.5f, Screen.height * 0.5f);
@@ -155,6 +161,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         RefreshEditorReadiness($"after preview ({source})");
         UpdateCursorMarker();
         UpdateUiState();
+        RebuildSelectableNavigation();
+        LogEditorControlTree(_panelRect);
         LogCanvasState($"opened from {source}");
         DrawableSuitsDiagnostics.Info("DrawableSuits editor overlay opened.");
         return true;
@@ -176,6 +184,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         DestroyPreview();
         _strokeActive = false;
+        RestorePlayerInputState();
         RestoreCursorState();
     }
 
@@ -334,105 +343,70 @@ internal sealed class SuitEditorController : MonoBehaviour
         scaler.referenceResolution = new Vector2(1920f, 1080f);
         scaler.matchWidthOrHeight = 0.5f;
 
-        var panel = CreateUiObject("EditorPanel", _editorCanvasObject.transform, typeof(Image), typeof(ScrollRect));
+        var panel = CreateUiObject("EditorPanel", _editorCanvasObject.transform, typeof(Image));
         _panelRect = panel.GetComponent<RectTransform>();
         _panelRect.anchorMin = new Vector2(0f, 1f);
         _panelRect.anchorMax = new Vector2(0f, 1f);
         _panelRect.pivot = new Vector2(0f, 1f);
         _panelRect.anchoredPosition = new Vector2(24f, -24f);
-        _panelRect.sizeDelta = new Vector2(520f, 960f);
+        _panelRect.sizeDelta = new Vector2(820f, 760f);
 
         var panelImage = panel.GetComponent<Image>();
         panelImage.color = new Color(0.025f, 0.03f, 0.035f, 0.96f);
 
-        var viewport = CreateUiObject("EditorViewport", panel.transform, typeof(RectTransform), typeof(Image), typeof(Mask));
-        var viewportRect = viewport.GetComponent<RectTransform>();
-        viewportRect.anchorMin = Vector2.zero;
-        viewportRect.anchorMax = Vector2.one;
-        viewportRect.offsetMin = new Vector2(12f, 12f);
-        viewportRect.offsetMax = new Vector2(-12f, -12f);
-        viewport.GetComponent<Image>().color = Color.clear;
-        viewport.GetComponent<Mask>().showMaskGraphic = false;
+        const float leftX = 16f;
+        const float rightX = 414f;
+        const float leftW = 382f;
+        const float rightW = 390f;
 
-        var content = CreateUiObject("EditorContent", viewport.transform, typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
-        var contentRect = content.GetComponent<RectTransform>();
-        contentRect.anchorMin = new Vector2(0f, 1f);
-        contentRect.anchorMax = new Vector2(1f, 1f);
-        contentRect.pivot = new Vector2(0.5f, 1f);
-        contentRect.offsetMin = Vector2.zero;
-        contentRect.offsetMax = Vector2.zero;
-
-        var layout = content.GetComponent<VerticalLayoutGroup>();
-        layout.padding = new RectOffset(0, 0, 0, 0);
-        layout.spacing = 6f;
-        layout.childControlWidth = true;
-        layout.childForceExpandWidth = true;
-        layout.childControlHeight = true;
-        layout.childForceExpandHeight = false;
-
-        var fitter = content.GetComponent<ContentSizeFitter>();
-        fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-        fitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
-
-        var scroll = panel.GetComponent<ScrollRect>();
-        scroll.viewport = viewportRect;
-        scroll.content = contentRect;
-        scroll.horizontal = false;
-        scroll.vertical = true;
-        scroll.scrollSensitivity = 24f;
-
-        CreateText(content.transform, $"{PluginInfo.Name} {PluginInfo.Version}", 24, FontStyle.Bold, TextAnchor.MiddleLeft, 34f);
-        _suitLabel = CreateText(content.transform, string.Empty, 18, FontStyle.Normal, TextAnchor.MiddleLeft, 28f);
-        _statusLabel = CreateText(content.transform, string.Empty, 15, FontStyle.Normal, TextAnchor.UpperLeft, 44f);
+        CreateAnchoredText(panel.transform, "Title", $"{PluginInfo.Name} {PluginInfo.Version}", 24, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 12f, 260f, 34f), new Color(1f, 0.62f, 0.25f, 1f));
+        CreateAnchoredButton(panel.transform, "Close", new Rect(704f, 14f, 96f, 34f), CloseEditor);
+        _suitLabel = CreateAnchoredText(panel.transform, "SuitLabel", string.Empty, 18, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 50f, leftW, 28f), Color.white);
+        _statusLabel = CreateAnchoredText(panel.transform, "StatusLabel", string.Empty, 15, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 82f, leftW, 50f), new Color(1f, 0.58f, 0.28f, 1f));
         _statusLabel.color = new Color(1f, 0.58f, 0.28f, 1f);
-        _diagnosticsLabel = CreateText(content.transform, string.Empty, 13, FontStyle.Normal, TextAnchor.UpperLeft, 116f);
+        _diagnosticsLabel = CreateAnchoredText(panel.transform, "DiagnosticsLabel", string.Empty, 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 138f, leftW, 118f), new Color(0.78f, 0.86f, 1f, 1f));
         _diagnosticsLabel.color = new Color(0.78f, 0.86f, 1f, 1f);
 
-        var suitRow = CreateHorizontalGroup(content.transform, "SuitRow", 34f);
-        CreateButton(suitRow.transform, "Previous", () => SelectAdjacentSuit(-1));
-        CreateButton(suitRow.transform, "Use Current", () => SelectSuit(DrawableSuitsPlugin.Registry.GetLocalSuitId()));
-        CreateButton(suitRow.transform, "Next", () => SelectAdjacentSuit(1));
-        CreateButton(suitRow.transform, "Close", CloseEditor);
+        CreateAnchoredButton(panel.transform, "Previous", new Rect(leftX, 264f, 90f, 34f), () => SelectAdjacentSuit(-1));
+        CreateAnchoredButton(panel.transform, "Use Current", new Rect(leftX + 98f, 264f, 126f, 34f), () => SelectSuit(DrawableSuitsPlugin.Registry.GetLocalSuitId()));
+        CreateAnchoredButton(panel.transform, "Next", new Rect(leftX + 232f, 264f, 80f, 34f), () => SelectAdjacentSuit(1));
 
-        CreateText(content.transform, "Tool", 16, FontStyle.Bold, TextAnchor.MiddleLeft, 24f);
-        var toolRow = CreateHorizontalGroup(content.transform, "ToolRow", 34f);
-        _paintButton = CreateButton(toolRow.transform, "Paint", () => SetTool(EditorTool.Paint));
-        _eraseButton = CreateButton(toolRow.transform, "Erase", () => SetTool(EditorTool.Erase));
-        _decalButton = CreateButton(toolRow.transform, "Decal", () => SetTool(EditorTool.Decal));
+        CreateAnchoredText(panel.transform, "ToolHeader", "Tool", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 312f, leftW, 24f), Color.white);
+        _paintButton = CreateAnchoredButton(panel.transform, "Paint", new Rect(leftX, 340f, 112f, 34f), () => SetTool(EditorTool.Paint));
+        _eraseButton = CreateAnchoredButton(panel.transform, "Erase", new Rect(leftX + 120f, 340f, 112f, 34f), () => SetTool(EditorTool.Erase));
+        _decalButton = CreateAnchoredButton(panel.transform, "Decal", new Rect(leftX + 240f, 340f, 112f, 34f), () => SetTool(EditorTool.Decal));
 
-        CreateText(content.transform, "Brush", 16, FontStyle.Bold, TextAnchor.MiddleLeft, 24f);
-        _brushSizeLabel = CreateText(content.transform, string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, 20f);
-        _brushSizeSlider = CreateSlider(content.transform, 1f, 96f, _brushSize, value => _brushSize = value);
-        _brushOpacityLabel = CreateText(content.transform, string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, 20f);
-        _brushOpacitySlider = CreateSlider(content.transform, 0.05f, 1f, _brushOpacity, value => _brushOpacity = value);
+        CreateAnchoredText(panel.transform, "BrushHeader", "Brush", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 388f, leftW, 24f), Color.white);
+        _brushSizeLabel = CreateAnchoredText(panel.transform, "BrushSizeLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 418f, 116f, 24f), Color.white);
+        _brushSizeSlider = CreateAnchoredSlider(panel.transform, "BrushSize", 1f, 96f, _brushSize, new Rect(leftX + 128f, 420f, 242f, 24f), value => _brushSize = value);
+        _brushOpacityLabel = CreateAnchoredText(panel.transform, "BrushOpacityLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 452f, 116f, 24f), Color.white);
+        _brushOpacitySlider = CreateAnchoredSlider(panel.transform, "BrushOpacity", 0.05f, 1f, _brushOpacity, new Rect(leftX + 128f, 454f, 242f, 24f), value => _brushOpacity = value);
 
-        CreateText(content.transform, "Color", 14, FontStyle.Bold, TextAnchor.MiddleLeft, 20f);
-        CreateText(content.transform, "Red", 13, FontStyle.Normal, TextAnchor.MiddleLeft, 18f);
-        _redSlider = CreateSlider(content.transform, 0f, 1f, _brushColor.r, value => { _brushColor.r = value; UpdateColorUi(); });
-        CreateText(content.transform, "Green", 13, FontStyle.Normal, TextAnchor.MiddleLeft, 18f);
-        _greenSlider = CreateSlider(content.transform, 0f, 1f, _brushColor.g, value => { _brushColor.g = value; UpdateColorUi(); });
-        CreateText(content.transform, "Blue", 13, FontStyle.Normal, TextAnchor.MiddleLeft, 18f);
-        _blueSlider = CreateSlider(content.transform, 0f, 1f, _brushColor.b, value => { _brushColor.b = value; UpdateColorUi(); });
-        _colorSwatch = CreateColorSwatch(content.transform);
+        CreateAnchoredText(panel.transform, "ColorHeader", "Color", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 492f, leftW, 24f), Color.white);
+        CreateAnchoredText(panel.transform, "RedLabel", "Red", 13, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 522f, 58f, 22f), Color.white);
+        _redSlider = CreateAnchoredSlider(panel.transform, "Red", 0f, 1f, _brushColor.r, new Rect(leftX + 70f, 522f, 230f, 24f), value => { _brushColor.r = value; UpdateColorUi(); });
+        CreateAnchoredText(panel.transform, "GreenLabel", "Green", 13, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 556f, 58f, 22f), Color.white);
+        _greenSlider = CreateAnchoredSlider(panel.transform, "Green", 0f, 1f, _brushColor.g, new Rect(leftX + 70f, 556f, 230f, 24f), value => { _brushColor.g = value; UpdateColorUi(); });
+        CreateAnchoredText(panel.transform, "BlueLabel", "Blue", 13, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 590f, 58f, 22f), Color.white);
+        _blueSlider = CreateAnchoredSlider(panel.transform, "Blue", 0f, 1f, _brushColor.b, new Rect(leftX + 70f, 590f, 230f, 24f), value => { _brushColor.b = value; UpdateColorUi(); });
+        _colorSwatch = CreateAnchoredColorSwatch(panel.transform, new Rect(leftX + 314f, 522f, 56f, 92f));
 
-        CreateText(content.transform, "Decal", 16, FontStyle.Bold, TextAnchor.MiddleLeft, 24f);
-        _decalSizeLabel = CreateText(content.transform, string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, 20f);
-        _decalSizeSlider = CreateSlider(content.transform, 16f, 512f, _decalSize, value => _decalSize = value);
-        _decalRotationLabel = CreateText(content.transform, string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, 20f);
-        _decalRotationSlider = CreateSlider(content.transform, -180f, 180f, _decalRotation, value => _decalRotation = value);
-        var decalButtons = CreateHorizontalGroup(content.transform, "DecalButtons", 34f);
-        CreateButton(decalButtons.transform, "Refresh", RefreshFileLists);
-        CreateButton(decalButtons.transform, "Import File", ImportDecalFromDialog);
-        _decalListContent = CreateScrollList(content.transform, "DecalList", 94f);
+        CreateAnchoredText(panel.transform, "DecalHeader", "Decal", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 60f, rightW, 24f), Color.white);
+        _decalSizeLabel = CreateAnchoredText(panel.transform, "DecalSizeLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(rightX, 90f, 116f, 24f), Color.white);
+        _decalSizeSlider = CreateAnchoredSlider(panel.transform, "DecalSize", 16f, 512f, _decalSize, new Rect(rightX + 128f, 92f, 242f, 24f), value => _decalSize = value);
+        _decalRotationLabel = CreateAnchoredText(panel.transform, "DecalRotationLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(rightX, 124f, 116f, 24f), Color.white);
+        _decalRotationSlider = CreateAnchoredSlider(panel.transform, "DecalRotation", -180f, 180f, _decalRotation, new Rect(rightX + 128f, 126f, 242f, 24f), value => _decalRotation = value);
+        CreateAnchoredButton(panel.transform, "Refresh", new Rect(rightX, 162f, 110f, 34f), RefreshFileLists);
+        CreateAnchoredButton(panel.transform, "Import File", new Rect(rightX + 118f, 162f, 126f, 34f), ImportDecalFromDialog);
+        _decalListContent = CreateAnchoredScrollList(panel.transform, "DecalList", new Rect(rightX, 204f, rightW, 100f));
 
-        CreateText(content.transform, "Design Name", 16, FontStyle.Bold, TextAnchor.MiddleLeft, 24f);
-        _designNameInput = CreateInputField(content.transform, _designName);
+        CreateAnchoredText(panel.transform, "DesignHeader", "Design Name", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 320f, rightW, 24f), Color.white);
+        _designNameInput = CreateAnchoredInputField(panel.transform, _designName, new Rect(rightX, 350f, rightW, 34f));
         _designNameInput.onValueChanged.AddListener(value => _designName = value);
 
-        var editButtons = CreateHorizontalGroup(content.transform, "EditButtons", 34f);
-        CreateButton(editButtons.transform, "Undo", Undo);
-        CreateButton(editButtons.transform, "Redo", Redo);
-        _resetButton = CreateButton(editButtons.transform, "Reset", () =>
+        CreateAnchoredButton(panel.transform, "Undo", new Rect(rightX, 398f, 88f, 34f), Undo);
+        CreateAnchoredButton(panel.transform, "Redo", new Rect(rightX + 96f, 398f, 88f, 34f), Redo);
+        _resetButton = CreateAnchoredButton(panel.transform, "Reset", new Rect(rightX + 192f, 398f, 88f, 34f), () =>
         {
             SaveUndo();
             DrawableSuitsPlugin.Registry.ResetSuit(_selectedSuitId);
@@ -440,15 +414,14 @@ internal sealed class SuitEditorController : MonoBehaviour
             UpdateUiState();
         });
 
-        var applyButtons = CreateHorizontalGroup(content.transform, "ApplyButtons", 34f);
-        _applyButton = CreateButton(applyButtons.transform, "Apply", () => DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, true));
-        _saveButton = CreateButton(applyButtons.transform, "Save", SaveDesign);
-        _loadButton = CreateButton(applyButtons.transform, "Load", LoadSelectedDesign);
+        _applyButton = CreateAnchoredButton(panel.transform, "Apply", new Rect(rightX, 440f, 88f, 34f), () => DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, true));
+        _saveButton = CreateAnchoredButton(panel.transform, "Save", new Rect(rightX + 96f, 440f, 88f, 34f), SaveDesign);
+        _loadButton = CreateAnchoredButton(panel.transform, "Load", new Rect(rightX + 192f, 440f, 88f, 34f), LoadSelectedDesign);
 
-        CreateText(content.transform, "Saved Designs", 16, FontStyle.Bold, TextAnchor.MiddleLeft, 24f);
-        _designListContent = CreateScrollList(content.transform, "DesignList", 110f);
+        CreateAnchoredText(panel.transform, "SavedDesignsHeader", "Saved Designs", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 490f, rightW, 24f), Color.white);
+        _designListContent = CreateAnchoredScrollList(panel.transform, "DesignList", new Rect(rightX, 520f, rightW, 124f));
 
-        CreateText(content.transform, "Controller: View/Back+Y open, left stick cursor, right trigger paint, bumpers rotate, Y tool, X undo, Start save, A apply.", 13, FontStyle.Normal, TextAnchor.UpperLeft, 54f);
+        CreateAnchoredText(panel.transform, "ControllerHelp", "Controller: View/Back+Y open, left stick cursor, right trigger paint, bumpers rotate, Y tool, X undo, Start save, A apply.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 650f, 780f, 54f), Color.white);
 
         _cursorMarker = CreateUiObject("DrawableSuitsCursor", _editorCanvasObject.transform, typeof(Image)).GetComponent<RectTransform>();
         _cursorMarker.sizeDelta = new Vector2(14f, 14f);
@@ -458,6 +431,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         RefreshListButtons();
         UpdateUiState();
         RebuildSelectableNavigation();
+        LogEditorControlTree(panel.transform);
         DrawableSuitsDiagnostics.Info($"BuildEditorCanvas complete. childCount={_editorCanvasObject.transform.childCount}; panelChildren={panel.transform.childCount}; graphicRaycaster={_editorCanvasObject.GetComponent<GraphicRaycaster>() != null}");
     }
 
@@ -521,6 +495,186 @@ internal sealed class SuitEditorController : MonoBehaviour
         var go = new GameObject(name, components);
         go.transform.SetParent(parent, false);
         return go;
+    }
+
+    private static void SetAnchoredRect(RectTransform rectTransform, Rect rect)
+    {
+        rectTransform.anchorMin = new Vector2(0f, 1f);
+        rectTransform.anchorMax = new Vector2(0f, 1f);
+        rectTransform.pivot = new Vector2(0f, 1f);
+        rectTransform.anchoredPosition = new Vector2(rect.x, -rect.y);
+        rectTransform.sizeDelta = new Vector2(rect.width, rect.height);
+    }
+
+    private static Text CreateAnchoredText(Transform parent, string name, string text, int fontSize, FontStyle style, TextAnchor alignment, Rect rect, Color color)
+    {
+        var go = CreateUiObject(name, parent, typeof(RectTransform), typeof(Text));
+        SetAnchoredRect(go.GetComponent<RectTransform>(), rect);
+
+        var label = go.GetComponent<Text>();
+        label.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+        label.text = text;
+        label.fontSize = fontSize;
+        label.fontStyle = style;
+        label.alignment = alignment;
+        label.color = color;
+        label.horizontalOverflow = HorizontalWrapMode.Wrap;
+        label.verticalOverflow = VerticalWrapMode.Truncate;
+        label.supportRichText = false;
+        return label;
+    }
+
+    private static Button CreateAnchoredButton(Transform parent, string text, Rect rect, Action onClick)
+    {
+        var go = CreateUiObject(text + "Button", parent, typeof(RectTransform), typeof(Image), typeof(Button));
+        SetAnchoredRect(go.GetComponent<RectTransform>(), rect);
+
+        var image = go.GetComponent<Image>();
+        image.color = new Color(0.14f, 0.15f, 0.16f, 0.98f);
+
+        var button = go.GetComponent<Button>();
+        button.targetGraphic = image;
+        button.onClick.AddListener(() => onClick?.Invoke());
+
+        var colors = button.colors;
+        colors.normalColor = image.color;
+        colors.highlightedColor = new Color(0.24f, 0.26f, 0.28f, 1f);
+        colors.pressedColor = new Color(0.34f, 0.36f, 0.38f, 1f);
+        colors.selectedColor = colors.highlightedColor;
+        button.colors = colors;
+
+        var label = CreateAnchoredText(go.transform, "Label", text, 15, FontStyle.Normal, TextAnchor.MiddleCenter, new Rect(0f, 0f, rect.width, rect.height), Color.white);
+        var labelRect = label.GetComponent<RectTransform>();
+        labelRect.anchorMin = Vector2.zero;
+        labelRect.anchorMax = Vector2.one;
+        labelRect.pivot = new Vector2(0.5f, 0.5f);
+        labelRect.anchoredPosition = Vector2.zero;
+        labelRect.offsetMin = Vector2.zero;
+        labelRect.offsetMax = Vector2.zero;
+        return button;
+    }
+
+    private static Slider CreateAnchoredSlider(Transform parent, string name, float min, float max, float value, Rect rect, Action<float> onValueChanged)
+    {
+        var go = CreateUiObject(name + "Slider", parent, typeof(RectTransform), typeof(Slider));
+        SetAnchoredRect(go.GetComponent<RectTransform>(), rect);
+
+        var background = CreateUiObject("Background", go.transform, typeof(RectTransform), typeof(Image));
+        var bgRect = background.GetComponent<RectTransform>();
+        bgRect.anchorMin = new Vector2(0f, 0.25f);
+        bgRect.anchorMax = new Vector2(1f, 0.75f);
+        bgRect.offsetMin = Vector2.zero;
+        bgRect.offsetMax = Vector2.zero;
+        background.GetComponent<Image>().color = new Color(0.08f, 0.08f, 0.09f, 1f);
+
+        var fillArea = CreateUiObject("Fill Area", go.transform, typeof(RectTransform));
+        var fillAreaRect = fillArea.GetComponent<RectTransform>();
+        fillAreaRect.anchorMin = Vector2.zero;
+        fillAreaRect.anchorMax = Vector2.one;
+        fillAreaRect.offsetMin = new Vector2(5f, 0f);
+        fillAreaRect.offsetMax = new Vector2(-5f, 0f);
+
+        var fill = CreateUiObject("Fill", fillArea.transform, typeof(RectTransform), typeof(Image));
+        fill.GetComponent<Image>().color = new Color(0.95f, 0.42f, 0.16f, 1f);
+
+        var handleArea = CreateUiObject("Handle Slide Area", go.transform, typeof(RectTransform));
+        var handleAreaRect = handleArea.GetComponent<RectTransform>();
+        handleAreaRect.anchorMin = Vector2.zero;
+        handleAreaRect.anchorMax = Vector2.one;
+        handleAreaRect.offsetMin = new Vector2(8f, 0f);
+        handleAreaRect.offsetMax = new Vector2(-8f, 0f);
+
+        var handle = CreateUiObject("Handle", handleArea.transform, typeof(RectTransform), typeof(Image));
+        handle.GetComponent<Image>().color = Color.white;
+        handle.GetComponent<RectTransform>().sizeDelta = new Vector2(16f, rect.height);
+
+        var slider = go.GetComponent<Slider>();
+        slider.minValue = min;
+        slider.maxValue = max;
+        slider.value = value;
+        slider.fillRect = fill.GetComponent<RectTransform>();
+        slider.handleRect = handle.GetComponent<RectTransform>();
+        slider.targetGraphic = handle.GetComponent<Image>();
+        slider.onValueChanged.AddListener(v => onValueChanged?.Invoke(v));
+        return slider;
+    }
+
+    private static Image CreateAnchoredColorSwatch(Transform parent, Rect rect)
+    {
+        var go = CreateUiObject("ColorSwatch", parent, typeof(RectTransform), typeof(Image));
+        SetAnchoredRect(go.GetComponent<RectTransform>(), rect);
+        return go.GetComponent<Image>();
+    }
+
+    private static InputField CreateAnchoredInputField(Transform parent, string value, Rect rect)
+    {
+        var go = CreateUiObject("DesignNameInput", parent, typeof(RectTransform), typeof(Image), typeof(InputField));
+        SetAnchoredRect(go.GetComponent<RectTransform>(), rect);
+        go.GetComponent<Image>().color = new Color(0.08f, 0.085f, 0.09f, 1f);
+
+        var textObject = CreateUiObject("Text", go.transform, typeof(RectTransform), typeof(Text));
+        var textRect = textObject.GetComponent<RectTransform>();
+        textRect.anchorMin = Vector2.zero;
+        textRect.anchorMax = Vector2.one;
+        textRect.offsetMin = new Vector2(8f, 2f);
+        textRect.offsetMax = new Vector2(-8f, -2f);
+
+        var text = textObject.GetComponent<Text>();
+        text.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+        text.fontSize = 16;
+        text.color = Color.white;
+        text.alignment = TextAnchor.MiddleLeft;
+        text.horizontalOverflow = HorizontalWrapMode.Overflow;
+        text.verticalOverflow = VerticalWrapMode.Truncate;
+
+        var input = go.GetComponent<InputField>();
+        input.textComponent = text;
+        input.text = value;
+        input.lineType = InputField.LineType.SingleLine;
+        input.caretColor = Color.white;
+        input.selectionColor = new Color(0.95f, 0.42f, 0.16f, 0.45f);
+        return input;
+    }
+
+    private static RectTransform CreateAnchoredScrollList(Transform parent, string name, Rect rect)
+    {
+        var root = CreateUiObject(name, parent, typeof(RectTransform), typeof(Image), typeof(ScrollRect));
+        SetAnchoredRect(root.GetComponent<RectTransform>(), rect);
+        root.GetComponent<Image>().color = new Color(0.06f, 0.065f, 0.07f, 0.9f);
+
+        var viewport = CreateUiObject("Viewport", root.transform, typeof(RectTransform), typeof(Image), typeof(Mask));
+        var viewportRect = viewport.GetComponent<RectTransform>();
+        viewportRect.anchorMin = Vector2.zero;
+        viewportRect.anchorMax = Vector2.one;
+        viewportRect.offsetMin = new Vector2(4f, 4f);
+        viewportRect.offsetMax = new Vector2(-4f, -4f);
+        viewport.GetComponent<Image>().color = Color.clear;
+        viewport.GetComponent<Mask>().showMaskGraphic = false;
+
+        var content = CreateUiObject("Content", viewport.transform, typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
+        var contentRect = content.GetComponent<RectTransform>();
+        contentRect.anchorMin = new Vector2(0f, 1f);
+        contentRect.anchorMax = new Vector2(1f, 1f);
+        contentRect.pivot = new Vector2(0.5f, 1f);
+        contentRect.offsetMin = Vector2.zero;
+        contentRect.offsetMax = Vector2.zero;
+
+        var group = content.GetComponent<VerticalLayoutGroup>();
+        group.spacing = 4f;
+        group.childControlWidth = true;
+        group.childForceExpandWidth = true;
+        group.childControlHeight = true;
+        group.childForceExpandHeight = false;
+
+        var fitter = content.GetComponent<ContentSizeFitter>();
+        fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+        var scroll = root.GetComponent<ScrollRect>();
+        scroll.viewport = viewportRect;
+        scroll.content = contentRect;
+        scroll.horizontal = false;
+        scroll.vertical = true;
+        return contentRect;
     }
 
     private static Text CreateText(Transform parent, string text, int fontSize, FontStyle style, TextAnchor alignment, float height)
@@ -822,6 +976,73 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawableSuitsDiagnostics.Info($"Cursor restored after editor close. visible={Cursor.visible}; lock={Cursor.lockState}");
     }
 
+    private void CaptureAndLockPlayerInput()
+    {
+        var player = StartOfRound.Instance?.localPlayerController;
+        if (player == null)
+        {
+            DrawableSuitsDiagnostics.Info("Player input lock skipped: local player is null.");
+            _playerInputStateCaptured = false;
+            _inputLockedPlayer = null;
+            return;
+        }
+
+        _inputLockedPlayer = player;
+        _previousDisableMoveInput = player.disableMoveInput;
+        _previousDisableLookInput = player.disableLookInput;
+        _playerInputStateCaptured = true;
+        player.disableMoveInput = true;
+        player.disableLookInput = true;
+        DrawableSuitsDiagnostics.Info($"Player input locked for editor. player={DrawableSuitsPlugin.DescribeUnityObject(player)}; previousMove={_previousDisableMoveInput}; previousLook={_previousDisableLookInput}");
+    }
+
+    private void ReapplyPlayerInputLock()
+    {
+        if (!_playerInputStateCaptured)
+        {
+            return;
+        }
+
+        var player = StartOfRound.Instance?.localPlayerController;
+        if (player == null)
+        {
+            return;
+        }
+
+        if (_inputLockedPlayer != player)
+        {
+            DrawableSuitsDiagnostics.Warn($"Player input lock target changed while editor was open. old={DrawableSuitsPlugin.DescribeUnityObject(_inputLockedPlayer)}; new={DrawableSuitsPlugin.DescribeUnityObject(player)}");
+            _inputLockedPlayer = player;
+            _previousDisableMoveInput = player.disableMoveInput;
+            _previousDisableLookInput = player.disableLookInput;
+        }
+
+        player.disableMoveInput = true;
+        player.disableLookInput = true;
+    }
+
+    private void RestorePlayerInputState()
+    {
+        if (!_playerInputStateCaptured)
+        {
+            return;
+        }
+
+        if (_inputLockedPlayer != null)
+        {
+            _inputLockedPlayer.disableMoveInput = _previousDisableMoveInput;
+            _inputLockedPlayer.disableLookInput = _previousDisableLookInput;
+            DrawableSuitsDiagnostics.Info($"Player input restored after editor close. player={DrawableSuitsPlugin.DescribeUnityObject(_inputLockedPlayer)}; move={_inputLockedPlayer.disableMoveInput}; look={_inputLockedPlayer.disableLookInput}");
+        }
+        else
+        {
+            DrawableSuitsDiagnostics.Info("Player input restore skipped because locked player was destroyed or unavailable.");
+        }
+
+        _inputLockedPlayer = null;
+        _playerInputStateCaptured = false;
+    }
+
     private void UpdateUiState()
     {
         if (_suitLabel != null)
@@ -1090,7 +1311,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             {
                 SaveDesign();
             }
-            if (gamepad.buttonSouth.wasPressedThisFrame)
+            if (gamepad.buttonSouth.wasPressedThisFrame && CanUseGamepadApplyShortcut())
             {
                 DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, true);
             }
@@ -1157,6 +1378,22 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         PaintAtCursor();
+    }
+
+    private bool CanUseGamepadApplyShortcut()
+    {
+        var selected = EventSystem.current != null ? EventSystem.current.currentSelectedGameObject : null;
+        if (selected == null || _panelRect == null)
+        {
+            return true;
+        }
+
+        if (!selected.transform.IsChildOf(_panelRect))
+        {
+            return true;
+        }
+
+        return selected.GetComponent<Button>() == null && selected.GetComponent<InputField>() == null;
     }
 
     private bool IsCursorOverEditorPanel()
@@ -1624,6 +1861,34 @@ internal sealed class SuitEditorController : MonoBehaviour
         var panelSize = _panelRect != null ? _panelRect.rect.size.ToString() : "null";
         var canvasSize = _canvasRect != null ? _canvasRect.rect.size.ToString() : "null";
         DrawableSuitsDiagnostics.Info($"CanvasState[{context}]: activeSelf={_editorCanvasObject.activeSelf}; activeInHierarchy={_editorCanvasObject.activeInHierarchy}; canvasMode={canvas?.renderMode.ToString() ?? "null"}; sortingOrder={canvas?.sortingOrder.ToString() ?? "null"}; childCount={_editorCanvasObject.transform.childCount}; canvasSize={canvasSize}; panelSize={panelSize}; raycaster={raycaster != null && raycaster.enabled}; eventSystem={eventSystem?.name ?? "null"}; currentSelected={EventSystem.current?.currentSelectedGameObject?.name ?? "null"}");
+    }
+
+    private static void LogEditorControlTree(Transform root)
+    {
+        if (root == null)
+        {
+            return;
+        }
+
+        var logged = 0;
+        foreach (var rect in root.GetComponentsInChildren<RectTransform>(true))
+        {
+            if (logged >= 32)
+            {
+                break;
+            }
+
+            var text = rect.GetComponent<Text>();
+            var image = rect.GetComponent<Image>();
+            var selectable = rect.GetComponent<Selectable>();
+            var canvasRenderer = rect.GetComponent<CanvasRenderer>();
+            var textSummary = text != null ? $"; text='{text.text}'; textColor={text.color}; fontSize={text.fontSize}" : string.Empty;
+            var imageSummary = image != null ? $"; imageColor={image.color}" : string.Empty;
+            var selectableSummary = selectable != null ? $"; selectable={selectable.GetType().Name}; interactable={selectable.interactable}" : string.Empty;
+            var alphaSummary = canvasRenderer != null ? $"; alpha={canvasRenderer.GetAlpha():0.###}" : string.Empty;
+            DrawableSuitsDiagnostics.Info($"EditorControl[{logged}]: name={rect.name}; activeSelf={rect.gameObject.activeSelf}; activeInHierarchy={rect.gameObject.activeInHierarchy}; anchors=({rect.anchorMin},{rect.anchorMax}); pos={rect.anchoredPosition}; size={rect.rect.size}{alphaSummary}{textSummary}{imageSummary}{selectableSummary}");
+            logged++;
+        }
     }
 
     private static bool WasGamepadPressed(Func<Gamepad, ButtonControl> accessor)
