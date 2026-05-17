@@ -83,6 +83,28 @@ internal static class DrawableSuitsInput
         }
     }
 
+    internal static bool WasMouseUsedThisFrame()
+    {
+        try
+        {
+            var mouse = Mouse.current;
+            if (mouse == null)
+            {
+                return false;
+            }
+
+            return mouse.delta.ReadValue().sqrMagnitude > 0.01f
+                || mouse.leftButton.isPressed
+                || mouse.rightButton.isPressed
+                || Mathf.Abs(mouse.scroll.ReadValue().y) > 0.01f;
+        }
+        catch (Exception ex)
+        {
+            DrawableSuitsDiagnostics.Exception("Input System mouse activity polling failed", ex);
+            return false;
+        }
+    }
+
     internal static float MouseScrollY()
     {
         try
