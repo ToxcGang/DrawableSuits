@@ -89,16 +89,33 @@ internal sealed class DrawableSuitsRuntimeHost : MonoBehaviour
         if (DrawableSuitsInput.WasKeyPressed(Key.F8, DrawableSuitsPlugin.ModConfig.OpenEditorKey.Value))
         {
             DrawableSuitsDiagnostics.Info($"RuntimeHost F8 toggle. editor={DrawableSuitsPlugin.DescribeUnityObject(DrawableSuitsPlugin.Editor)}");
-            DrawableSuitsPlugin.RequestToggleEditor("F8Keyboard");
+            RequestGameplayToggle("F8Keyboard");
             UpdateHud(true);
         }
 
         if (WasControllerOpenChordPressed())
         {
             DrawableSuitsDiagnostics.Info($"RuntimeHost controller open chord. editor={DrawableSuitsPlugin.DescribeUnityObject(DrawableSuitsPlugin.Editor)}");
-            DrawableSuitsPlugin.RequestToggleEditor("ControllerViewBackY");
+            RequestGameplayToggle("ControllerViewBackY");
             UpdateHud(true);
         }
+    }
+
+    private static void RequestGameplayToggle(string source)
+    {
+        if (DrawableSuitsPlugin.Editor?.IsOpenForDiagnostics == true)
+        {
+            DrawableSuitsPlugin.RequestToggleEditor(source);
+            return;
+        }
+
+        if (!DrawableSuitsPlugin.HasGameplayEditorContext())
+        {
+            DrawableSuitsDiagnostics.Info($"RuntimeHost ignored {source} open because no gameplay player/camera context is available. Use F10 for diagnostics.");
+            return;
+        }
+
+        DrawableSuitsPlugin.RequestToggleEditor(source);
     }
 
     private void EnsureHudCanvas()
