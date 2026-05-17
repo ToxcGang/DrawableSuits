@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0
+
+- Restored the usable suit editor on the stable 0.2.x runtime host.
+- Replaced the diagnostic-only editor shell with a full built-in Unity UI editor canvas.
+- Added live controls for suit selection, paint, erase, decals, brush size, opacity, RGB color, decal scale/rotation, undo, redo, reset, apply, save, load, refresh, import, and close.
+- Re-enabled real-time preview painting, erase, decal placement, save/load, and apply flows.
+- Added explicit UI selectable navigation and kept controller virtual-cursor painting support.
+- Kept diagnostics/status text visible when suit, player model, camera, or preview dependencies are missing.
+
 ## 0.2.1
 
 - Replaced active editor/runtime keyboard and mouse polling with Unity Input System reads for Lethal Company v81.
