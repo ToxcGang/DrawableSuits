@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.1
+
+- Rebuilt the editor panel with deterministic anchored Unity UI controls to fix the blue translucent panel with missing labels/buttons.
+- Added detailed editor control-tree diagnostics for visible controls, text, images, and selectable state.
+- Locked local player movement and look input while the editor is open, then restored the previous input state on close.
+- Closed the editor automatically on full scene changes and main-menu transitions so main-menu navigation is not left captured.
+- Ignored normal editor open shortcuts outside gameplay context while keeping `F10` available for diagnostics.
+- Prevented controller submit from triggering Apply while a UI button or design-name input field is selected.
+
 ## 0.3.0
 
 - Restored the usable suit editor on the stable 0.2.x runtime host.
