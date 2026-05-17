@@ -14,6 +14,15 @@ namespace DrawableSuits;
 
 internal sealed class SuitEditorController : MonoBehaviour
 {
+    private enum EditorCloseReason
+    {
+        Normal,
+        Shortcut,
+        PauseMenu,
+        SceneChange,
+        PluginDestroy
+    }
+
     private enum EditorTool
     {
         Paint,
@@ -46,6 +55,9 @@ internal sealed class SuitEditorController : MonoBehaviour
     private bool _playerInputStateCaptured;
     private bool _previousDisableMoveInput;
     private bool _previousDisableLookInput;
+    private bool _previousDisableInteract;
+    private bool _previousInSpecialMenu;
+    private bool _previousMovementActionsEnabled;
     private PlayerControllerB _inputLockedPlayer;
     private bool _bootstrapShell;
     private bool _hasEditableSuit;
@@ -57,6 +69,11 @@ internal sealed class SuitEditorController : MonoBehaviour
     private int _knownSuitCount;
 
     private GameObject _previewRoot;
+    private GameObject _previewRigRoot;
+    private Camera _previewCamera;
+    private Light _previewLight;
+    private RenderTexture _previewTexture;
+    private Material _previewMaterial;
     private Mesh _previewMesh;
     private MeshCollider _previewCollider;
     private MeshRenderer _previewRenderer;
@@ -68,9 +85,11 @@ internal sealed class SuitEditorController : MonoBehaviour
     private GameObject _editorCanvasObject;
     private RectTransform _canvasRect;
     private RectTransform _panelRect;
+    private RectTransform _previewViewportRect;
     private RectTransform _cursorMarker;
     private RectTransform _designListContent;
     private RectTransform _decalListContent;
+    private RawImage _previewImage;
     private Text _suitLabel;
     private Text _statusLabel;
     private Text _diagnosticsLabel;
@@ -95,15 +114,68 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Button _saveButton;
     private Button _loadButton;
     private Button _resetButton;
+    private GameObject _editorEventSystemObject;
+    private EventSystem _editorEventSystem;
+    private InputSystemUIInputModule _editorInputModule;
+    private InputActionAsset _editorUiActions;
+    private bool _editorUiInputActive;
+    private float _lastUiDiagnosticsTime;
+    private readonly List<EventSystemRestoreState> _eventSystemRestoreStates = new();
 
     internal bool IsOpenForDiagnostics => _isOpen;
     internal bool CanvasActiveForDiagnostics => _editorCanvasObject != null && _editorCanvasObject.activeSelf;
+
+    private sealed class EventSystemRestoreState
+    {
+        internal EventSystem EventSystem;
+        internal bool GameObjectActive;
+        internal bool EventSystemEnabled;
+        internal BaseInputModule[] Modules;
+        internal bool[] ModuleEnabled;
+    }
 
     private void Start()
     {
         _cursor = new Vector2(Screen.width * 0.5f, Screen.height * 0.5f);
         RefreshFileLists();
         DrawableSuitsDiagnostics.Info($"SuitEditorController.Start complete. Screen={Screen.width}x{Screen.height}; designFiles={_designFiles.Count}; decalFiles={_decalFiles.Count}");
+    }
+
+    private void OnDestroy()
+    {
+        if (_isOpen)
+        {
+            CloseEditor(EditorCloseReason.PluginDestroy);
+        }
+        else
+        {
+            EndEditorUiInput();
+            DestroyPreview();
+        }
+
+        if (_loadedDecal != null)
+        {
+            Destroy(_loadedDecal);
+            _loadedDecal = null;
+        }
+
+        if (_editorCanvasObject != null)
+        {
+            Destroy(_editorCanvasObject);
+            _editorCanvasObject = null;
+        }
+
+        if (_editorEventSystemObject != null)
+        {
+            Destroy(_editorEventSystemObject);
+            _editorEventSystemObject = null;
+        }
+
+        if (_editorUiActions != null)
+        {
+            Destroy(_editorUiActions);
+            _editorUiActions = null;
+        }
     }
 
     private void Update()
@@ -115,7 +187,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         if (DrawableSuitsInput.WasKeyPressed(Key.Escape) || WasGamepadPressed(g => g.buttonEast))
         {
-            CloseEditor();
+            CloseEditor(EditorCloseReason.Shortcut);
             return;
         }
 
@@ -125,6 +197,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         HandleEditorShortcuts();
         UpdatePreviewTransform();
         HandlePaintingInput();
+        LogUiInputDiagnosticsIfNeeded();
     }
 
     public bool OpenEditor()
@@ -149,7 +222,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
-        EnsureEventSystem();
+        BeginEditorUiInput();
         RefreshEditorReadiness($"before show ({source})");
         CaptureAndUnlockCursor();
         CaptureAndLockPlayerInput();
@@ -170,12 +243,32 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     public void CloseEditor()
     {
+        CloseEditor(EditorCloseReason.Normal);
+    }
+
+    public void CloseEditor(string source)
+    {
+        CloseEditor(GetCloseReasonFromSource(source));
+    }
+
+    public void CloseEditorForSceneChange()
+    {
+        CloseEditor(EditorCloseReason.SceneChange);
+    }
+
+    public void CloseEditorForPluginDestroy()
+    {
+        CloseEditor(EditorCloseReason.PluginDestroy);
+    }
+
+    private void CloseEditor(EditorCloseReason reason)
+    {
         if (!_isOpen)
         {
             return;
         }
 
-        DrawableSuitsDiagnostics.Info("Closing DrawableSuits editor.");
+        DrawableSuitsDiagnostics.Info($"Closing DrawableSuits editor. reason={reason}");
         _isOpen = false;
         if (_editorCanvasObject != null)
         {
@@ -185,7 +278,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         DestroyPreview();
         _strokeActive = false;
         RestorePlayerInputState();
-        RestoreCursorState();
+        EndEditorUiInput();
+        RestoreCursorState(reason == EditorCloseReason.SceneChange);
     }
 
     public bool ToggleEditor()
@@ -198,7 +292,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         if (_isOpen)
         {
             DrawableSuitsDiagnostics.Info($"ToggleEditor closing from source={source}.");
-            CloseEditor();
+            CloseEditor(GetCloseReasonFromSource(source));
             return true;
         }
 
@@ -217,6 +311,21 @@ internal sealed class SuitEditorController : MonoBehaviour
         yield return null;
         DrawableSuitsDiagnostics.Info($"Pause-menu next-frame open running. quickMenuNull={quickMenu == null}; menuOpen={quickMenu?.isMenuOpen}; cursorVisible={Cursor.visible}; cursorLock={Cursor.lockState}");
         OpenEditor("PauseMenuButton");
+    }
+
+    private static EditorCloseReason GetCloseReasonFromSource(string source)
+    {
+        if (!string.IsNullOrWhiteSpace(source) && source.IndexOf("Pause", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return EditorCloseReason.PauseMenu;
+        }
+
+        if (!string.IsNullOrWhiteSpace(source) && source.IndexOf("Scene", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return EditorCloseReason.SceneChange;
+        }
+
+        return EditorCloseReason.Shortcut;
     }
 
     private void RefreshEditorReadiness(string context)
@@ -239,7 +348,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         _hasCamera = Camera.main != null;
         _hasPreviewCollider = _previewCollider != null;
         _hasEditableSuit = _selectedSuitId >= 0 && DrawableSuitsPlugin.Registry.GetOrCreateState(_selectedSuitId) != null;
-        _canPaint = _hasEditableSuit && _hasPlayerModel && _hasCamera && _hasPreviewCollider;
+        _canPaint = _hasEditableSuit && _hasPlayerModel && _hasPreviewCollider && _previewCamera != null;
 
         SetStatus(BuildReadinessStatus(), false);
         DrawableSuitsDiagnostics.Info($"Readiness[{context}]: selectedSuitId={_selectedSuitId}; suitCount={_knownSuitCount}; hasEditableSuit={_hasEditableSuit}; hasLocalPlayer={_hasLocalPlayer}; hasPlayerModel={_hasPlayerModel}; hasCamera={_hasCamera}; hasPreviewCollider={_hasPreviewCollider}; canPaint={_canPaint}; status='{_statusMessage}'");
@@ -268,13 +377,13 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             missing.Add("local player model not loaded");
         }
-        if (!_hasCamera)
-        {
-            missing.Add("main camera not found");
-        }
-        if (_hasEditableSuit && _hasPlayerModel && _hasCamera && !_hasPreviewCollider)
+        if (_hasEditableSuit && _hasPlayerModel && !_hasPreviewCollider)
         {
             missing.Add("preview collider not built yet");
+        }
+        if (_hasPreviewCollider && _previewCamera == null)
+        {
+            missing.Add("preview camera not built yet");
         }
 
         return missing.Count == 0 ? "Ready." : "Diagnostics: " + string.Join("; ", missing);
@@ -349,64 +458,75 @@ internal sealed class SuitEditorController : MonoBehaviour
         _panelRect.anchorMax = new Vector2(0f, 1f);
         _panelRect.pivot = new Vector2(0f, 1f);
         _panelRect.anchoredPosition = new Vector2(24f, -24f);
-        _panelRect.sizeDelta = new Vector2(820f, 760f);
+        _panelRect.sizeDelta = new Vector2(1240f, 820f);
 
         var panelImage = panel.GetComponent<Image>();
         panelImage.color = new Color(0.025f, 0.03f, 0.035f, 0.96f);
 
-        const float leftX = 16f;
-        const float rightX = 414f;
-        const float leftW = 382f;
-        const float rightW = 390f;
+        const float leftX = 18f;
+        const float leftW = 360f;
+        const float previewX = 398f;
+        const float previewW = 420f;
+        const float rightX = 838f;
+        const float rightW = 380f;
 
-        CreateAnchoredText(panel.transform, "Title", $"{PluginInfo.Name} {PluginInfo.Version}", 24, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 12f, 260f, 34f), new Color(1f, 0.62f, 0.25f, 1f));
-        CreateAnchoredButton(panel.transform, "Close", new Rect(704f, 14f, 96f, 34f), CloseEditor);
-        _suitLabel = CreateAnchoredText(panel.transform, "SuitLabel", string.Empty, 18, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 50f, leftW, 28f), Color.white);
-        _statusLabel = CreateAnchoredText(panel.transform, "StatusLabel", string.Empty, 15, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 82f, leftW, 50f), new Color(1f, 0.58f, 0.28f, 1f));
+        CreateAnchoredText(panel.transform, "Title", $"{PluginInfo.Name} {PluginInfo.Version}", 24, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 12f, 360f, 34f), new Color(1f, 0.62f, 0.25f, 1f));
+        CreateAnchoredButton(panel.transform, "Close", new Rect(1124f, 14f, 96f, 34f), CloseEditor);
+        _suitLabel = CreateAnchoredText(panel.transform, "SuitLabel", string.Empty, 18, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 54f, leftW, 28f), Color.white);
+        _statusLabel = CreateAnchoredText(panel.transform, "StatusLabel", string.Empty, 15, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 86f, leftW, 46f), new Color(1f, 0.58f, 0.28f, 1f));
         _statusLabel.color = new Color(1f, 0.58f, 0.28f, 1f);
-        _diagnosticsLabel = CreateAnchoredText(panel.transform, "DiagnosticsLabel", string.Empty, 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 138f, leftW, 118f), new Color(0.78f, 0.86f, 1f, 1f));
+        _diagnosticsLabel = CreateAnchoredText(panel.transform, "DiagnosticsLabel", string.Empty, 12, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 138f, leftW, 126f), new Color(0.78f, 0.86f, 1f, 1f));
         _diagnosticsLabel.color = new Color(0.78f, 0.86f, 1f, 1f);
 
-        CreateAnchoredButton(panel.transform, "Previous", new Rect(leftX, 264f, 90f, 34f), () => SelectAdjacentSuit(-1));
-        CreateAnchoredButton(panel.transform, "Use Current", new Rect(leftX + 98f, 264f, 126f, 34f), () => SelectSuit(DrawableSuitsPlugin.Registry.GetLocalSuitId()));
-        CreateAnchoredButton(panel.transform, "Next", new Rect(leftX + 232f, 264f, 80f, 34f), () => SelectAdjacentSuit(1));
+        CreateAnchoredButton(panel.transform, "Previous", new Rect(leftX, 278f, 92f, 34f), () => SelectAdjacentSuit(-1));
+        CreateAnchoredButton(panel.transform, "Use Current", new Rect(leftX + 100f, 278f, 126f, 34f), () => SelectSuit(DrawableSuitsPlugin.Registry.GetLocalSuitId()));
+        CreateAnchoredButton(panel.transform, "Next", new Rect(leftX + 234f, 278f, 82f, 34f), () => SelectAdjacentSuit(1));
 
-        CreateAnchoredText(panel.transform, "ToolHeader", "Tool", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 312f, leftW, 24f), Color.white);
-        _paintButton = CreateAnchoredButton(panel.transform, "Paint", new Rect(leftX, 340f, 112f, 34f), () => SetTool(EditorTool.Paint));
-        _eraseButton = CreateAnchoredButton(panel.transform, "Erase", new Rect(leftX + 120f, 340f, 112f, 34f), () => SetTool(EditorTool.Erase));
-        _decalButton = CreateAnchoredButton(panel.transform, "Decal", new Rect(leftX + 240f, 340f, 112f, 34f), () => SetTool(EditorTool.Decal));
+        CreateAnchoredText(panel.transform, "ToolHeader", "Tool", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 328f, leftW, 24f), Color.white);
+        _paintButton = CreateAnchoredButton(panel.transform, "Paint", new Rect(leftX, 356f, 108f, 34f), () => SetTool(EditorTool.Paint));
+        _eraseButton = CreateAnchoredButton(panel.transform, "Erase", new Rect(leftX + 116f, 356f, 108f, 34f), () => SetTool(EditorTool.Erase));
+        _decalButton = CreateAnchoredButton(panel.transform, "Decal", new Rect(leftX + 232f, 356f, 108f, 34f), () => SetTool(EditorTool.Decal));
 
-        CreateAnchoredText(panel.transform, "BrushHeader", "Brush", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 388f, leftW, 24f), Color.white);
-        _brushSizeLabel = CreateAnchoredText(panel.transform, "BrushSizeLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 418f, 116f, 24f), Color.white);
-        _brushSizeSlider = CreateAnchoredSlider(panel.transform, "BrushSize", 1f, 96f, _brushSize, new Rect(leftX + 128f, 420f, 242f, 24f), value => _brushSize = value);
-        _brushOpacityLabel = CreateAnchoredText(panel.transform, "BrushOpacityLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 452f, 116f, 24f), Color.white);
-        _brushOpacitySlider = CreateAnchoredSlider(panel.transform, "BrushOpacity", 0.05f, 1f, _brushOpacity, new Rect(leftX + 128f, 454f, 242f, 24f), value => _brushOpacity = value);
+        CreateAnchoredText(panel.transform, "BrushHeader", "Brush", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 406f, leftW, 24f), Color.white);
+        _brushSizeLabel = CreateAnchoredText(panel.transform, "BrushSizeLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 436f, 112f, 24f), Color.white);
+        _brushSizeSlider = CreateAnchoredSlider(panel.transform, "BrushSize", 1f, 96f, _brushSize, new Rect(leftX + 118f, 438f, 222f, 24f), value => _brushSize = value);
+        _brushOpacityLabel = CreateAnchoredText(panel.transform, "BrushOpacityLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 470f, 112f, 24f), Color.white);
+        _brushOpacitySlider = CreateAnchoredSlider(panel.transform, "BrushOpacity", 0.05f, 1f, _brushOpacity, new Rect(leftX + 118f, 472f, 222f, 24f), value => _brushOpacity = value);
 
-        CreateAnchoredText(panel.transform, "ColorHeader", "Color", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 492f, leftW, 24f), Color.white);
-        CreateAnchoredText(panel.transform, "RedLabel", "Red", 13, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 522f, 58f, 22f), Color.white);
-        _redSlider = CreateAnchoredSlider(panel.transform, "Red", 0f, 1f, _brushColor.r, new Rect(leftX + 70f, 522f, 230f, 24f), value => { _brushColor.r = value; UpdateColorUi(); });
-        CreateAnchoredText(panel.transform, "GreenLabel", "Green", 13, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 556f, 58f, 22f), Color.white);
-        _greenSlider = CreateAnchoredSlider(panel.transform, "Green", 0f, 1f, _brushColor.g, new Rect(leftX + 70f, 556f, 230f, 24f), value => { _brushColor.g = value; UpdateColorUi(); });
-        CreateAnchoredText(panel.transform, "BlueLabel", "Blue", 13, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 590f, 58f, 22f), Color.white);
-        _blueSlider = CreateAnchoredSlider(panel.transform, "Blue", 0f, 1f, _brushColor.b, new Rect(leftX + 70f, 590f, 230f, 24f), value => { _brushColor.b = value; UpdateColorUi(); });
-        _colorSwatch = CreateAnchoredColorSwatch(panel.transform, new Rect(leftX + 314f, 522f, 56f, 92f));
+        CreateAnchoredText(panel.transform, "ColorHeader", "Color", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 510f, leftW, 24f), Color.white);
+        CreateAnchoredText(panel.transform, "RedLabel", "Red", 13, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 540f, 58f, 22f), Color.white);
+        _redSlider = CreateAnchoredSlider(panel.transform, "Red", 0f, 1f, _brushColor.r, new Rect(leftX + 64f, 540f, 220f, 24f), value => { _brushColor.r = value; UpdateColorUi(); });
+        CreateAnchoredText(panel.transform, "GreenLabel", "Green", 13, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 574f, 58f, 22f), Color.white);
+        _greenSlider = CreateAnchoredSlider(panel.transform, "Green", 0f, 1f, _brushColor.g, new Rect(leftX + 64f, 574f, 220f, 24f), value => { _brushColor.g = value; UpdateColorUi(); });
+        CreateAnchoredText(panel.transform, "BlueLabel", "Blue", 13, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 608f, 58f, 22f), Color.white);
+        _blueSlider = CreateAnchoredSlider(panel.transform, "Blue", 0f, 1f, _brushColor.b, new Rect(leftX + 64f, 608f, 220f, 24f), value => { _brushColor.b = value; UpdateColorUi(); });
+        _colorSwatch = CreateAnchoredColorSwatch(panel.transform, new Rect(leftX + 296f, 540f, 44f, 92f));
 
-        CreateAnchoredText(panel.transform, "DecalHeader", "Decal", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 60f, rightW, 24f), Color.white);
-        _decalSizeLabel = CreateAnchoredText(panel.transform, "DecalSizeLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(rightX, 90f, 116f, 24f), Color.white);
-        _decalSizeSlider = CreateAnchoredSlider(panel.transform, "DecalSize", 16f, 512f, _decalSize, new Rect(rightX + 128f, 92f, 242f, 24f), value => _decalSize = value);
-        _decalRotationLabel = CreateAnchoredText(panel.transform, "DecalRotationLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(rightX, 124f, 116f, 24f), Color.white);
-        _decalRotationSlider = CreateAnchoredSlider(panel.transform, "DecalRotation", -180f, 180f, _decalRotation, new Rect(rightX + 128f, 126f, 242f, 24f), value => _decalRotation = value);
-        CreateAnchoredButton(panel.transform, "Refresh", new Rect(rightX, 162f, 110f, 34f), RefreshFileLists);
-        CreateAnchoredButton(panel.transform, "Import File", new Rect(rightX + 118f, 162f, 126f, 34f), ImportDecalFromDialog);
-        _decalListContent = CreateAnchoredScrollList(panel.transform, "DecalList", new Rect(rightX, 204f, rightW, 100f));
+        CreateAnchoredText(panel.transform, "PreviewHeader", "Preview", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(previewX, 54f, previewW, 26f), Color.white);
+        var preview = CreateUiObject("PreviewViewport", panel.transform, typeof(RectTransform), typeof(RawImage));
+        _previewViewportRect = preview.GetComponent<RectTransform>();
+        SetAnchoredRect(_previewViewportRect, new Rect(previewX, 86f, previewW, 540f));
+        _previewImage = preview.GetComponent<RawImage>();
+        _previewImage.color = new Color(0.04f, 0.045f, 0.05f, 1f);
+        _previewImage.raycastTarget = true;
+        CreateAnchoredText(panel.transform, "PreviewHelp", "Paint/erase/decal only inside this preview. Right mouse or bumpers rotate; Ctrl+wheel zooms.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(previewX, 638f, previewW, 58f), new Color(0.82f, 0.86f, 0.9f, 1f));
 
-        CreateAnchoredText(panel.transform, "DesignHeader", "Design Name", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 320f, rightW, 24f), Color.white);
-        _designNameInput = CreateAnchoredInputField(panel.transform, _designName, new Rect(rightX, 350f, rightW, 34f));
+        CreateAnchoredText(panel.transform, "DecalHeader", "Decal", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 54f, rightW, 24f), Color.white);
+        _decalSizeLabel = CreateAnchoredText(panel.transform, "DecalSizeLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(rightX, 84f, 116f, 24f), Color.white);
+        _decalSizeSlider = CreateAnchoredSlider(panel.transform, "DecalSize", 16f, 512f, _decalSize, new Rect(rightX + 126f, 86f, 234f, 24f), value => _decalSize = value);
+        _decalRotationLabel = CreateAnchoredText(panel.transform, "DecalRotationLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(rightX, 118f, 116f, 24f), Color.white);
+        _decalRotationSlider = CreateAnchoredSlider(panel.transform, "DecalRotation", -180f, 180f, _decalRotation, new Rect(rightX + 126f, 120f, 234f, 24f), value => _decalRotation = value);
+        CreateAnchoredButton(panel.transform, "Refresh", new Rect(rightX, 156f, 110f, 34f), RefreshFileLists);
+        CreateAnchoredButton(panel.transform, "Import File", new Rect(rightX + 118f, 156f, 126f, 34f), ImportDecalFromDialog);
+        _decalListContent = CreateAnchoredScrollList(panel.transform, "DecalList", new Rect(rightX, 198f, rightW, 112f));
+
+        CreateAnchoredText(panel.transform, "DesignHeader", "Design Name", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 330f, rightW, 24f), Color.white);
+        _designNameInput = CreateAnchoredInputField(panel.transform, _designName, new Rect(rightX, 360f, rightW, 34f));
         _designNameInput.onValueChanged.AddListener(value => _designName = value);
 
-        CreateAnchoredButton(panel.transform, "Undo", new Rect(rightX, 398f, 88f, 34f), Undo);
-        CreateAnchoredButton(panel.transform, "Redo", new Rect(rightX + 96f, 398f, 88f, 34f), Redo);
-        _resetButton = CreateAnchoredButton(panel.transform, "Reset", new Rect(rightX + 192f, 398f, 88f, 34f), () =>
+        CreateAnchoredButton(panel.transform, "Undo", new Rect(rightX, 412f, 88f, 34f), Undo);
+        CreateAnchoredButton(panel.transform, "Redo", new Rect(rightX + 96f, 412f, 88f, 34f), Redo);
+        _resetButton = CreateAnchoredButton(panel.transform, "Reset", new Rect(rightX + 192f, 412f, 88f, 34f), () =>
         {
             SaveUndo();
             DrawableSuitsPlugin.Registry.ResetSuit(_selectedSuitId);
@@ -414,18 +534,20 @@ internal sealed class SuitEditorController : MonoBehaviour
             UpdateUiState();
         });
 
-        _applyButton = CreateAnchoredButton(panel.transform, "Apply", new Rect(rightX, 440f, 88f, 34f), () => DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, true));
-        _saveButton = CreateAnchoredButton(panel.transform, "Save", new Rect(rightX + 96f, 440f, 88f, 34f), SaveDesign);
-        _loadButton = CreateAnchoredButton(panel.transform, "Load", new Rect(rightX + 192f, 440f, 88f, 34f), LoadSelectedDesign);
+        _applyButton = CreateAnchoredButton(panel.transform, "Apply", new Rect(rightX, 454f, 88f, 34f), () => DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, true));
+        _saveButton = CreateAnchoredButton(panel.transform, "Save", new Rect(rightX + 96f, 454f, 88f, 34f), SaveDesign);
+        _loadButton = CreateAnchoredButton(panel.transform, "Load", new Rect(rightX + 192f, 454f, 88f, 34f), LoadSelectedDesign);
 
-        CreateAnchoredText(panel.transform, "SavedDesignsHeader", "Saved Designs", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 490f, rightW, 24f), Color.white);
-        _designListContent = CreateAnchoredScrollList(panel.transform, "DesignList", new Rect(rightX, 520f, rightW, 124f));
+        CreateAnchoredText(panel.transform, "SavedDesignsHeader", "Saved Designs", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 508f, rightW, 24f), Color.white);
+        _designListContent = CreateAnchoredScrollList(panel.transform, "DesignList", new Rect(rightX, 538f, rightW, 156f));
 
-        CreateAnchoredText(panel.transform, "ControllerHelp", "Controller: View/Back+Y open, left stick cursor, right trigger paint, bumpers rotate, Y tool, X undo, Start save, A apply.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 650f, 780f, 54f), Color.white);
+        CreateAnchoredText(panel.transform, "ControllerHelp", "Controller: View/Back+Y open/close, left stick cursor, right trigger paint, bumpers rotate, Y tool, X undo, Start save, A submits selected UI.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 730f, 1160f, 42f), Color.white);
 
         _cursorMarker = CreateUiObject("DrawableSuitsCursor", _editorCanvasObject.transform, typeof(Image)).GetComponent<RectTransform>();
         _cursorMarker.sizeDelta = new Vector2(14f, 14f);
-        _cursorMarker.GetComponent<Image>().color = Color.white;
+        var cursorImage = _cursorMarker.GetComponent<Image>();
+        cursorImage.color = Color.white;
+        cursorImage.raycastTarget = false;
 
         _editorCanvasObject.SetActive(false);
         RefreshListButtons();
@@ -485,7 +607,9 @@ internal sealed class SuitEditorController : MonoBehaviour
         _cursorMarker = new GameObject("DrawableSuitsCursor", typeof(RectTransform), typeof(Image)).GetComponent<RectTransform>();
         _cursorMarker.transform.SetParent(_editorCanvasObject.transform, false);
         _cursorMarker.sizeDelta = new Vector2(14f, 14f);
-        _cursorMarker.GetComponent<Image>().color = Color.white;
+        var cursorImage = _cursorMarker.GetComponent<Image>();
+        cursorImage.color = Color.white;
+        cursorImage.raycastTarget = false;
         _editorCanvasObject.SetActive(false);
         DrawableSuitsDiagnostics.Info("Fallback diagnostics canvas built.");
     }
@@ -521,6 +645,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         label.horizontalOverflow = HorizontalWrapMode.Wrap;
         label.verticalOverflow = VerticalWrapMode.Truncate;
         label.supportRichText = false;
+        label.raycastTarget = false;
         return label;
     }
 
@@ -561,11 +686,14 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         var background = CreateUiObject("Background", go.transform, typeof(RectTransform), typeof(Image));
         var bgRect = background.GetComponent<RectTransform>();
-        bgRect.anchorMin = new Vector2(0f, 0.25f);
-        bgRect.anchorMax = new Vector2(1f, 0.75f);
-        bgRect.offsetMin = Vector2.zero;
-        bgRect.offsetMax = Vector2.zero;
-        background.GetComponent<Image>().color = new Color(0.08f, 0.08f, 0.09f, 1f);
+        bgRect.anchorMin = new Vector2(0f, 0.5f);
+        bgRect.anchorMax = new Vector2(1f, 0.5f);
+        bgRect.pivot = new Vector2(0.5f, 0.5f);
+        bgRect.offsetMin = new Vector2(0f, -4f);
+        bgRect.offsetMax = new Vector2(0f, 4f);
+        var backgroundImage = background.GetComponent<Image>();
+        backgroundImage.color = new Color(0.08f, 0.08f, 0.09f, 1f);
+        backgroundImage.raycastTarget = true;
 
         var fillArea = CreateUiObject("Fill Area", go.transform, typeof(RectTransform));
         var fillAreaRect = fillArea.GetComponent<RectTransform>();
@@ -575,7 +703,15 @@ internal sealed class SuitEditorController : MonoBehaviour
         fillAreaRect.offsetMax = new Vector2(-5f, 0f);
 
         var fill = CreateUiObject("Fill", fillArea.transform, typeof(RectTransform), typeof(Image));
-        fill.GetComponent<Image>().color = new Color(0.95f, 0.42f, 0.16f, 1f);
+        var fillRect = fill.GetComponent<RectTransform>();
+        fillRect.anchorMin = new Vector2(0f, 0.5f);
+        fillRect.anchorMax = new Vector2(1f, 0.5f);
+        fillRect.pivot = new Vector2(0f, 0.5f);
+        fillRect.offsetMin = new Vector2(0f, -4f);
+        fillRect.offsetMax = new Vector2(0f, 4f);
+        var fillImage = fill.GetComponent<Image>();
+        fillImage.color = new Color(0.95f, 0.42f, 0.16f, 1f);
+        fillImage.raycastTarget = false;
 
         var handleArea = CreateUiObject("Handle Slide Area", go.transform, typeof(RectTransform));
         var handleAreaRect = handleArea.GetComponent<RectTransform>();
@@ -585,17 +721,24 @@ internal sealed class SuitEditorController : MonoBehaviour
         handleAreaRect.offsetMax = new Vector2(-8f, 0f);
 
         var handle = CreateUiObject("Handle", handleArea.transform, typeof(RectTransform), typeof(Image));
+        var handleRect = handle.GetComponent<RectTransform>();
+        handleRect.anchorMin = new Vector2(0f, 0.5f);
+        handleRect.anchorMax = new Vector2(0f, 0.5f);
+        handleRect.pivot = new Vector2(0.5f, 0.5f);
+        handleRect.anchoredPosition = Vector2.zero;
+        handleRect.sizeDelta = new Vector2(18f, rect.height);
         handle.GetComponent<Image>().color = Color.white;
-        handle.GetComponent<RectTransform>().sizeDelta = new Vector2(16f, rect.height);
 
         var slider = go.GetComponent<Slider>();
         slider.minValue = min;
         slider.maxValue = max;
         slider.value = value;
-        slider.fillRect = fill.GetComponent<RectTransform>();
-        slider.handleRect = handle.GetComponent<RectTransform>();
+        slider.direction = Slider.Direction.LeftToRight;
+        slider.fillRect = fillRect;
+        slider.handleRect = handleRect;
         slider.targetGraphic = handle.GetComponent<Image>();
         slider.onValueChanged.AddListener(v => onValueChanged?.Invoke(v));
+        DrawableSuitsDiagnostics.Info($"SliderBuilt name={name}; root={rect}; backgroundSize={bgRect.rect.size}; fillAreaSize={fillAreaRect.rect.size}; fillSize={fillRect.rect.size}; handleSize={handleRect.rect.size}");
         return slider;
     }
 
@@ -626,6 +769,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         text.alignment = TextAnchor.MiddleLeft;
         text.horizontalOverflow = HorizontalWrapMode.Overflow;
         text.verticalOverflow = VerticalWrapMode.Truncate;
+        text.raycastTarget = false;
 
         var input = go.GetComponent<InputField>();
         input.textComponent = text;
@@ -875,48 +1019,175 @@ internal sealed class SuitEditorController : MonoBehaviour
         return contentRect;
     }
 
-    private static void EnsureEventSystem()
+    private void BeginEditorUiInput()
     {
-        var existing = FindObjectOfType<EventSystem>();
-        if (existing != null)
+        if (_editorUiInputActive)
         {
-            DrawableSuitsDiagnostics.Info($"EventSystem already present: {existing.name}; current={EventSystem.current?.name ?? "null"}.");
             return;
         }
 
-        var eventSystem = new GameObject("DrawableSuitsEventSystem", typeof(EventSystem), typeof(InputSystemUIInputModule));
-        DontDestroyOnLoad(eventSystem);
-        ConfigureInputSystemUiModule(eventSystem.GetComponent<InputSystemUIInputModule>());
-        DrawableSuitsDiagnostics.Info("Created fallback DrawableSuitsEventSystem with InputSystemUIInputModule.");
+        EnsureOwnedEventSystem();
+        _eventSystemRestoreStates.Clear();
+        foreach (var eventSystem in FindObjectsOfType<EventSystem>(true))
+        {
+            if (eventSystem == null || eventSystem == _editorEventSystem)
+            {
+                continue;
+            }
+
+            var modules = eventSystem.GetComponents<BaseInputModule>();
+            var state = new EventSystemRestoreState
+            {
+                EventSystem = eventSystem,
+                GameObjectActive = eventSystem.gameObject.activeSelf,
+                EventSystemEnabled = eventSystem.enabled,
+                Modules = modules,
+                ModuleEnabled = new bool[modules.Length]
+            };
+
+            for (var i = 0; i < modules.Length; i++)
+            {
+                state.ModuleEnabled[i] = modules[i] != null && modules[i].enabled;
+                if (modules[i] != null)
+                {
+                    modules[i].enabled = false;
+                }
+            }
+
+            eventSystem.enabled = false;
+            _eventSystemRestoreStates.Add(state);
+        }
+
+        _editorEventSystemObject.SetActive(true);
+        _editorEventSystem.enabled = true;
+        _editorInputModule.enabled = true;
+        _editorUiActions?.Enable();
+        EventSystem.current = _editorEventSystem;
+        _editorUiInputActive = true;
+        DrawableSuitsDiagnostics.Info($"DrawableSuits editor UI input enabled. ownedEventSystem={DrawableSuitsPlugin.DescribeUnityObject(_editorEventSystem)}; disabledEventSystems={_eventSystemRestoreStates.Count}; current={EventSystem.current?.name ?? "null"}; module={_editorInputModule.GetType().Name}");
     }
 
-    private static void ConfigureInputSystemUiModule(InputSystemUIInputModule module)
+    private void EndEditorUiInput()
+    {
+        if (!_editorUiInputActive)
+        {
+            _editorUiActions?.Disable();
+            if (_editorInputModule != null)
+            {
+                _editorInputModule.enabled = false;
+            }
+            if (_editorEventSystem != null)
+            {
+                _editorEventSystem.enabled = false;
+            }
+            if (_editorEventSystemObject != null)
+            {
+                _editorEventSystemObject.SetActive(false);
+            }
+            return;
+        }
+
+        _editorUiActions?.Disable();
+        if (_editorInputModule != null)
+        {
+            _editorInputModule.enabled = false;
+        }
+        if (_editorEventSystem != null)
+        {
+            _editorEventSystem.enabled = false;
+        }
+        if (_editorEventSystemObject != null)
+        {
+            _editorEventSystemObject.SetActive(false);
+        }
+
+        EventSystem restoredCurrent = null;
+        foreach (var state in _eventSystemRestoreStates)
+        {
+            if (state?.EventSystem == null)
+            {
+                continue;
+            }
+
+            state.EventSystem.gameObject.SetActive(state.GameObjectActive);
+            state.EventSystem.enabled = state.EventSystemEnabled;
+            if (state.Modules != null && state.ModuleEnabled != null)
+            {
+                for (var i = 0; i < state.Modules.Length && i < state.ModuleEnabled.Length; i++)
+                {
+                    if (state.Modules[i] != null)
+                    {
+                        state.Modules[i].enabled = state.ModuleEnabled[i];
+                    }
+                }
+            }
+
+            if (restoredCurrent == null && state.GameObjectActive && state.EventSystemEnabled)
+            {
+                restoredCurrent = state.EventSystem;
+            }
+        }
+
+        if (restoredCurrent == null)
+        {
+            foreach (var eventSystem in FindObjectsOfType<EventSystem>(true))
+            {
+                if (eventSystem != null
+                    && eventSystem != _editorEventSystem
+                    && eventSystem.gameObject.activeInHierarchy
+                    && eventSystem.enabled)
+                {
+                    restoredCurrent = eventSystem;
+                    break;
+                }
+            }
+        }
+
+        EventSystem.current = restoredCurrent;
+        DrawableSuitsDiagnostics.Info($"DrawableSuits editor UI input disabled. restoredEventSystems={_eventSystemRestoreStates.Count}; current={EventSystem.current?.name ?? "null"}");
+        _eventSystemRestoreStates.Clear();
+        _editorUiInputActive = false;
+    }
+
+    private void EnsureOwnedEventSystem()
+    {
+        if (_editorEventSystemObject != null && _editorEventSystem != null && _editorInputModule != null)
+        {
+            return;
+        }
+
+        _editorEventSystemObject = new GameObject("DrawableSuitsEditorEventSystem", typeof(EventSystem), typeof(InputSystemUIInputModule));
+        DontDestroyOnLoad(_editorEventSystemObject);
+        _editorEventSystem = _editorEventSystemObject.GetComponent<EventSystem>();
+        _editorInputModule = _editorEventSystemObject.GetComponent<InputSystemUIInputModule>();
+        ConfigureInputSystemUiModule(_editorInputModule);
+        _editorEventSystemObject.SetActive(false);
+        DrawableSuitsDiagnostics.Info("Created DrawableSuits-owned EventSystem with InputSystemUIInputModule.");
+    }
+
+    private void ConfigureInputSystemUiModule(InputSystemUIInputModule module)
     {
         if (module == null)
         {
             return;
         }
 
-        var asset = ScriptableObject.CreateInstance<InputActionAsset>();
-        asset.name = "DrawableSuitsUIActions";
-        DontDestroyOnLoad(asset);
+        _editorUiActions = ScriptableObject.CreateInstance<InputActionAsset>();
+        _editorUiActions.name = "DrawableSuitsUIActions";
+        DontDestroyOnLoad(_editorUiActions);
 
-        var map = asset.AddActionMap("UI");
+        var map = _editorUiActions.AddActionMap("UI");
         var point = map.AddAction("Point", InputActionType.PassThrough, "<Pointer>/position");
-        var leftClick = map.AddAction("LeftClick", InputActionType.PassThrough, "<Pointer>/press");
+        var leftClick = map.AddAction("LeftClick", InputActionType.Button, "<Mouse>/leftButton");
+        leftClick.AddBinding("<Pointer>/press");
         var scrollWheel = map.AddAction("ScrollWheel", InputActionType.PassThrough, "<Pointer>/scroll");
         var move = map.AddAction("Move", InputActionType.PassThrough);
-        move.AddCompositeBinding("2DVector")
-            .With("Up", "<Keyboard>/w")
-            .With("Down", "<Keyboard>/s")
-            .With("Left", "<Keyboard>/a")
-            .With("Right", "<Keyboard>/d");
         move.AddCompositeBinding("2DVector")
             .With("Up", "<Keyboard>/upArrow")
             .With("Down", "<Keyboard>/downArrow")
             .With("Left", "<Keyboard>/leftArrow")
             .With("Right", "<Keyboard>/rightArrow");
-        move.AddBinding("<Gamepad>/leftStick");
+        move.AddBinding("<Gamepad>/dpad");
         var submit = map.AddAction("Submit", InputActionType.Button);
         submit.AddBinding("<Keyboard>/enter");
         submit.AddBinding("<Gamepad>/buttonSouth");
@@ -924,14 +1195,13 @@ internal sealed class SuitEditorController : MonoBehaviour
         cancel.AddBinding("<Keyboard>/escape");
         cancel.AddBinding("<Gamepad>/buttonEast");
 
-        module.actionsAsset = asset;
+        module.actionsAsset = _editorUiActions;
         module.point = InputActionReference.Create(point);
         module.leftClick = InputActionReference.Create(leftClick);
         module.scrollWheel = InputActionReference.Create(scrollWheel);
         module.move = InputActionReference.Create(move);
         module.submit = InputActionReference.Create(submit);
         module.cancel = InputActionReference.Create(cancel);
-        asset.Enable();
     }
 
     private void CaptureAndUnlockCursor()
@@ -963,17 +1233,31 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
     }
 
-    private void RestoreCursorState()
+    private void RestoreCursorState(bool leaveUnlockedForSceneChange)
     {
         if (!_cursorStateCaptured)
         {
+            if (leaveUnlockedForSceneChange)
+            {
+                Cursor.visible = true;
+                Cursor.lockState = CursorLockMode.None;
+            }
             return;
         }
 
-        Cursor.visible = _previousCursorVisible;
-        Cursor.lockState = _previousCursorLockState;
+        if (leaveUnlockedForSceneChange)
+        {
+            Cursor.visible = true;
+            Cursor.lockState = CursorLockMode.None;
+        }
+        else
+        {
+            Cursor.visible = _previousCursorVisible;
+            Cursor.lockState = _previousCursorLockState;
+        }
+
         _cursorStateCaptured = false;
-        DrawableSuitsDiagnostics.Info($"Cursor restored after editor close. visible={Cursor.visible}; lock={Cursor.lockState}");
+        DrawableSuitsDiagnostics.Info($"Cursor restored after editor close. leaveUnlocked={leaveUnlockedForSceneChange}; visible={Cursor.visible}; lock={Cursor.lockState}");
     }
 
     private void CaptureAndLockPlayerInput()
@@ -990,10 +1274,12 @@ internal sealed class SuitEditorController : MonoBehaviour
         _inputLockedPlayer = player;
         _previousDisableMoveInput = player.disableMoveInput;
         _previousDisableLookInput = player.disableLookInput;
+        _previousDisableInteract = player.disableInteract;
+        _previousInSpecialMenu = player.inSpecialMenu;
+        _previousMovementActionsEnabled = player.playerActions.Movement.enabled;
         _playerInputStateCaptured = true;
-        player.disableMoveInput = true;
-        player.disableLookInput = true;
-        DrawableSuitsDiagnostics.Info($"Player input locked for editor. player={DrawableSuitsPlugin.DescribeUnityObject(player)}; previousMove={_previousDisableMoveInput}; previousLook={_previousDisableLookInput}");
+        ApplyPlayerInputLock(player, true);
+        DrawableSuitsDiagnostics.Info($"Player input locked for editor. player={DrawableSuitsPlugin.DescribeUnityObject(player)}; previousMove={_previousDisableMoveInput}; previousLook={_previousDisableLookInput}; previousInteract={_previousDisableInteract}; previousSpecialMenu={_previousInSpecialMenu}; movementActionsWereEnabled={_previousMovementActionsEnabled}");
     }
 
     private void ReapplyPlayerInputLock()
@@ -1015,10 +1301,12 @@ internal sealed class SuitEditorController : MonoBehaviour
             _inputLockedPlayer = player;
             _previousDisableMoveInput = player.disableMoveInput;
             _previousDisableLookInput = player.disableLookInput;
+            _previousDisableInteract = player.disableInteract;
+            _previousInSpecialMenu = player.inSpecialMenu;
+            _previousMovementActionsEnabled = player.playerActions.Movement.enabled;
         }
 
-        player.disableMoveInput = true;
-        player.disableLookInput = true;
+        ApplyPlayerInputLock(player, false);
     }
 
     private void RestorePlayerInputState()
@@ -1032,7 +1320,18 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             _inputLockedPlayer.disableMoveInput = _previousDisableMoveInput;
             _inputLockedPlayer.disableLookInput = _previousDisableLookInput;
-            DrawableSuitsDiagnostics.Info($"Player input restored after editor close. player={DrawableSuitsPlugin.DescribeUnityObject(_inputLockedPlayer)}; move={_inputLockedPlayer.disableMoveInput}; look={_inputLockedPlayer.disableLookInput}");
+            _inputLockedPlayer.disableInteract = _previousDisableInteract;
+            _inputLockedPlayer.inSpecialMenu = _previousInSpecialMenu;
+            if (_previousMovementActionsEnabled && !_inputLockedPlayer.playerActions.Movement.enabled)
+            {
+                _inputLockedPlayer.playerActions.Movement.Enable();
+            }
+            else if (!_previousMovementActionsEnabled && _inputLockedPlayer.playerActions.Movement.enabled)
+            {
+                _inputLockedPlayer.playerActions.Movement.Disable();
+            }
+
+            DrawableSuitsDiagnostics.Info($"Player input restored after editor close. player={DrawableSuitsPlugin.DescribeUnityObject(_inputLockedPlayer)}; move={_inputLockedPlayer.disableMoveInput}; look={_inputLockedPlayer.disableLookInput}; interact={_inputLockedPlayer.disableInteract}; specialMenu={_inputLockedPlayer.inSpecialMenu}; movementActionsEnabled={_inputLockedPlayer.playerActions.Movement.enabled}");
         }
         else
         {
@@ -1041,6 +1340,30 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         _inputLockedPlayer = null;
         _playerInputStateCaptured = false;
+    }
+
+    private static void ApplyPlayerInputLock(PlayerControllerB player, bool logActionMap)
+    {
+        if (player == null)
+        {
+            return;
+        }
+
+        player.disableMoveInput = true;
+        player.disableLookInput = true;
+        player.disableInteract = true;
+        player.inSpecialMenu = true;
+        player.moveInputVector = Vector2.zero;
+        player.isHoldingInteract = false;
+
+        if (player.playerActions.Movement.enabled)
+        {
+            player.playerActions.Movement.Disable();
+            if (logActionMap)
+            {
+                DrawableSuitsDiagnostics.Info("Disabled PlayerActions.Movement while DrawableSuits editor is open.");
+            }
+        }
     }
 
     private void UpdateUiState()
@@ -1105,6 +1428,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             $"Local player found: {_hasLocalPlayer}",
             $"Player model found: {_hasPlayerModel}",
             $"Main camera found: {_hasCamera} ({(camera != null ? camera.name : "null")})",
+            $"Preview camera found: {_previewCamera != null}",
             $"Preview collider found: {_hasPreviewCollider}",
             $"Can paint/apply preview: {_canPaint}",
             $"Canvas active: {(_editorCanvasObject != null && _editorCanvasObject.activeSelf)}",
@@ -1262,13 +1586,14 @@ internal sealed class SuitEditorController : MonoBehaviour
     private void HandleControllerCursor()
     {
         var gamepad = Gamepad.current;
-        if (gamepad == null || DrawableSuitsInput.WasMouseUsedThisFrame())
+        var mouseUsed = DrawableSuitsInput.WasMouseUsedThisFrame();
+        if (gamepad == null || mouseUsed)
         {
             if (DrawableSuitsInput.TryGetMousePosition(out var mousePosition))
             {
                 _cursor = mousePosition;
             }
-            if (gamepad == null)
+            if (gamepad == null || mouseUsed)
             {
                 return;
             }
@@ -1311,20 +1636,16 @@ internal sealed class SuitEditorController : MonoBehaviour
             {
                 SaveDesign();
             }
-            if (gamepad.buttonSouth.wasPressedThisFrame && CanUseGamepadApplyShortcut())
-            {
-                DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, true);
-            }
         }
 
-        var cursorOverPanel = IsCursorOverEditorPanel();
-        if (!cursorOverPanel && DrawableSuitsInput.IsRightMousePressed())
+        var cursorOverPreview = IsCursorOverPreviewViewport();
+        if (cursorOverPreview && DrawableSuitsInput.IsRightMousePressed())
         {
             _previewYaw += DrawableSuitsInput.MouseDeltaX() * 3f;
         }
 
         var scroll = DrawableSuitsInput.MouseScrollY();
-        if (!cursorOverPanel && Mathf.Abs(scroll) > 0.01f)
+        if (cursorOverPreview && Mathf.Abs(scroll) > 0.01f)
         {
             if (DrawableSuitsInput.IsKeyPressed(Key.LeftCtrl) || DrawableSuitsInput.IsKeyPressed(Key.RightCtrl))
             {
@@ -1365,8 +1686,9 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        if (IsCursorOverEditorPanel())
+        if (!IsCursorOverPreviewViewport())
         {
+            _strokeActive = false;
             return;
         }
 
@@ -1380,38 +1702,56 @@ internal sealed class SuitEditorController : MonoBehaviour
         PaintAtCursor();
     }
 
-    private bool CanUseGamepadApplyShortcut()
-    {
-        var selected = EventSystem.current != null ? EventSystem.current.currentSelectedGameObject : null;
-        if (selected == null || _panelRect == null)
-        {
-            return true;
-        }
-
-        if (!selected.transform.IsChildOf(_panelRect))
-        {
-            return true;
-        }
-
-        return selected.GetComponent<Button>() == null && selected.GetComponent<InputField>() == null;
-    }
-
     private bool IsCursorOverEditorPanel()
     {
         return _panelRect != null && RectTransformUtility.RectangleContainsScreenPoint(_panelRect, _cursor, null);
     }
 
+    private bool IsCursorOverPreviewViewport()
+    {
+        return _previewViewportRect != null && RectTransformUtility.RectangleContainsScreenPoint(_previewViewportRect, _cursor, null);
+    }
+
+    private bool TryGetPreviewRay(Vector2 screenPosition, out Ray ray)
+    {
+        ray = default;
+        if (_previewCamera == null || _previewViewportRect == null)
+        {
+            return false;
+        }
+
+        if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(_previewViewportRect, screenPosition, null, out var localPoint))
+        {
+            return false;
+        }
+
+        var rect = _previewViewportRect.rect;
+        if (rect.width <= 0f || rect.height <= 0f)
+        {
+            return false;
+        }
+
+        var viewportX = Mathf.Clamp01((localPoint.x - rect.xMin) / rect.width);
+        var viewportY = Mathf.Clamp01((localPoint.y - rect.yMin) / rect.height);
+        ray = _previewCamera.ViewportPointToRay(new Vector3(viewportX, viewportY, 0f));
+        return true;
+    }
+
     private void PaintAtCursor()
     {
         var texture = DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId);
-        if (texture == null || _previewCollider == null || Camera.main == null)
+        if (texture == null || _previewCollider == null || _previewCamera == null)
         {
             RefreshEditorReadiness("paint preflight failed");
             UpdateUiState();
             return;
         }
 
-        var ray = Camera.main.ScreenPointToRay(_cursor);
+        if (!TryGetPreviewRay(_cursor, out var ray))
+        {
+            return;
+        }
+
         if (!_previewCollider.Raycast(ray, out var hit, 20f))
         {
             return;
@@ -1764,9 +2104,9 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void TryRebuildPreviewForCurrentReadiness(string context)
     {
-        if (!_hasEditableSuit || !_hasPlayerModel || !_hasCamera)
+        if (!_hasEditableSuit || !_hasPlayerModel)
         {
-            DrawableSuitsDiagnostics.Warn($"Skipping preview rebuild [{context}] because dependencies are missing. hasEditableSuit={_hasEditableSuit}; hasPlayerModel={_hasPlayerModel}; hasCamera={_hasCamera}");
+            DrawableSuitsDiagnostics.Warn($"Skipping preview rebuild [{context}] because dependencies are missing. hasEditableSuit={_hasEditableSuit}; hasPlayerModel={_hasPlayerModel}");
             DestroyPreview();
             _hasPreviewCollider = false;
             _canPaint = false;
@@ -1792,39 +2132,135 @@ internal sealed class SuitEditorController : MonoBehaviour
         _previewMesh = new Mesh { name = "DrawableSuitsPreviewMesh" };
         source.BakeMesh(_previewMesh, true);
 
-        _previewRoot = new GameObject("DrawableSuitsSuitPreview");
+        EnsurePreviewTexture();
+        _previewRigRoot = new GameObject("DrawableSuitsPreviewRig");
+        _previewRigRoot.hideFlags = HideFlags.HideAndDontSave;
+        _previewRigRoot.transform.position = new Vector3(0f, -10000f, 0f);
+
+        _previewRoot = new GameObject("DrawableSuitsSuitPreviewMesh");
         _previewRoot.hideFlags = HideFlags.HideAndDontSave;
-        _previewRoot.layer = 2;
+        _previewRoot.transform.SetParent(_previewRigRoot.transform, false);
+        SetLayerRecursively(_previewRoot, 2);
         _previewRoot.AddComponent<MeshFilter>().sharedMesh = _previewMesh;
         _previewRenderer = _previewRoot.AddComponent<MeshRenderer>();
-        _previewRenderer.sharedMaterial = DrawableSuitsPlugin.Registry.GetRuntimeMaterial(_selectedSuitId);
+        _previewMaterial = CreatePreviewMaterial();
+        _previewRenderer.sharedMaterial = _previewMaterial;
         _previewCollider = _previewRoot.AddComponent<MeshCollider>();
         _previewCollider.sharedMesh = _previewMesh;
+
+        var cameraObject = new GameObject("DrawableSuitsPreviewCamera");
+        cameraObject.hideFlags = HideFlags.HideAndDontSave;
+        cameraObject.transform.SetParent(_previewRigRoot.transform, false);
+        cameraObject.transform.localPosition = new Vector3(0f, 0.95f, -3.2f);
+        cameraObject.transform.localRotation = Quaternion.identity;
+        SetLayerRecursively(cameraObject, 2);
+        _previewCamera = cameraObject.AddComponent<Camera>();
+        _previewCamera.clearFlags = CameraClearFlags.SolidColor;
+        _previewCamera.backgroundColor = new Color(0.018f, 0.02f, 0.024f, 1f);
+        _previewCamera.orthographic = true;
+        _previewCamera.orthographicSize = 1.25f;
+        _previewCamera.nearClipPlane = 0.01f;
+        _previewCamera.farClipPlane = 20f;
+        _previewCamera.cullingMask = 1 << 2;
+        _previewCamera.targetTexture = _previewTexture;
+
+        var lightObject = new GameObject("DrawableSuitsPreviewLight");
+        lightObject.hideFlags = HideFlags.HideAndDontSave;
+        lightObject.transform.SetParent(_previewRigRoot.transform, false);
+        lightObject.transform.localPosition = new Vector3(0f, 2f, -2f);
+        lightObject.transform.localRotation = Quaternion.Euler(40f, -25f, 0f);
+        _previewLight = lightObject.AddComponent<Light>();
+        _previewLight.type = LightType.Directional;
+        _previewLight.intensity = 1.2f;
+
         _hasPreviewCollider = _previewCollider != null;
-        _canPaint = _hasEditableSuit && _hasPlayerModel && _hasCamera && _hasPreviewCollider;
+        _canPaint = _hasEditableSuit && _hasPlayerModel && _hasPreviewCollider && _previewCamera != null;
         if (string.IsNullOrWhiteSpace(_statusMessage) || _statusMessage.StartsWith("Player model unavailable"))
         {
             SetStatus(string.Empty, false);
         }
 
         UpdatePreviewTransform();
-        DrawableSuitsDiagnostics.Info($"RebuildPreview complete. meshVertices={_previewMesh.vertexCount}; collider={_previewCollider != null}; material={_previewRenderer.sharedMaterial?.name ?? "null"}");
+        _previewCamera.Render();
+        DrawableSuitsDiagnostics.Info($"RebuildPreview complete. meshVertices={_previewMesh.vertexCount}; collider={_previewCollider != null}; material={_previewRenderer.sharedMaterial?.name ?? "null"}; renderTexture={_previewTexture?.width}x{_previewTexture?.height}; previewCamera={DrawableSuitsPlugin.DescribeUnityObject(_previewCamera)}; viewport={(_previewViewportRect != null ? _previewViewportRect.rect.ToString() : "null")}");
     }
 
-    private void UpdatePreviewTransform()
+    private void EnsurePreviewTexture()
     {
-        if (_previewRoot == null || Camera.main == null)
+        if (_previewTexture != null)
         {
             return;
         }
 
-        var cameraTransform = Camera.main.transform;
-        _previewRoot.transform.position = cameraTransform.position
-            + cameraTransform.forward * 2.15f
-            + cameraTransform.right * 0.55f
-            - cameraTransform.up * 0.2f;
-        _previewRoot.transform.rotation = Quaternion.LookRotation(-cameraTransform.forward, cameraTransform.up) * Quaternion.Euler(0f, _previewYaw, 0f);
-        _previewRoot.transform.localScale = Vector3.one * _previewScale;
+        _previewTexture = new RenderTexture(768, 768, 16, RenderTextureFormat.ARGB32)
+        {
+            name = "DrawableSuitsPreviewTexture",
+            antiAliasing = 2
+        };
+        _previewTexture.Create();
+        if (_previewImage != null)
+        {
+            _previewImage.texture = _previewTexture;
+            _previewImage.color = Color.white;
+        }
+    }
+
+    private Material CreatePreviewMaterial()
+    {
+        var shader = Shader.Find("Unlit/Texture") ?? Shader.Find("Standard");
+        var runtimeMaterial = DrawableSuitsPlugin.Registry.GetRuntimeMaterial(_selectedSuitId);
+        var material = shader != null
+            ? new Material(shader) { name = "DrawableSuitsPreviewMaterial" }
+            : new Material(runtimeMaterial) { name = "DrawableSuitsPreviewMaterial" };
+
+        var texture = DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId);
+        if (texture == null)
+        {
+            texture = runtimeMaterial?.mainTexture as Texture2D;
+        }
+
+        material.mainTexture = texture;
+        material.color = Color.white;
+        return material;
+    }
+
+    private static void SetLayerRecursively(GameObject target, int layer)
+    {
+        if (target == null)
+        {
+            return;
+        }
+
+        target.layer = layer;
+        foreach (Transform child in target.transform)
+        {
+            if (child != null)
+            {
+                SetLayerRecursively(child.gameObject, layer);
+            }
+        }
+    }
+
+    private void UpdatePreviewTransform()
+    {
+        if (_previewRoot == null || _previewMesh == null)
+        {
+            return;
+        }
+
+        var bounds = _previewMesh.bounds;
+        var maxSize = Mathf.Max(0.01f, Mathf.Max(bounds.size.x, Mathf.Max(bounds.size.y, bounds.size.z)));
+        var scale = 1.85f / maxSize * _previewScale;
+        _previewRoot.transform.localPosition = -bounds.center * scale;
+        _previewRoot.transform.localRotation = Quaternion.Euler(0f, _previewYaw, 0f);
+        _previewRoot.transform.localScale = Vector3.one * scale;
+
+        if (_previewCamera != null)
+        {
+            _previewCamera.transform.localPosition = new Vector3(0f, 0.05f, -3.2f);
+            _previewCamera.transform.localRotation = Quaternion.identity;
+            _previewCamera.Render();
+        }
     }
 
     private void DestroyPreview()
@@ -1835,14 +2271,40 @@ internal sealed class SuitEditorController : MonoBehaviour
             _previewRoot = null;
         }
 
+        if (_previewRigRoot != null)
+        {
+            Destroy(_previewRigRoot);
+            _previewRigRoot = null;
+        }
+
         if (_previewMesh != null)
         {
             Destroy(_previewMesh);
             _previewMesh = null;
         }
 
+        if (_previewMaterial != null)
+        {
+            Destroy(_previewMaterial);
+            _previewMaterial = null;
+        }
+
+        if (_previewTexture != null)
+        {
+            if (_previewImage != null)
+            {
+                _previewImage.texture = null;
+                _previewImage.color = new Color(0.04f, 0.045f, 0.05f, 1f);
+            }
+            _previewTexture.Release();
+            Destroy(_previewTexture);
+            _previewTexture = null;
+        }
+
         _previewCollider = null;
         _previewRenderer = null;
+        _previewCamera = null;
+        _previewLight = null;
         _hasPreviewCollider = false;
         _canPaint = false;
     }
@@ -1859,8 +2321,46 @@ internal sealed class SuitEditorController : MonoBehaviour
         var raycaster = _editorCanvasObject.GetComponent<GraphicRaycaster>();
         var eventSystem = FindObjectOfType<EventSystem>();
         var panelSize = _panelRect != null ? _panelRect.rect.size.ToString() : "null";
+        var previewSize = _previewViewportRect != null ? _previewViewportRect.rect.size.ToString() : "null";
         var canvasSize = _canvasRect != null ? _canvasRect.rect.size.ToString() : "null";
-        DrawableSuitsDiagnostics.Info($"CanvasState[{context}]: activeSelf={_editorCanvasObject.activeSelf}; activeInHierarchy={_editorCanvasObject.activeInHierarchy}; canvasMode={canvas?.renderMode.ToString() ?? "null"}; sortingOrder={canvas?.sortingOrder.ToString() ?? "null"}; childCount={_editorCanvasObject.transform.childCount}; canvasSize={canvasSize}; panelSize={panelSize}; raycaster={raycaster != null && raycaster.enabled}; eventSystem={eventSystem?.name ?? "null"}; currentSelected={EventSystem.current?.currentSelectedGameObject?.name ?? "null"}");
+        var activeModule = EventSystem.current?.currentInputModule;
+        DrawableSuitsDiagnostics.Info($"CanvasState[{context}]: activeSelf={_editorCanvasObject.activeSelf}; activeInHierarchy={_editorCanvasObject.activeInHierarchy}; canvasMode={canvas?.renderMode.ToString() ?? "null"}; sortingOrder={canvas?.sortingOrder.ToString() ?? "null"}; childCount={_editorCanvasObject.transform.childCount}; canvasSize={canvasSize}; panelSize={panelSize}; previewSize={previewSize}; raycaster={raycaster != null && raycaster.enabled}; eventSystem={eventSystem?.name ?? "null"}; current={EventSystem.current?.name ?? "null"}; inputModule={activeModule?.GetType().Name ?? "null"}; currentSelected={EventSystem.current?.currentSelectedGameObject?.name ?? "null"}");
+    }
+
+    private void LogUiInputDiagnosticsIfNeeded()
+    {
+        if (Time.unscaledTime - _lastUiDiagnosticsTime < 1f)
+        {
+            return;
+        }
+
+        _lastUiDiagnosticsTime = Time.unscaledTime;
+        var pointer = _cursor;
+        if (DrawableSuitsInput.TryGetMousePosition(out var mousePosition))
+        {
+            pointer = mousePosition;
+        }
+
+        var hitNames = "none";
+        var raycaster = _editorCanvasObject != null ? _editorCanvasObject.GetComponent<GraphicRaycaster>() : null;
+        if (raycaster != null && EventSystem.current != null)
+        {
+            var pointerData = new PointerEventData(EventSystem.current) { position = pointer };
+            var hits = new List<RaycastResult>();
+            raycaster.Raycast(pointerData, hits);
+            if (hits.Count > 0)
+            {
+                var names = new List<string>();
+                for (var i = 0; i < hits.Count && i < 6; i++)
+                {
+                    names.Add(hits[i].gameObject != null ? hits[i].gameObject.name : "null");
+                }
+                hitNames = string.Join(", ", names);
+            }
+        }
+
+        var activeModule = EventSystem.current?.currentInputModule;
+        DrawableSuitsDiagnostics.Info($"UiInputDiagnostics: currentEventSystem={EventSystem.current?.name ?? "null"}; activeModule={activeModule?.GetType().Name ?? "null"}; selected={EventSystem.current?.currentSelectedGameObject?.name ?? "null"}; mousePointer={pointer}; virtualCursor={_cursor}; raycastHits=[{hitNames}]; overPanel={IsCursorOverEditorPanel()}; overPreview={IsCursorOverPreviewViewport()}; previewRect={(_previewViewportRect != null ? _previewViewportRect.rect.ToString() : "null")}; previewCamera={DrawableSuitsPlugin.DescribeUnityObject(_previewCamera)}; renderTexture={_previewTexture?.width.ToString() ?? "null"}x{_previewTexture?.height.ToString() ?? "null"}");
     }
 
     private static void LogEditorControlTree(Transform root)
