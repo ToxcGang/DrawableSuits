@@ -8,10 +8,11 @@ DrawableSuits is a Lethal Company v81 BepInEx mod that lets players draw on suit
 - Fallback shortcuts: `F8` on keyboard or `View/Back + Y` on controller, handled by the stable DrawableSuits runtime host.
 - Emergency open shortcut: `F10`, which opens the editor shell and never toggles it closed.
 - Lightweight debug HUD: shown briefly on startup and toggleable with `F9`.
-- Controller support: use the pause-menu button or shortcut to open the editor, move the virtual cursor with the left stick, paint with right trigger, rotate with bumpers, cycle tools with `Y`, undo with `X`, save with Start, and apply with `A`.
+- Controller support: use the pause-menu button or shortcut to open the editor, move the virtual cursor with the left stick, paint with right trigger, rotate with bumpers, cycle tools with `Y`, undo with `X`, save with Start, and submit the selected UI control with `A`.
 - Paint, erase, undo, redo, reset, apply, save, load, and adjustable brush size, color, and opacity.
 - Editor rendered as a Unity UI overlay instead of IMGUI, so it appears above the game HUD.
-- 3D suit preview painting by raycasting against a baked suit mesh and writing to the suit texture UVs.
+- 3D suit preview rendered inside the editor with a dedicated preview camera and RenderTexture.
+- 3D suit preview painting by raycasting through the editor preview viewport against a baked suit mesh and writing to the suit texture UVs.
 - PNG/JPG decals from `BepInEx/config/DrawableSuits/Decals`, plus an optional Windows file dialog import button.
 - Decal placement with adjustable decal size and rotation.
 - Reusable saved designs stored as JSON metadata plus PNG texture files.
@@ -71,17 +72,20 @@ Press `F10` to open the emergency editor shell. The shell is designed to appear 
 
 DrawableSuits also shows a lightweight runtime HUD for the first 30 seconds after plugin load. Press `F9` to pin or hide that HUD. If you do not see the startup HUD and `diagnostics.log` is not created, the plugin is not loading from the active mod profile.
 
-Lethal Company v81 runs with Unity's Input System path. DrawableSuits 0.3.1 reads `F8`, `F9`, `F10`, Escape, mouse movement, mouse buttons, mouse wheel, and controller controls through that path so `UnityEngine.Input` errors should not repeat in `LogOutput.log`.
+Lethal Company v81 runs with Unity's Input System path. DrawableSuits 0.3.2 reads `F8`, `F9`, `F10`, Escape, mouse movement, mouse buttons, mouse wheel, and controller controls through that path so `UnityEngine.Input` errors should not repeat in `LogOutput.log`.
 
 ## Known Limits
 
-- The editor uses the local player model as the baked preview mesh. If no player model is available yet, the diagnostics overlay still opens and reports that missing dependency.
+- The editor uses the local player model as the baked preview mesh, then renders it through a dedicated preview camera inside the editor panel. If no player model is available yet, the diagnostics overlay still opens and reports that missing dependency.
 - If keyboard or controller shortcuts do not open the editor, use the `DrawableSuits` button in the pause menu.
 - If the pause-menu button and shortcuts do nothing, press `F9`. If the debug HUD appears, the plugin loaded and the HUD will show whether the editor canvas is active.
-- The `0.3.1` editor uses deterministic anchored UI controls. If you see only a blue translucent square, check `diagnostics.log` for `EditorControl[...]` lines and make sure the installed package is `0.3.1` or newer.
-- While the editor is open, player movement and look input are locked so controller stick input can drive the editor cursor without walking the player.
+- The `0.3.2` editor uses deterministic anchored UI controls and fixed slider child rects. If sliders appear as large orange blocks, make sure the installed package is `0.3.2` or newer and check `diagnostics.log` for `SliderBuilt` lines.
+- If the player preview is missing, check `diagnostics.log` for `RebuildPreview complete`, `previewCamera`, and `renderTexture` entries.
+- If mouse clicks do not activate the menu, check `diagnostics.log` for `UiInputDiagnostics` raycast hits and confirm the active module is `InputSystemUIInputModule`.
+- While the editor is open, DrawableSuits disables the local player's movement action map and locks movement/look/interact flags so controller input drives the editor instead of jumping or walking the player.
+- Controller `A` no longer applies the suit globally; it only submits the currently selected UI control.
 - If you quit to the main menu while the editor is open, DrawableSuits closes the editor during the scene change so main-menu navigation is restored.
-- If `LogOutput.log` contains repeated `Legacy key polling failed` or `InvalidOperationException` entries from DrawableSuits, make sure the installed package is `0.3.1` or newer.
+- If `LogOutput.log` contains repeated `Legacy key polling failed` or `InvalidOperationException` entries from DrawableSuits, make sure the installed package is `0.3.2` or newer.
 - If the editor opens with a player-model warning, join a lobby and wait until the local player model has spawned before painting.
 - If the cursor appears without the editor UI, check `BepInEx/config/DrawableSuits/Logs/diagnostics.log` for canvas creation, EventSystem, and open-failure messages.
 - If the pause-menu button overlaps another menu item after updating, restart the game so the old injected menu object is cleared.
