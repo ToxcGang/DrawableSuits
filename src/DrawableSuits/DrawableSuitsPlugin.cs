@@ -73,6 +73,10 @@ public sealed class DrawableSuitsPlugin : BaseUnityPlugin
     private void OnDestroy()
     {
         DrawableSuitsDiagnostics.Info("DrawableSuitsPlugin.OnDestroy called.");
+        if (Editor != null && Editor.IsOpenForDiagnostics)
+        {
+            Editor.CloseEditor();
+        }
         SceneManager.sceneLoaded -= OnSceneLoaded;
         _harmony?.UnpatchSelf();
     }
@@ -80,8 +84,32 @@ public sealed class DrawableSuitsPlugin : BaseUnityPlugin
     private static void OnSceneLoaded(Scene scene, LoadSceneMode mode)
     {
         DrawableSuitsDiagnostics.Info($"Scene loaded. name={scene.name}; buildIndex={scene.buildIndex}; mode={mode}");
+        var shouldCloseEditor = ShouldCloseEditorForScene(scene, mode);
         EnsureRuntimeReady($"SceneLoaded:{scene.name}");
+        if (shouldCloseEditor && Editor != null && Editor.IsOpenForDiagnostics)
+        {
+            DrawableSuitsDiagnostics.Info($"Closing editor because scene changed to '{scene.name}' with mode={mode}.");
+            Editor.CloseEditor();
+        }
+
         Registry?.ReapplyAll();
+    }
+
+    internal static bool HasGameplayEditorContext()
+    {
+        return StartOfRound.Instance?.localPlayerController != null && Camera.main != null;
+    }
+
+    private static bool ShouldCloseEditorForScene(Scene scene, LoadSceneMode mode)
+    {
+        if (mode != LoadSceneMode.Additive)
+        {
+            return true;
+        }
+
+        return string.Equals(scene.name, "MainMenu", System.StringComparison.OrdinalIgnoreCase)
+            || string.Equals(scene.name, "InitScene", System.StringComparison.OrdinalIgnoreCase)
+            || string.Equals(scene.name, "InitSceneLaunchOptions", System.StringComparison.OrdinalIgnoreCase);
     }
 
     internal static bool EnsureRuntimeReady(string reason)
