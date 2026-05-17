@@ -75,7 +75,7 @@ public sealed class DrawableSuitsPlugin : BaseUnityPlugin
         DrawableSuitsDiagnostics.Info("DrawableSuitsPlugin.OnDestroy called.");
         if (Editor != null && Editor.IsOpenForDiagnostics)
         {
-            Editor.CloseEditor();
+            Editor.CloseEditorForPluginDestroy();
         }
         SceneManager.sceneLoaded -= OnSceneLoaded;
         _harmony?.UnpatchSelf();
@@ -89,7 +89,7 @@ public sealed class DrawableSuitsPlugin : BaseUnityPlugin
         if (shouldCloseEditor && Editor != null && Editor.IsOpenForDiagnostics)
         {
             DrawableSuitsDiagnostics.Info($"Closing editor because scene changed to '{scene.name}' with mode={mode}.");
-            Editor.CloseEditor();
+            Editor.CloseEditorForSceneChange();
         }
 
         Registry?.ReapplyAll();
@@ -177,7 +177,7 @@ public sealed class DrawableSuitsPlugin : BaseUnityPlugin
         }
 
         DrawableSuitsDiagnostics.Info($"CloseEditor source={source}; editor={DescribeUnityObject(Editor)}");
-        Editor.CloseEditor();
+        Editor.CloseEditor(source);
         return true;
     }
 
