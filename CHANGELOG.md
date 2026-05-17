@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.2
+
+- Moved the suit preview into an editor-owned camera and RenderTexture shown inside the UI, so the model is not hidden by the world camera, ship geometry, or darkness.
+- Changed painting, erasing, and decals to raycast through the editor preview viewport instead of `Camera.main`.
+- Fixed slider child rect setup so fill and handle graphics no longer stretch into large orange blocks.
+- Added a DrawableSuits-owned `InputSystemUIInputModule` while the editor is open, then restored the game's UI input modules on close.
+- Made the virtual cursor marker ignore UI raycasts so mouse clicks can reach buttons, sliders, and inputs.
+- Disabled the local player's `PlayerActions.Movement` map while editing and restored it on close, preventing controller `A` from jumping in the menu.
+- Removed the global controller `A` Apply shortcut; `A` now submits the selected UI control only.
+- Added UI input, raycast, preview camera, preview viewport, and RenderTexture diagnostics.
+
 ## 0.3.1
 
 - Rebuilt the editor panel with deterministic anchored Unity UI controls to fix the blue translucent panel with missing labels/buttons.
