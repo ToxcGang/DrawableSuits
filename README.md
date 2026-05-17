@@ -8,11 +8,12 @@ DrawableSuits is a Lethal Company v81 BepInEx mod that lets players draw on suit
 - Fallback shortcuts: `F8` on keyboard or `View/Back + Y` on controller, handled by the stable DrawableSuits runtime host.
 - Emergency open shortcut: `F10`, which opens the editor shell and never toggles it closed.
 - Lightweight debug HUD: shown briefly on startup and toggleable with `F9`.
-- Controller support: use the pause-menu button or shortcut to open the editor. Painting controls are being restored after the 0.2.0 runtime-lifetime overhaul.
-- Paint, erase, undo, redo, reset, and adjustable brush size, color, and opacity.
+- Controller support: use the pause-menu button or shortcut to open the editor, move the virtual cursor with the left stick, paint with right trigger, rotate with bumpers, cycle tools with `Y`, undo with `X`, save with Start, and apply with `A`.
+- Paint, erase, undo, redo, reset, apply, save, load, and adjustable brush size, color, and opacity.
 - Editor rendered as a Unity UI overlay instead of IMGUI, so it appears above the game HUD.
 - 3D suit preview painting by raycasting against a baked suit mesh and writing to the suit texture UVs.
 - PNG/JPG decals from `BepInEx/config/DrawableSuits/Decals`, plus an optional Windows file dialog import button.
+- Decal placement with adjustable decal size and rotation.
 - Reusable saved designs stored as JSON metadata plus PNG texture files.
 - Apply/save multiplayer sync for other players who also have DrawableSuits installed.
 - Vanilla and modded suit support as long as the suit uses a normal suit material and texture.
@@ -64,18 +65,21 @@ The BepInEx config file controls:
 
 DrawableSuits writes detailed startup, pause-menu, input, editor, canvas, suit-detection, and preview logs to `BepInEx/config/DrawableSuits/Logs/diagnostics.log`.
 
-When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`. The expected 0.2.0 startup sequence includes plugin `Awake`, plugin `Start`, runtime host `Start`, and runtime host first `Update`.
+When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`. The expected 0.2.x startup sequence includes plugin `Awake`, plugin `Start`, runtime host `Start`, and runtime host first `Update`.
 
 Press `F10` to open the emergency editor shell. The shell is designed to appear even when no editable suit, local player model, main camera, or preview collider is available. If painting is disabled, the shell shows the exact missing state.
 
 DrawableSuits also shows a lightweight runtime HUD for the first 30 seconds after plugin load. Press `F9` to pin or hide that HUD. If you do not see the startup HUD and `diagnostics.log` is not created, the plugin is not loading from the active mod profile.
+
+Lethal Company v81 runs with Unity's Input System path. DrawableSuits 0.3.0 reads `F8`, `F9`, `F10`, Escape, mouse movement, mouse buttons, mouse wheel, and controller controls through that path so `UnityEngine.Input` errors should not repeat in `LogOutput.log`.
 
 ## Known Limits
 
 - The editor uses the local player model as the baked preview mesh. If no player model is available yet, the diagnostics overlay still opens and reports that missing dependency.
 - If keyboard or controller shortcuts do not open the editor, use the `DrawableSuits` button in the pause menu.
 - If the pause-menu button and shortcuts do nothing, press `F9`. If the debug HUD appears, the plugin loaded and the HUD will show whether the editor canvas is active.
-- In `0.2.0`, the editor is intentionally a reliable diagnostic shell first. Full painting, decal, save, and load controls are being restored after runtime lifetime is confirmed stable.
+- The `0.3.0` editor is the first restored full editor after the runtime-lifetime overhaul, so keep diagnostics enabled while testing new painting and decal flows.
+- If `LogOutput.log` contains repeated `Legacy key polling failed` or `InvalidOperationException` entries from DrawableSuits, make sure the installed package is `0.3.0` or newer.
 - If the editor opens with a player-model warning, join a lobby and wait until the local player model has spawned before painting.
 - If the cursor appears without the editor UI, check `BepInEx/config/DrawableSuits/Logs/diagnostics.log` for canvas creation, EventSystem, and open-failure messages.
 - If the pause-menu button overlaps another menu item after updating, restart the game so the old injected menu object is cleared.
