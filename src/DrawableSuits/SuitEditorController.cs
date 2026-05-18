@@ -77,6 +77,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Mesh _previewMesh;
     private MeshCollider _previewCollider;
     private MeshRenderer _previewRenderer;
+    private int _previewLayer = 2;
     private float _previewYaw;
     private float _previewScale = 0.9f;
 
@@ -99,13 +100,13 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Text _decalSizeLabel;
     private Text _decalRotationLabel;
     private InputField _designNameInput;
-    private Slider _brushSizeSlider;
-    private Slider _brushOpacitySlider;
-    private Slider _redSlider;
-    private Slider _greenSlider;
-    private Slider _blueSlider;
-    private Slider _decalSizeSlider;
-    private Slider _decalRotationSlider;
+    private DrawableSliderControl _brushSizeSlider;
+    private DrawableSliderControl _brushOpacitySlider;
+    private DrawableSliderControl _redSlider;
+    private DrawableSliderControl _greenSlider;
+    private DrawableSliderControl _blueSlider;
+    private DrawableSliderControl _decalSizeSlider;
+    private DrawableSliderControl _decalRotationSlider;
     private Image _colorSwatch;
     private Button _paintButton;
     private Button _eraseButton;
@@ -119,6 +120,9 @@ internal sealed class SuitEditorController : MonoBehaviour
     private InputSystemUIInputModule _editorInputModule;
     private InputActionAsset _editorUiActions;
     private bool _editorUiInputActive;
+    private bool _virtualPointerDown;
+    private GameObject _virtualPointerPressTarget;
+    private DrawableSliderControl _virtualPointerSlider;
     private float _lastUiDiagnosticsTime;
     private readonly List<EventSystemRestoreState> _eventSystemRestoreStates = new();
 
@@ -132,6 +136,109 @@ internal sealed class SuitEditorController : MonoBehaviour
         internal bool EventSystemEnabled;
         internal BaseInputModule[] Modules;
         internal bool[] ModuleEnabled;
+    }
+
+    private sealed class DrawableSliderControl : Selectable, IPointerDownHandler, IDragHandler, IPointerUpHandler
+    {
+        private RectTransform _trackRect;
+        private RectTransform _fillRect;
+        private RectTransform _handleRect;
+        private Action<float> _onValueChanged;
+        private float _minValue;
+        private float _maxValue = 1f;
+        private float _value;
+
+        internal float Value
+        {
+            get => _value;
+            set => SetValue(value, true);
+        }
+
+        internal void Configure(RectTransform trackRect, RectTransform fillRect, RectTransform handleRect, float minValue, float maxValue, float value, Action<float> onValueChanged)
+        {
+            _trackRect = trackRect;
+            _fillRect = fillRect;
+            _handleRect = handleRect;
+            _minValue = minValue;
+            _maxValue = Mathf.Max(minValue + 0.0001f, maxValue);
+            _onValueChanged = onValueChanged;
+            SetValue(value, false);
+        }
+
+        internal void SetValue(float value, bool notify)
+        {
+            var clamped = Mathf.Clamp(value, _minValue, _maxValue);
+            if (Mathf.Approximately(_value, clamped))
+            {
+                UpdateVisuals();
+                return;
+            }
+
+            _value = clamped;
+            UpdateVisuals();
+            if (notify)
+            {
+                _onValueChanged?.Invoke(_value);
+            }
+        }
+
+        internal bool SetValueFromScreenPosition(Vector2 screenPosition, Camera eventCamera, bool notify)
+        {
+            if (!IsActive() || !IsInteractable() || _trackRect == null)
+            {
+                return false;
+            }
+
+            if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(_trackRect, screenPosition, eventCamera, out var localPoint))
+            {
+                return false;
+            }
+
+            var rect = _trackRect.rect;
+            if (rect.width <= 0.01f)
+            {
+                return false;
+            }
+
+            var normalized = Mathf.Clamp01((localPoint.x - rect.xMin) / rect.width);
+            SetValue(Mathf.Lerp(_minValue, _maxValue, normalized), notify);
+            return true;
+        }
+
+        public override void OnPointerDown(PointerEventData eventData)
+        {
+            base.OnPointerDown(eventData);
+            SetValueFromScreenPosition(eventData.position, eventData.pressEventCamera, true);
+        }
+
+        public void OnDrag(PointerEventData eventData)
+        {
+            SetValueFromScreenPosition(eventData.position, eventData.pressEventCamera, true);
+        }
+
+        public override void OnPointerUp(PointerEventData eventData)
+        {
+            base.OnPointerUp(eventData);
+        }
+
+        private void UpdateVisuals()
+        {
+            if (_trackRect == null || _fillRect == null || _handleRect == null)
+            {
+                return;
+            }
+
+            var normalized = Mathf.InverseLerp(_minValue, _maxValue, _value);
+            _fillRect.anchorMin = new Vector2(0f, 0.5f);
+            _fillRect.anchorMax = new Vector2(normalized, 0.5f);
+            _fillRect.offsetMin = new Vector2(0f, -3f);
+            _fillRect.offsetMax = new Vector2(0f, 3f);
+
+            _handleRect.anchorMin = new Vector2(normalized, 0.5f);
+            _handleRect.anchorMax = new Vector2(normalized, 0.5f);
+            _handleRect.anchoredPosition = Vector2.zero;
+            _handleRect.sizeDelta = new Vector2(16f, 28f);
+        }
     }
 
     private void Start()
@@ -194,6 +301,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         ReapplyPlayerInputLock();
         HandleControllerCursor();
         UpdateCursorMarker();
+        HandleVirtualCursorClick();
         HandleEditorShortcuts();
         UpdatePreviewTransform();
         HandlePaintingInput();
@@ -277,6 +385,9 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         DestroyPreview();
         _strokeActive = false;
+        _virtualPointerDown = false;
+        _virtualPointerPressTarget = null;
+        _virtualPointerSlider = null;
         RestorePlayerInputState();
         EndEditorUiInput();
         RestoreCursorState(reason == EditorCloseReason.SceneChange);
@@ -517,7 +628,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         _decalRotationLabel = CreateAnchoredText(panel.transform, "DecalRotationLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(rightX, 118f, 116f, 24f), Color.white);
         _decalRotationSlider = CreateAnchoredSlider(panel.transform, "DecalRotation", -180f, 180f, _decalRotation, new Rect(rightX + 126f, 120f, 234f, 24f), value => _decalRotation = value);
         CreateAnchoredButton(panel.transform, "Refresh", new Rect(rightX, 156f, 110f, 34f), RefreshFileLists);
-        CreateAnchoredButton(panel.transform, "Import File", new Rect(rightX + 118f, 156f, 126f, 34f), ImportDecalFromDialog);
+        CreateAnchoredButton(panel.transform, "Refresh Decals", new Rect(rightX + 118f, 156f, 150f, 34f), ImportDecalFromDialog);
         _decalListContent = CreateAnchoredScrollList(panel.transform, "DecalList", new Rect(rightX, 198f, rightW, 112f));
 
         CreateAnchoredText(panel.transform, "DesignHeader", "Design Name", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 330f, rightW, 24f), Color.white);
@@ -541,7 +652,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         CreateAnchoredText(panel.transform, "SavedDesignsHeader", "Saved Designs", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 508f, rightW, 24f), Color.white);
         _designListContent = CreateAnchoredScrollList(panel.transform, "DesignList", new Rect(rightX, 538f, rightW, 156f));
 
-        CreateAnchoredText(panel.transform, "ControllerHelp", "Controller: View/Back+Y open/close, left stick cursor, right trigger paint, bumpers rotate, Y tool, X undo, Start save, A submits selected UI.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 730f, 1160f, 42f), Color.white);
+        CreateAnchoredText(panel.transform, "ControllerHelp", "Controller: View/Back+Y open/close, left stick cursor, A clicks under cursor, right trigger paints in preview, bumpers rotate, Y tool, X undo, Start save.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 730f, 1160f, 42f), Color.white);
 
         _cursorMarker = CreateUiObject("DrawableSuitsCursor", _editorCanvasObject.transform, typeof(Image)).GetComponent<RectTransform>();
         _cursorMarker.sizeDelta = new Vector2(14f, 14f);
@@ -679,12 +790,15 @@ internal sealed class SuitEditorController : MonoBehaviour
         return button;
     }
 
-    private static Slider CreateAnchoredSlider(Transform parent, string name, float min, float max, float value, Rect rect, Action<float> onValueChanged)
+    private static DrawableSliderControl CreateAnchoredSlider(Transform parent, string name, float min, float max, float value, Rect rect, Action<float> onValueChanged)
     {
-        var go = CreateUiObject(name + "Slider", parent, typeof(RectTransform), typeof(Slider));
+        var go = CreateUiObject(name + "Slider", parent, typeof(RectTransform), typeof(Image), typeof(DrawableSliderControl));
         SetAnchoredRect(go.GetComponent<RectTransform>(), rect);
+        var rootImage = go.GetComponent<Image>();
+        rootImage.color = new Color(1f, 1f, 1f, 0.001f);
+        rootImage.raycastTarget = true;
 
-        var background = CreateUiObject("Background", go.transform, typeof(RectTransform), typeof(Image));
+        var background = CreateUiObject("Track", go.transform, typeof(RectTransform), typeof(Image));
         var bgRect = background.GetComponent<RectTransform>();
         bgRect.anchorMin = new Vector2(0f, 0.5f);
         bgRect.anchorMax = new Vector2(1f, 0.5f);
@@ -695,14 +809,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         backgroundImage.color = new Color(0.08f, 0.08f, 0.09f, 1f);
         backgroundImage.raycastTarget = true;
 
-        var fillArea = CreateUiObject("Fill Area", go.transform, typeof(RectTransform));
-        var fillAreaRect = fillArea.GetComponent<RectTransform>();
-        fillAreaRect.anchorMin = Vector2.zero;
-        fillAreaRect.anchorMax = Vector2.one;
-        fillAreaRect.offsetMin = new Vector2(5f, 0f);
-        fillAreaRect.offsetMax = new Vector2(-5f, 0f);
-
-        var fill = CreateUiObject("Fill", fillArea.transform, typeof(RectTransform), typeof(Image));
+        var fill = CreateUiObject("Fill", go.transform, typeof(RectTransform), typeof(Image));
         var fillRect = fill.GetComponent<RectTransform>();
         fillRect.anchorMin = new Vector2(0f, 0.5f);
         fillRect.anchorMax = new Vector2(1f, 0.5f);
@@ -713,32 +820,21 @@ internal sealed class SuitEditorController : MonoBehaviour
         fillImage.color = new Color(0.95f, 0.42f, 0.16f, 1f);
         fillImage.raycastTarget = false;
 
-        var handleArea = CreateUiObject("Handle Slide Area", go.transform, typeof(RectTransform));
-        var handleAreaRect = handleArea.GetComponent<RectTransform>();
-        handleAreaRect.anchorMin = Vector2.zero;
-        handleAreaRect.anchorMax = Vector2.one;
-        handleAreaRect.offsetMin = new Vector2(8f, 0f);
-        handleAreaRect.offsetMax = new Vector2(-8f, 0f);
-
-        var handle = CreateUiObject("Handle", handleArea.transform, typeof(RectTransform), typeof(Image));
+        var handle = CreateUiObject("Handle", go.transform, typeof(RectTransform), typeof(Image));
         var handleRect = handle.GetComponent<RectTransform>();
         handleRect.anchorMin = new Vector2(0f, 0.5f);
         handleRect.anchorMax = new Vector2(0f, 0.5f);
         handleRect.pivot = new Vector2(0.5f, 0.5f);
         handleRect.anchoredPosition = Vector2.zero;
-        handleRect.sizeDelta = new Vector2(18f, rect.height);
-        handle.GetComponent<Image>().color = Color.white;
+        handleRect.sizeDelta = new Vector2(16f, 28f);
+        var handleImage = handle.GetComponent<Image>();
+        handleImage.color = Color.white;
+        handleImage.raycastTarget = true;
 
-        var slider = go.GetComponent<Slider>();
-        slider.minValue = min;
-        slider.maxValue = max;
-        slider.value = value;
-        slider.direction = Slider.Direction.LeftToRight;
-        slider.fillRect = fillRect;
-        slider.handleRect = handleRect;
-        slider.targetGraphic = handle.GetComponent<Image>();
-        slider.onValueChanged.AddListener(v => onValueChanged?.Invoke(v));
-        DrawableSuitsDiagnostics.Info($"SliderBuilt name={name}; root={rect}; backgroundSize={bgRect.rect.size}; fillAreaSize={fillAreaRect.rect.size}; fillSize={fillRect.rect.size}; handleSize={handleRect.rect.size}");
+        var slider = go.GetComponent<DrawableSliderControl>();
+        slider.targetGraphic = handleImage;
+        slider.Configure(bgRect, fillRect, handleRect, min, max, value, onValueChanged);
+        DrawableSuitsDiagnostics.Info($"DrawableSliderBuilt name={name}; root={rect}; trackSize={bgRect.rect.size}; fillSize={fillRect.rect.size}; handleSize={handleRect.rect.size}; min={min}; max={max}; value={value}");
         return slider;
     }
 
@@ -1190,7 +1286,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         move.AddBinding("<Gamepad>/dpad");
         var submit = map.AddAction("Submit", InputActionType.Button);
         submit.AddBinding("<Keyboard>/enter");
-        submit.AddBinding("<Gamepad>/buttonSouth");
         var cancel = map.AddAction("Cancel", InputActionType.Button);
         cancel.AddBinding("<Keyboard>/escape");
         cancel.AddBinding("<Gamepad>/buttonEast");
@@ -1386,13 +1481,13 @@ internal sealed class SuitEditorController : MonoBehaviour
             _designNameInput.text = _designName;
         }
 
-        if (_brushSizeSlider != null) _brushSizeSlider.value = _brushSize;
-        if (_brushOpacitySlider != null) _brushOpacitySlider.value = _brushOpacity;
-        if (_redSlider != null) _redSlider.value = _brushColor.r;
-        if (_greenSlider != null) _greenSlider.value = _brushColor.g;
-        if (_blueSlider != null) _blueSlider.value = _brushColor.b;
-        if (_decalSizeSlider != null) _decalSizeSlider.value = _decalSize;
-        if (_decalRotationSlider != null) _decalRotationSlider.value = _decalRotation;
+        if (_brushSizeSlider != null) _brushSizeSlider.SetValue(_brushSize, false);
+        if (_brushOpacitySlider != null) _brushOpacitySlider.SetValue(_brushOpacity, false);
+        if (_redSlider != null) _redSlider.SetValue(_brushColor.r, false);
+        if (_greenSlider != null) _greenSlider.SetValue(_brushColor.g, false);
+        if (_blueSlider != null) _blueSlider.SetValue(_brushColor.b, false);
+        if (_decalSizeSlider != null) _decalSizeSlider.SetValue(_decalSize, false);
+        if (_decalRotationSlider != null) _decalRotationSlider.SetValue(_decalRotation, false);
 
         if (_diagnosticsLabel != null)
         {
@@ -1604,6 +1699,148 @@ internal sealed class SuitEditorController : MonoBehaviour
         _cursor.y = Mathf.Clamp(_cursor.y + delta.y, 0f, Screen.height);
     }
 
+    private void HandleVirtualCursorClick()
+    {
+        var gamepad = Gamepad.current;
+        if (gamepad == null || !_editorUiInputActive || _editorCanvasObject == null)
+        {
+            _virtualPointerDown = false;
+            _virtualPointerPressTarget = null;
+            _virtualPointerSlider = null;
+            return;
+        }
+
+        var south = gamepad.buttonSouth;
+        if (south.wasPressedThisFrame)
+        {
+            BeginVirtualPointerPress();
+        }
+
+        if (south.isPressed && _virtualPointerSlider != null)
+        {
+            _virtualPointerSlider.SetValueFromScreenPosition(_cursor, null, true);
+        }
+
+        if (south.wasReleasedThisFrame)
+        {
+            EndVirtualPointerPress();
+        }
+    }
+
+    private void BeginVirtualPointerPress()
+    {
+        _virtualPointerDown = true;
+        _virtualPointerPressTarget = null;
+        _virtualPointerSlider = null;
+
+        var hits = RaycastEditorUi(_cursor);
+        if (hits.Count == 0)
+        {
+            DrawableSuitsDiagnostics.Info($"Virtual cursor A press hit no UI target. cursor={_cursor}");
+            return;
+        }
+
+        var hitObject = hits[0].gameObject;
+        _virtualPointerSlider = hitObject.GetComponentInParent<DrawableSliderControl>();
+        var pointerData = CreateVirtualPointerEventData();
+
+        if (_virtualPointerSlider != null)
+        {
+            EventSystem.current?.SetSelectedGameObject(_virtualPointerSlider.gameObject);
+            _virtualPointerSlider.SetValueFromScreenPosition(_cursor, null, true);
+            _virtualPointerPressTarget = _virtualPointerSlider.gameObject;
+            DrawableSuitsDiagnostics.Info($"Virtual cursor A press captured slider={_virtualPointerSlider.name}; cursor={_cursor}");
+            return;
+        }
+
+        var eventTarget = ExecuteEvents.GetEventHandler<IPointerClickHandler>(hitObject)
+            ?? ExecuteEvents.GetEventHandler<ISubmitHandler>(hitObject)
+            ?? ExecuteEvents.GetEventHandler<ISelectHandler>(hitObject);
+        if (eventTarget == null)
+        {
+            DrawableSuitsDiagnostics.Info($"Virtual cursor A press hit non-clickable target={hitObject.name}; cursor={_cursor}");
+            return;
+        }
+
+        _virtualPointerPressTarget = eventTarget;
+        EventSystem.current?.SetSelectedGameObject(eventTarget);
+        ExecuteEvents.Execute(eventTarget, pointerData, ExecuteEvents.pointerDownHandler);
+        ExecuteEvents.Execute(eventTarget, pointerData, ExecuteEvents.selectHandler);
+        DrawableSuitsDiagnostics.Info($"Virtual cursor A press target={eventTarget.name}; hit={hitObject.name}; cursor={_cursor}");
+    }
+
+    private void EndVirtualPointerPress()
+    {
+        if (!_virtualPointerDown)
+        {
+            return;
+        }
+
+        _virtualPointerDown = false;
+        var pressTarget = _virtualPointerPressTarget;
+        var pointerData = CreateVirtualPointerEventData();
+        _virtualPointerPressTarget = null;
+        _virtualPointerSlider = null;
+
+        if (pressTarget == null)
+        {
+            return;
+        }
+
+        ExecuteEvents.Execute(pressTarget, pointerData, ExecuteEvents.pointerUpHandler);
+        var releaseTarget = TopClickableAtCursor();
+        if (releaseTarget == pressTarget)
+        {
+            ExecuteEvents.Execute(pressTarget, pointerData, ExecuteEvents.pointerClickHandler);
+        }
+
+        DrawableSuitsDiagnostics.Info($"Virtual cursor A release target={pressTarget.name}; releaseTarget={releaseTarget?.name ?? "null"}; cursor={_cursor}");
+    }
+
+    private PointerEventData CreateVirtualPointerEventData()
+    {
+        var data = new PointerEventData(EventSystem.current ?? _editorEventSystem)
+        {
+            pointerId = -1003,
+            position = _cursor,
+            pressPosition = _cursor,
+            button = PointerEventData.InputButton.Left
+        };
+        return data;
+    }
+
+    private GameObject TopClickableAtCursor()
+    {
+        var hits = RaycastEditorUi(_cursor);
+        for (var i = 0; i < hits.Count; i++)
+        {
+            var target = ExecuteEvents.GetEventHandler<IPointerClickHandler>(hits[i].gameObject)
+                ?? ExecuteEvents.GetEventHandler<ISubmitHandler>(hits[i].gameObject)
+                ?? ExecuteEvents.GetEventHandler<ISelectHandler>(hits[i].gameObject);
+            if (target != null)
+            {
+                return target;
+            }
+        }
+
+        return null;
+    }
+
+    private List<RaycastResult> RaycastEditorUi(Vector2 screenPosition)
+    {
+        var hits = new List<RaycastResult>();
+        var raycaster = _editorCanvasObject != null ? _editorCanvasObject.GetComponent<GraphicRaycaster>() : null;
+        var eventSystem = EventSystem.current ?? _editorEventSystem;
+        if (raycaster == null || eventSystem == null)
+        {
+            return hits;
+        }
+
+        var pointerData = new PointerEventData(eventSystem) { position = screenPosition };
+        raycaster.Raycast(pointerData, hits);
+        return hits;
+    }
+
     private void HandleEditorShortcuts()
     {
         if (_bootstrapShell)
@@ -1656,7 +1893,7 @@ internal sealed class SuitEditorController : MonoBehaviour
                 _brushSize = Mathf.Clamp(_brushSize + scroll * 2f, 1f, 96f);
                 if (_brushSizeSlider != null)
                 {
-                    _brushSizeSlider.value = _brushSize;
+                    _brushSizeSlider.SetValue(_brushSize, false);
                 }
             }
         }
@@ -2006,33 +2243,9 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void ImportDecalFromDialog()
     {
-        if (!DrawableSuitsPlugin.ModConfig.EnableOsFileDialog.Value)
-        {
-            DrawableSuitsDiagnostics.Info("ImportDecalFromDialog ignored because EnableOsFileDialog=false.");
-            return;
-        }
-
-        if (!WindowsFileDialog.TryOpenImage(out var path) || string.IsNullOrWhiteSpace(path))
-        {
-            DrawableSuitsDiagnostics.Info("ImportDecalFromDialog cancelled or returned no file.");
-            return;
-        }
-
-        try
-        {
-            var destination = Path.Combine(DrawableSuitsPaths.Decals, TextureTools.SanitizeFileName(Path.GetFileName(path)));
-            File.Copy(path, destination, true);
-            RefreshFileLists();
-            var index = _decalFiles.FindIndex(p => string.Equals(p, destination, StringComparison.OrdinalIgnoreCase));
-            if (index >= 0)
-            {
-                SelectDecal(index);
-            }
-        }
-        catch (Exception ex)
-        {
-            DrawableSuitsDiagnostics.Exception($"Failed to import decal '{path}'", ex);
-        }
+        RefreshFileLists();
+        SetStatus("OS file import is disabled in-game. Place PNG/JPG files in BepInEx/config/DrawableSuits/Decals, then press Refresh Decals.", false);
+        DrawableSuitsDiagnostics.Warn($"OS file dialog import is disabled for stability in {PluginInfo.Version}. EnableOsFileDialog config value is ignored. DecalsPath={DrawableSuitsPaths.Decals}");
     }
 
     private void SelectDecal(int index)
@@ -2131,6 +2344,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawableSuitsDiagnostics.Info($"RebuildPreview baking mesh. selectedSuitId={_selectedSuitId}; sourceRenderer={source.name}; verticesBeforeBake={source.sharedMesh?.vertexCount ?? 0}");
         _previewMesh = new Mesh { name = "DrawableSuitsPreviewMesh" };
         source.BakeMesh(_previewMesh, true);
+        var bakedBounds = NormalizePreviewMesh(_previewMesh);
+        _previewLayer = SelectPreviewLayer();
 
         EnsurePreviewTexture();
         _previewRigRoot = new GameObject("DrawableSuitsPreviewRig");
@@ -2140,7 +2355,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         _previewRoot = new GameObject("DrawableSuitsSuitPreviewMesh");
         _previewRoot.hideFlags = HideFlags.HideAndDontSave;
         _previewRoot.transform.SetParent(_previewRigRoot.transform, false);
-        SetLayerRecursively(_previewRoot, 2);
+        SetLayerRecursively(_previewRoot, _previewLayer);
         _previewRoot.AddComponent<MeshFilter>().sharedMesh = _previewMesh;
         _previewRenderer = _previewRoot.AddComponent<MeshRenderer>();
         _previewMaterial = CreatePreviewMaterial();
@@ -2153,25 +2368,31 @@ internal sealed class SuitEditorController : MonoBehaviour
         cameraObject.transform.SetParent(_previewRigRoot.transform, false);
         cameraObject.transform.localPosition = new Vector3(0f, 0.95f, -3.2f);
         cameraObject.transform.localRotation = Quaternion.identity;
-        SetLayerRecursively(cameraObject, 2);
+        SetLayerRecursively(cameraObject, _previewLayer);
         _previewCamera = cameraObject.AddComponent<Camera>();
+        _previewCamera.enabled = false;
         _previewCamera.clearFlags = CameraClearFlags.SolidColor;
         _previewCamera.backgroundColor = new Color(0.018f, 0.02f, 0.024f, 1f);
         _previewCamera.orthographic = true;
         _previewCamera.orthographicSize = 1.25f;
         _previewCamera.nearClipPlane = 0.01f;
         _previewCamera.farClipPlane = 20f;
-        _previewCamera.cullingMask = 1 << 2;
+        _previewCamera.cullingMask = 1 << _previewLayer;
         _previewCamera.targetTexture = _previewTexture;
 
-        var lightObject = new GameObject("DrawableSuitsPreviewLight");
-        lightObject.hideFlags = HideFlags.HideAndDontSave;
-        lightObject.transform.SetParent(_previewRigRoot.transform, false);
-        lightObject.transform.localPosition = new Vector3(0f, 2f, -2f);
-        lightObject.transform.localRotation = Quaternion.Euler(40f, -25f, 0f);
-        _previewLight = lightObject.AddComponent<Light>();
-        _previewLight.type = LightType.Directional;
-        _previewLight.intensity = 1.2f;
+        if (_previewMaterial != null && _previewMaterial.shader != null && !_previewMaterial.shader.name.StartsWith("Unlit", StringComparison.OrdinalIgnoreCase))
+        {
+            var lightObject = new GameObject("DrawableSuitsPreviewLight");
+            lightObject.hideFlags = HideFlags.HideAndDontSave;
+            lightObject.transform.SetParent(_previewRigRoot.transform, false);
+            lightObject.transform.localPosition = new Vector3(0f, 1.7f, -2.2f);
+            lightObject.transform.localRotation = Quaternion.Euler(35f, -25f, 0f);
+            SetLayerRecursively(lightObject, _previewLayer);
+            _previewLight = lightObject.AddComponent<Light>();
+            _previewLight.type = LightType.Directional;
+            _previewLight.intensity = 1.15f;
+            _previewLight.cullingMask = 1 << _previewLayer;
+        }
 
         _hasPreviewCollider = _previewCollider != null;
         _canPaint = _hasEditableSuit && _hasPlayerModel && _hasPreviewCollider && _previewCamera != null;
@@ -2182,7 +2403,53 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         UpdatePreviewTransform();
         _previewCamera.Render();
-        DrawableSuitsDiagnostics.Info($"RebuildPreview complete. meshVertices={_previewMesh.vertexCount}; collider={_previewCollider != null}; material={_previewRenderer.sharedMaterial?.name ?? "null"}; renderTexture={_previewTexture?.width}x{_previewTexture?.height}; previewCamera={DrawableSuitsPlugin.DescribeUnityObject(_previewCamera)}; viewport={(_previewViewportRect != null ? _previewViewportRect.rect.ToString() : "null")}");
+        DrawableSuitsDiagnostics.Info($"RebuildPreview complete. meshVertices={_previewMesh.vertexCount}; bakedBounds={bakedBounds}; normalizedBounds={_previewMesh.bounds}; previewLayer={_previewLayer}; mainCameraMask={Camera.main?.cullingMask.ToString() ?? "null"}; cameraEnabled={_previewCamera.enabled}; cameraMask={_previewCamera.cullingMask}; collider={_previewCollider != null}; material={_previewRenderer.sharedMaterial?.name ?? "null"}; shader={_previewRenderer.sharedMaterial?.shader?.name ?? "null"}; renderTexture={_previewTexture?.width}x{_previewTexture?.height}; rtCreated={_previewTexture?.IsCreated().ToString() ?? "null"}; previewCamera={DrawableSuitsPlugin.DescribeUnityObject(_previewCamera)}; viewport={(_previewViewportRect != null ? _previewViewportRect.rect.ToString() : "null")}");
+    }
+
+    private static Bounds NormalizePreviewMesh(Mesh mesh)
+    {
+        if (mesh == null || mesh.vertexCount == 0)
+        {
+            return default;
+        }
+
+        var bakedBounds = mesh.bounds;
+        var center = bakedBounds.center;
+        var vertices = mesh.vertices;
+        for (var i = 0; i < vertices.Length; i++)
+        {
+            vertices[i] -= center;
+        }
+
+        mesh.vertices = vertices;
+        mesh.RecalculateBounds();
+        try
+        {
+            mesh.RecalculateNormals();
+        }
+        catch (Exception ex)
+        {
+            DrawableSuitsDiagnostics.Exception("Preview mesh normal recalculation failed", ex);
+        }
+
+        return bakedBounds;
+    }
+
+    private static int SelectPreviewLayer()
+    {
+        var mainCamera = Camera.main;
+        var mainMask = mainCamera != null ? mainCamera.cullingMask : -1;
+        for (var layer = 31; layer >= 0; layer--)
+        {
+            if ((mainMask & (1 << layer)) == 0)
+            {
+                DrawableSuitsDiagnostics.Info($"Selected preview layer {layer}; mainCamera={mainCamera?.name ?? "null"}; mainMask={mainMask}");
+                return layer;
+            }
+        }
+
+        DrawableSuitsDiagnostics.Warn($"No layer outside Camera.main culling mask was available; using layer 2 with normalized off-screen preview rig. mainCamera={mainCamera?.name ?? "null"}; mainMask={mainMask}");
+        return 2;
     }
 
     private void EnsurePreviewTexture()
@@ -2207,11 +2474,21 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private Material CreatePreviewMaterial()
     {
-        var shader = Shader.Find("Unlit/Texture") ?? Shader.Find("Standard");
         var runtimeMaterial = DrawableSuitsPlugin.Registry.GetRuntimeMaterial(_selectedSuitId);
-        var material = shader != null
-            ? new Material(shader) { name = "DrawableSuitsPreviewMaterial" }
-            : new Material(runtimeMaterial) { name = "DrawableSuitsPreviewMaterial" };
+        var shader = Shader.Find("Unlit/Texture") ?? Shader.Find("Unlit/Transparent") ?? Shader.Find("Standard");
+        Material material;
+        if (shader != null)
+        {
+            material = new Material(shader) { name = "DrawableSuitsPreviewMaterial" };
+        }
+        else if (runtimeMaterial != null)
+        {
+            material = new Material(runtimeMaterial) { name = "DrawableSuitsPreviewMaterial" };
+        }
+        else
+        {
+            material = new Material(Shader.Find("Diffuse")) { name = "DrawableSuitsPreviewMaterial" };
+        }
 
         var texture = DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId);
         if (texture == null)
@@ -2251,7 +2528,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         var bounds = _previewMesh.bounds;
         var maxSize = Mathf.Max(0.01f, Mathf.Max(bounds.size.x, Mathf.Max(bounds.size.y, bounds.size.z)));
         var scale = 1.85f / maxSize * _previewScale;
-        _previewRoot.transform.localPosition = -bounds.center * scale;
+        _previewRoot.transform.localPosition = Vector3.zero;
         _previewRoot.transform.localRotation = Quaternion.Euler(0f, _previewYaw, 0f);
         _previewRoot.transform.localScale = Vector3.one * scale;
 
@@ -2259,6 +2536,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             _previewCamera.transform.localPosition = new Vector3(0f, 0.05f, -3.2f);
             _previewCamera.transform.localRotation = Quaternion.identity;
+            _previewCamera.enabled = false;
             _previewCamera.Render();
         }
     }
@@ -2336,7 +2614,8 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         _lastUiDiagnosticsTime = Time.unscaledTime;
         var pointer = _cursor;
-        if (DrawableSuitsInput.TryGetMousePosition(out var mousePosition))
+        var usingMousePointer = DrawableSuitsInput.WasMouseUsedThisFrame();
+        if (usingMousePointer && DrawableSuitsInput.TryGetMousePosition(out var mousePosition))
         {
             pointer = mousePosition;
         }
@@ -2360,7 +2639,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         var activeModule = EventSystem.current?.currentInputModule;
-        DrawableSuitsDiagnostics.Info($"UiInputDiagnostics: currentEventSystem={EventSystem.current?.name ?? "null"}; activeModule={activeModule?.GetType().Name ?? "null"}; selected={EventSystem.current?.currentSelectedGameObject?.name ?? "null"}; mousePointer={pointer}; virtualCursor={_cursor}; raycastHits=[{hitNames}]; overPanel={IsCursorOverEditorPanel()}; overPreview={IsCursorOverPreviewViewport()}; previewRect={(_previewViewportRect != null ? _previewViewportRect.rect.ToString() : "null")}; previewCamera={DrawableSuitsPlugin.DescribeUnityObject(_previewCamera)}; renderTexture={_previewTexture?.width.ToString() ?? "null"}x{_previewTexture?.height.ToString() ?? "null"}");
+        DrawableSuitsDiagnostics.Info($"UiInputDiagnostics: currentEventSystem={EventSystem.current?.name ?? "null"}; activeModule={activeModule?.GetType().Name ?? "null"}; selected={EventSystem.current?.currentSelectedGameObject?.name ?? "null"}; pointer={pointer}; usingMousePointer={usingMousePointer}; virtualCursor={_cursor}; canvasScale={_editorCanvasObject?.GetComponent<Canvas>()?.scaleFactor.ToString("0.###") ?? "null"}; raycastHits=[{hitNames}]; overPanel={IsCursorOverEditorPanel()}; overPreview={IsCursorOverPreviewViewport()}; previewRect={(_previewViewportRect != null ? _previewViewportRect.rect.ToString() : "null")}; previewCamera={DrawableSuitsPlugin.DescribeUnityObject(_previewCamera)}; previewCameraEnabled={_previewCamera?.enabled.ToString() ?? "null"}; previewLayer={_previewLayer}; renderTexture={_previewTexture?.width.ToString() ?? "null"}x{_previewTexture?.height.ToString() ?? "null"}");
     }
 
     private static void LogEditorControlTree(Transform root)
