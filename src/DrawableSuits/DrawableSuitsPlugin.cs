@@ -17,6 +17,7 @@ public sealed class DrawableSuitsPlugin : BaseUnityPlugin
     internal static SuitEditorController Editor { get; private set; }
     internal static DrawableSuitsRuntimeHost RuntimeHost { get; private set; }
     internal static SuitSyncManager Sync { get; private set; }
+    internal static bool IsEditorOpen => Editor != null && Editor.IsOpenForDiagnostics;
 
     private Harmony _harmony;
 
