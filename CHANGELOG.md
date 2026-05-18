@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.3
+
+- Isolated the preview rig from the gameplay world by normalizing the baked suit mesh, rendering through a disabled manual preview camera, and avoiding active world-lighting side effects.
+- Added preview diagnostics for selected layer, camera enabled state, culling masks, normalized bounds, scale, and RenderTexture state.
+- Added Harmony input guards that block Lethal Company jump, look, interact, and item-interact callbacks while the DrawableSuits editor is open.
+- Removed gamepad `A` from Unity UI submit and routed it through DrawableSuits' virtual-cursor raycast so it clicks only the control under the visible cursor.
+- Replaced Unity `Slider` controls with DrawableSuits-owned slider controls to prevent stretched orange fill/handle blocks.
+- Disabled the in-game Windows file dialog import path; decals are now refreshed from `BepInEx/config/DrawableSuits/Decals` only.
+- Updated troubleshooting for white-world rendering, missing preview model, controller jump, cursor offset, and import crashes.
+
 ## 0.3.2
 
 - Moved the suit preview into an editor-owned camera and RenderTexture shown inside the UI, so the model is not hidden by the world camera, ship geometry, or darkness.
