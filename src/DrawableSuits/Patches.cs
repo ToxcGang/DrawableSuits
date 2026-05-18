@@ -1,6 +1,7 @@
 using System;
 using GameNetcodeStuff;
 using HarmonyLib;
+using UnityEngine;
 
 namespace DrawableSuits;
 
@@ -87,6 +88,9 @@ internal static class UnlockableSuitPatches
 [HarmonyPatch(typeof(PlayerControllerB))]
 internal static class PlayerControllerBPatches
 {
+    private static float _lastBlockedInputLogTime;
+    private static string _lastBlockedInputMethod;
+
     [HarmonyPostfix]
     [HarmonyPatch(nameof(PlayerControllerB.ConnectClientToPlayerObject))]
     private static void ConnectClientToPlayerObjectPostfix(PlayerControllerB __instance)
@@ -105,6 +109,34 @@ internal static class PlayerControllerBPatches
         RunPatch("PlayerControllerB.SpawnPlayerAnimation", () => DrawableSuitsPlugin.Registry?.ApplyToPlayer(__instance));
     }
 
+    [HarmonyPrefix]
+    [HarmonyPatch("Jump_performed")]
+    private static bool JumpPerformedPrefix(PlayerControllerB __instance)
+    {
+        return AllowGameplayInput("Jump_performed", __instance);
+    }
+
+    [HarmonyPrefix]
+    [HarmonyPatch("Interact_performed")]
+    private static bool InteractPerformedPrefix(PlayerControllerB __instance)
+    {
+        return AllowGameplayInput("Interact_performed", __instance);
+    }
+
+    [HarmonyPrefix]
+    [HarmonyPatch("QEItemInteract_performed")]
+    private static bool QeItemInteractPerformedPrefix(PlayerControllerB __instance)
+    {
+        return AllowGameplayInput("QEItemInteract_performed", __instance);
+    }
+
+    [HarmonyPrefix]
+    [HarmonyPatch("Look_performed")]
+    private static bool LookPerformedPrefix(PlayerControllerB __instance)
+    {
+        return AllowGameplayInput("Look_performed", __instance);
+    }
+
     private static void RunPatch(string context, Action action)
     {
         try
@@ -116,6 +148,25 @@ internal static class PlayerControllerBPatches
         {
             DrawableSuitsDiagnostics.Exception($"Patch failed: {context}", ex);
         }
+    }
+
+    private static bool AllowGameplayInput(string method, PlayerControllerB player)
+    {
+        if (!DrawableSuitsPlugin.IsEditorOpen)
+        {
+            return true;
+        }
+
+        var shouldLog = Time.unscaledTime - _lastBlockedInputLogTime > 0.75f
+            || !string.Equals(_lastBlockedInputMethod, method, StringComparison.Ordinal);
+        if (shouldLog)
+        {
+            _lastBlockedInputLogTime = Time.unscaledTime;
+            _lastBlockedInputMethod = method;
+            DrawableSuitsDiagnostics.Info($"Blocked PlayerControllerB.{method} while DrawableSuits editor is open. player={DrawableSuitsPlugin.DescribeUnityObject(player)}");
+        }
+
+        return false;
     }
 }
 
