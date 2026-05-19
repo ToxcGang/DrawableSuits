@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.4
+
+- Delayed pause-menu editor opening until after `QuickMenuManager.CloseQuickMenu()` has had a frame to release cursor/UI state.
+- Reapplied editor cursor unlock while open and logged cursor lock recovery when the game recaptures it.
+- Made mouse the default editor pointer even when a controller is connected; controller virtual cursor only takes over while actively used.
+- Avoided preview layer 31 and rebuilt preview rendering around a pivoted, centered mesh with a RenderTexture-targeted camera.
+- Kept the preview camera enabled while it targets the RenderTexture and rendered the preview every frame.
+- Added pointer-source, mouse position, gamepad stick, cursor-lock, and preview camera diagnostics.
+
 ## 0.3.3
 
 - Isolated the preview rig from the gameplay world by normalizing the baked suit mesh, rendering through a disabled manual preview camera, and avoiding active world-lighting side effects.
