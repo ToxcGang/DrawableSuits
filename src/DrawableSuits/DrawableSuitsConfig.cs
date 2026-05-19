@@ -31,6 +31,6 @@ internal sealed class DrawableSuitsConfig
         EnableNetworkSync = config.Bind("Multiplayer", "EnableNetworkSync", true, "Sync applied and saved suit designs to other DrawableSuits users.");
         MaxSyncBytes = config.Bind("Multiplayer", "MaxSyncBytes", 1048576, "Maximum PNG payload size allowed for multiplayer sync.");
         SyncChunkBytes = config.Bind("Multiplayer", "SyncChunkBytes", 48000, "Byte size for each Netcode custom-message texture chunk.");
-        EnableOsFileDialog = config.Bind("Decals", "EnableOsFileDialog", false, "Disabled/experimental. In-game OS file dialogs are ignored in 0.3.3; place PNG/JPG decals in the Decals folder and press Refresh Decals.");
+        EnableOsFileDialog = config.Bind("Decals", "EnableOsFileDialog", false, "Disabled/experimental. In-game OS file dialogs are ignored in 0.3.4; place PNG/JPG decals in the Decals folder and press Refresh Decals.");
     }
 }
