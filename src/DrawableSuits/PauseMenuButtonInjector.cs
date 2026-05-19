@@ -497,8 +497,15 @@ internal static class PauseMenuButtonInjector
 
         var runtimeReady = DrawableSuitsPlugin.EnsureRuntimeReady("PauseMenuButton.Click");
         var editorBefore = DrawableSuitsPlugin.DescribeUnityObject(DrawableSuitsPlugin.Editor);
-        var opened = DrawableSuitsPlugin.RequestOpenEditor("PauseMenuButton");
-        DrawableSuitsDiagnostics.Info($"Pause-menu open request complete. runtimeReady={runtimeReady}; editorBefore={editorBefore}; editorAfter={DrawableSuitsPlugin.DescribeUnityObject(DrawableSuitsPlugin.Editor)}; opened={opened}");
+        if (runtimeReady && DrawableSuitsPlugin.Editor != null)
+        {
+            DrawableSuitsPlugin.Editor.OpenFromPauseMenuNextFrame(quickMenu);
+            DrawableSuitsDiagnostics.Info($"Pause-menu delayed open scheduled. runtimeReady={runtimeReady}; editorBefore={editorBefore}; editorAfter={DrawableSuitsPlugin.DescribeUnityObject(DrawableSuitsPlugin.Editor)}; cursorVisible={Cursor.visible}; cursorLock={Cursor.lockState}");
+        }
+        else
+        {
+            DrawableSuitsDiagnostics.Warn($"Pause-menu open could not be scheduled. runtimeReady={runtimeReady}; editorBefore={editorBefore}; editorAfter={DrawableSuitsPlugin.DescribeUnityObject(DrawableSuitsPlugin.Editor)}");
+        }
     }
 
     private static string DescribeRows(List<MenuRow> rows)
