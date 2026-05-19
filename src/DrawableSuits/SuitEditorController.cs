@@ -81,6 +81,12 @@ internal sealed class SuitEditorController : MonoBehaviour
     private int _previewLayer = 2;
     private float _previewYaw;
     private float _previewScale = 0.9f;
+    private Texture2D _checkerTexture;
+    private bool _usingTexturePreview = true;
+    private string _previewMode = "Texture";
+    private string _lastPreviewAssignmentLog = string.Empty;
+    private Vector2 _lastPreviewUv;
+    private bool _lastPreviewUvAvailable;
 
     private Texture2D _loadedDecal;
 
@@ -272,6 +278,12 @@ internal sealed class SuitEditorController : MonoBehaviour
             _loadedDecal = null;
         }
 
+        if (_checkerTexture != null)
+        {
+            Destroy(_checkerTexture);
+            _checkerTexture = null;
+        }
+
         if (_editorCanvasObject != null)
         {
             Destroy(_editorCanvasObject);
@@ -310,9 +322,12 @@ internal sealed class SuitEditorController : MonoBehaviour
         UpdateCursorMarker();
         HandleVirtualCursorClick();
         HandleEditorShortcuts();
-        UpdatePreviewTransform();
         HandlePaintingInput();
-        RenderPreviewFrame();
+        if (DrawableSuitsPlugin.ModConfig.EnableExperimentalModelPreview.Value && !_usingTexturePreview)
+        {
+            UpdatePreviewTransform();
+            RenderPreviewFrame();
+        }
         LogUiInputDiagnosticsIfNeeded();
     }
 
@@ -467,11 +482,12 @@ internal sealed class SuitEditorController : MonoBehaviour
         _hasPlayerModel = player?.thisPlayerModel != null;
         _hasCamera = Camera.main != null;
         _hasPreviewCollider = _previewCollider != null;
-        _hasEditableSuit = _selectedSuitId >= 0 && DrawableSuitsPlugin.Registry.GetOrCreateState(_selectedSuitId) != null;
-        _canPaint = _hasEditableSuit && _hasPlayerModel && _hasPreviewCollider && _previewCamera != null;
+        var editableTexture = _selectedSuitId >= 0 ? DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId) : null;
+        _hasEditableSuit = editableTexture != null;
+        _canPaint = editableTexture != null;
 
         SetStatus(BuildReadinessStatus(), false);
-        DrawableSuitsDiagnostics.Info($"Readiness[{context}]: selectedSuitId={_selectedSuitId}; suitCount={_knownSuitCount}; hasEditableSuit={_hasEditableSuit}; hasLocalPlayer={_hasLocalPlayer}; hasPlayerModel={_hasPlayerModel}; hasCamera={_hasCamera}; hasPreviewCollider={_hasPreviewCollider}; canPaint={_canPaint}; status='{_statusMessage}'");
+        DrawableSuitsDiagnostics.Info($"Readiness[{context}]: selectedSuitId={_selectedSuitId}; suitCount={_knownSuitCount}; hasEditableSuit={_hasEditableSuit}; editableTexture={DescribeEditableTexture()}; hasLocalPlayer={_hasLocalPlayer}; hasPlayerModel={_hasPlayerModel}; hasCamera={_hasCamera}; previewMode={_previewMode}; hasPreviewCollider={_hasPreviewCollider}; canPaint={_canPaint}; status='{_statusMessage}'");
     }
 
     private string BuildReadinessStatus()
@@ -489,24 +505,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             missing.Add("selected suit has no editable material/texture");
         }
-        if (!_hasLocalPlayer)
-        {
-            missing.Add("local player not found");
-        }
-        if (!_hasPlayerModel)
-        {
-            missing.Add("local player model not loaded");
-        }
-        if (_hasEditableSuit && _hasPlayerModel && !_hasPreviewCollider)
-        {
-            missing.Add("preview collider not built yet");
-        }
-        if (_hasPreviewCollider && _previewCamera == null)
-        {
-            missing.Add("preview camera not built yet");
-        }
 
-        return missing.Count == 0 ? "Ready." : "Diagnostics: " + string.Join("; ", missing);
+        return missing.Count == 0 ? $"Ready. Preview: {_previewMode}." : "Diagnostics: " + string.Join("; ", missing);
     }
 
     private bool EnsureEditorCanvas(out string failureReason)
@@ -623,13 +623,25 @@ internal sealed class SuitEditorController : MonoBehaviour
         _colorSwatch = CreateAnchoredColorSwatch(panel.transform, new Rect(leftX + 296f, 540f, 44f, 92f));
 
         CreateAnchoredText(panel.transform, "PreviewHeader", "Preview", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(previewX, 54f, previewW, 26f), Color.white);
-        var preview = CreateUiObject("PreviewViewport", panel.transform, typeof(RectTransform), typeof(RawImage));
+        var preview = CreateUiObject("PreviewViewport", panel.transform, typeof(RectTransform), typeof(Image));
         _previewViewportRect = preview.GetComponent<RectTransform>();
         SetAnchoredRect(_previewViewportRect, new Rect(previewX, 86f, previewW, 540f));
-        _previewImage = preview.GetComponent<RawImage>();
-        _previewImage.color = new Color(0.04f, 0.045f, 0.05f, 1f);
+        var previewBackground = preview.GetComponent<Image>();
+        previewBackground.color = new Color(0.025f, 0.028f, 0.032f, 1f);
+        previewBackground.raycastTarget = true;
+
+        var previewImageObject = CreateUiObject("TexturePreviewImage", preview.transform, typeof(RectTransform), typeof(RawImage));
+        var previewImageRect = previewImageObject.GetComponent<RectTransform>();
+        previewImageRect.anchorMin = Vector2.zero;
+        previewImageRect.anchorMax = Vector2.one;
+        previewImageRect.offsetMin = Vector2.zero;
+        previewImageRect.offsetMax = Vector2.zero;
+        _previewImage = previewImageObject.GetComponent<RawImage>();
+        _previewImage.texture = EnsureCheckerTexture();
+        _previewImage.uvRect = new Rect(0f, 0f, 10f, 10f);
+        _previewImage.color = Color.white;
         _previewImage.raycastTarget = true;
-        CreateAnchoredText(panel.transform, "PreviewHelp", "Paint/erase/decal only inside this preview. Right mouse or bumpers rotate; Ctrl+wheel zooms.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(previewX, 638f, previewW, 58f), new Color(0.82f, 0.86f, 0.9f, 1f));
+        CreateAnchoredText(panel.transform, "PreviewHelp", "Texture preview: paint/erase/decal inside this UV layout. Mouse wheel changes brush size.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(previewX, 638f, previewW, 58f), new Color(0.82f, 0.86f, 0.9f, 1f));
 
         CreateAnchoredText(panel.transform, "DecalHeader", "Decal", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 54f, rightW, 24f), Color.white);
         _decalSizeLabel = CreateAnchoredText(panel.transform, "DecalSizeLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(rightX, 84f, 116f, 24f), Color.white);
@@ -1531,6 +1543,11 @@ internal sealed class SuitEditorController : MonoBehaviour
             _fallbackDiagnosticsLabel.text = "DrawableSuits diagnostics\n" + BuildDiagnosticsSummary();
         }
 
+        if (_usingTexturePreview || !DrawableSuitsPlugin.ModConfig.EnableExperimentalModelPreview.Value)
+        {
+            UseTexturePreview("UpdateUiState", false);
+        }
+
         var hasEditableTexture = _selectedSuitId >= 0 && DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId) != null;
         SetInteractable(_paintButton, _canPaint);
         SetInteractable(_eraseButton, _canPaint);
@@ -1556,9 +1573,13 @@ internal sealed class SuitEditorController : MonoBehaviour
             $"Local player found: {_hasLocalPlayer}",
             $"Player model found: {_hasPlayerModel}",
             $"Main camera found: {_hasCamera} ({(camera != null ? camera.name : "null")})",
+            $"Preview mode: {_previewMode}",
+            $"Editable texture: {DescribeEditableTexture()}",
+            $"Preview UI texture: {DescribePreviewImageTexture()}",
+            $"Experimental model preview: {DrawableSuitsPlugin.ModConfig.EnableExperimentalModelPreview.Value}",
             $"Preview camera found: {_previewCamera != null}",
             $"Preview collider found: {_hasPreviewCollider}",
-            $"Can paint/apply preview: {_canPaint}",
+            $"Can paint/apply texture: {_canPaint}",
             $"Canvas active: {(_editorCanvasObject != null && _editorCanvasObject.activeSelf)}",
             "Diagnostics log: BepInEx/config/DrawableSuits/Logs/diagnostics.log"
         });
@@ -2004,10 +2025,11 @@ internal sealed class SuitEditorController : MonoBehaviour
         return _previewViewportRect != null && RectTransformUtility.RectangleContainsScreenPoint(_previewViewportRect, _cursor, null);
     }
 
-    private bool TryGetPreviewRay(Vector2 screenPosition, out Ray ray)
+    private bool TryGetTexturePreviewUv(Vector2 screenPosition, out Vector2 uv)
     {
-        ray = default;
-        if (_previewCamera == null || _previewViewportRect == null)
+        uv = default;
+        _lastPreviewUvAvailable = false;
+        if (_previewViewportRect == null)
         {
             return false;
         }
@@ -2023,33 +2045,34 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
-        var viewportX = Mathf.Clamp01((localPoint.x - rect.xMin) / rect.width);
-        var viewportY = Mathf.Clamp01((localPoint.y - rect.yMin) / rect.height);
-        ray = _previewCamera.ViewportPointToRay(new Vector3(viewportX, viewportY, 0f));
+        var x = (localPoint.x - rect.xMin) / rect.width;
+        var y = (localPoint.y - rect.yMin) / rect.height;
+        if (x < 0f || x > 1f || y < 0f || y > 1f)
+        {
+            return false;
+        }
+
+        uv = new Vector2(Mathf.Clamp01(x), Mathf.Clamp01(y));
+        _lastPreviewUv = uv;
+        _lastPreviewUvAvailable = true;
         return true;
     }
 
     private void PaintAtCursor()
     {
         var texture = DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId);
-        if (texture == null || _previewCollider == null || _previewCamera == null)
+        if (texture == null)
         {
             RefreshEditorReadiness("paint preflight failed");
             UpdateUiState();
             return;
         }
 
-        if (!TryGetPreviewRay(_cursor, out var ray))
+        if (!TryGetTexturePreviewUv(_cursor, out var uv))
         {
             return;
         }
 
-        if (!_previewCollider.Raycast(ray, out var hit, 20f))
-        {
-            return;
-        }
-
-        var uv = hit.textureCoord;
         switch (_tool)
         {
             case EditorTool.Paint:
@@ -2065,7 +2088,15 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         texture.Apply(false, false);
+        if (_previewMaterial != null)
+        {
+            _previewMaterial.mainTexture = texture;
+        }
         DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, false);
+        if (_usingTexturePreview || !DrawableSuitsPlugin.ModConfig.EnableExperimentalModelPreview.Value)
+        {
+            UseTexturePreview("PaintAtCursor", false);
+        }
     }
 
     private void PaintCircle(Texture2D texture, Vector2 uv, Color color, float radius, float opacity)
@@ -2372,12 +2403,28 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void TryRebuildPreviewForCurrentReadiness(string context)
     {
-        if (!_hasEditableSuit || !_hasPlayerModel)
+        var editableTexture = _selectedSuitId >= 0 ? DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId) : null;
+        if (editableTexture == null)
         {
-            DrawableSuitsDiagnostics.Warn($"Skipping preview rebuild [{context}] because dependencies are missing. hasEditableSuit={_hasEditableSuit}; hasPlayerModel={_hasPlayerModel}");
+            DrawableSuitsDiagnostics.Warn($"Skipping preview setup [{context}] because no editable texture is available. hasEditableSuit={_hasEditableSuit}; selectedSuitId={_selectedSuitId}");
             DestroyPreview();
-            _hasPreviewCollider = false;
+            UseTexturePreview(context, true);
             _canPaint = false;
+            return;
+        }
+
+        if (!DrawableSuitsPlugin.ModConfig.EnableExperimentalModelPreview.Value)
+        {
+            DestroyPreview();
+            UseTexturePreview(context, true);
+            return;
+        }
+
+        if (!_hasPlayerModel)
+        {
+            DrawableSuitsDiagnostics.Warn($"Experimental model preview skipped [{context}] because local player model is missing; using texture preview instead.");
+            DestroyPreview();
+            UseTexturePreview(context, true);
             return;
         }
 
@@ -2387,12 +2434,15 @@ internal sealed class SuitEditorController : MonoBehaviour
     private void RebuildPreview()
     {
         DestroyPreview();
+        _usingTexturePreview = false;
+        _previewMode = "ModelExperimentalPending";
         var player = StartOfRound.Instance?.localPlayerController;
         var source = player?.thisPlayerModel;
         if (source == null)
         {
-            SetStatus("Diagnostics: local player model not loaded; editor shell remains visible.", true);
-            DrawableSuitsDiagnostics.Warn("RebuildPreview aborted: local player model is null.");
+            SetStatus("Diagnostics: local player model not loaded; using texture preview.", true);
+            DrawableSuitsDiagnostics.Warn("RebuildPreview aborted: local player model is null; using texture preview.");
+            UseTexturePreview("model source missing", true);
             return;
         }
 
@@ -2467,7 +2517,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         _hasPreviewCollider = _previewCollider != null;
-        _canPaint = _hasEditableSuit && _hasPlayerModel && _hasPreviewCollider && _previewCamera != null;
+        _canPaint = _selectedSuitId >= 0 && DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId) != null;
         if (string.IsNullOrWhiteSpace(_statusMessage) || _statusMessage.StartsWith("Player model unavailable"))
         {
             SetStatus(string.Empty, false);
@@ -2475,6 +2525,16 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         UpdatePreviewTransform();
         RenderPreviewFrame();
+        if (IsPreviewRenderTextureBlack())
+        {
+            DrawableSuitsDiagnostics.Warn("Experimental model preview rendered a black center sample; falling back to deterministic texture preview.");
+            DestroyPreview();
+            UseTexturePreview("black RenderTexture fallback", true);
+            return;
+        }
+
+        _usingTexturePreview = false;
+        _previewMode = "ModelExperimental";
         DrawableSuitsDiagnostics.Info($"RebuildPreview complete. meshVertices={_previewMesh.vertexCount}; bakedBounds={bakedBounds}; normalizedBounds={normalizedBounds}; finalMeshBounds={_previewMesh.bounds}; previewLayer={_previewLayer}; mainCameraMask={Camera.main?.cullingMask.ToString() ?? "null"}; cameraEnabled={_previewCamera.enabled}; cameraMask={_previewCamera.cullingMask}; collider={_previewCollider != null}; material={_previewRenderer.sharedMaterial?.name ?? "null"}; shader={_previewRenderer.sharedMaterial?.shader?.name ?? "null"}; renderTexture={_previewTexture?.width}x{_previewTexture?.height}; rtCreated={_previewTexture?.IsCreated().ToString() ?? "null"}; previewCamera={DrawableSuitsPlugin.DescribeUnityObject(_previewCamera)}; viewport={(_previewViewportRect != null ? _previewViewportRect.rect.ToString() : "null")}");
     }
 
@@ -2597,7 +2657,126 @@ internal sealed class SuitEditorController : MonoBehaviour
         if (_previewImage != null)
         {
             _previewImage.texture = _previewTexture;
+            _previewImage.uvRect = new Rect(0f, 0f, 1f, 1f);
             _previewImage.color = Color.white;
+        }
+    }
+
+    private Texture2D EnsureCheckerTexture()
+    {
+        if (_checkerTexture != null)
+        {
+            return _checkerTexture;
+        }
+
+        _checkerTexture = new Texture2D(32, 32, TextureFormat.RGBA32, false)
+        {
+            name = "DrawableSuitsCheckerTexture",
+            filterMode = FilterMode.Point,
+            wrapMode = TextureWrapMode.Repeat,
+            hideFlags = HideFlags.HideAndDontSave
+        };
+
+        var dark = new Color32(22, 25, 29, 255);
+        var light = new Color32(42, 46, 52, 255);
+        for (var y = 0; y < _checkerTexture.height; y++)
+        {
+            for (var x = 0; x < _checkerTexture.width; x++)
+            {
+                _checkerTexture.SetPixel(x, y, ((x / 8 + y / 8) % 2) == 0 ? dark : light);
+            }
+        }
+
+        _checkerTexture.Apply(false, true);
+        return _checkerTexture;
+    }
+
+    private void UseTexturePreview(string context, bool forceLog)
+    {
+        var texture = _selectedSuitId >= 0 ? DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId) : null;
+        var assignedTexture = texture != null ? (Texture)texture : EnsureCheckerTexture();
+        _usingTexturePreview = true;
+        _previewMode = texture != null ? "Texture" : "TextureFallbackNoEditableTexture";
+        _canPaint = texture != null;
+
+        if (_previewImage != null)
+        {
+            _previewImage.texture = assignedTexture;
+            _previewImage.uvRect = texture != null ? new Rect(0f, 0f, 1f, 1f) : new Rect(0f, 0f, 10f, 10f);
+            _previewImage.color = Color.white;
+            _previewImage.raycastTarget = true;
+        }
+
+        var assignment = $"{_previewMode}; assigned={assignedTexture?.name ?? "null"}; editable={DescribeEditableTexture()}; rawImage={DescribePreviewImageTexture()}";
+        if (forceLog || !string.Equals(_lastPreviewAssignmentLog, assignment, StringComparison.Ordinal))
+        {
+            DrawableSuitsDiagnostics.Info($"TexturePreview[{context}]: {assignment}; viewport={(_previewViewportRect != null ? _previewViewportRect.rect.ToString() : "null")}");
+            _lastPreviewAssignmentLog = assignment;
+        }
+    }
+
+    private string DescribeEditableTexture()
+    {
+        var texture = _selectedSuitId >= 0 ? DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId) : null;
+        if (texture == null)
+        {
+            return "null";
+        }
+
+        return $"{texture.name} {texture.width}x{texture.height} {texture.format}";
+    }
+
+    private string DescribePreviewImageTexture()
+    {
+        var texture = _previewImage != null ? _previewImage.texture : null;
+        return texture != null ? $"{texture.name} {texture.width}x{texture.height}" : "null";
+    }
+
+    private bool IsPreviewRenderTextureBlack()
+    {
+        if (_previewTexture == null || !_previewTexture.IsCreated())
+        {
+            return true;
+        }
+
+        var width = Mathf.Min(96, _previewTexture.width);
+        var height = Mathf.Min(96, _previewTexture.height);
+        var x = Mathf.Max(0, (_previewTexture.width - width) / 2);
+        var y = Mathf.Max(0, (_previewTexture.height - height) / 2);
+        var previousActive = RenderTexture.active;
+        Texture2D sample = null;
+        try
+        {
+            RenderTexture.active = _previewTexture;
+            sample = new Texture2D(width, height, TextureFormat.RGBA32, false);
+            sample.ReadPixels(new Rect(x, y, width, height), 0, 0, false);
+            sample.Apply(false, false);
+            var pixels = sample.GetPixels32();
+            for (var i = 0; i < pixels.Length; i++)
+            {
+                var pixel = pixels[i];
+                if (pixel.a > 8 && pixel.r + pixel.g + pixel.b > 28)
+                {
+                    DrawableSuitsDiagnostics.Info($"Experimental model preview readback found non-black pixel at index={i}; color=({pixel.r},{pixel.g},{pixel.b},{pixel.a}).");
+                    return false;
+                }
+            }
+
+            DrawableSuitsDiagnostics.Warn($"Experimental model preview readback was black. sampleRect=({x},{y},{width},{height}); renderTexture={_previewTexture.width}x{_previewTexture.height}; camera={DrawableSuitsPlugin.DescribeUnityObject(_previewCamera)}; layer={_previewLayer}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            DrawableSuitsDiagnostics.Exception("Experimental model preview black-frame readback failed", ex);
+            return false;
+        }
+        finally
+        {
+            RenderTexture.active = previousActive;
+            if (sample != null)
+            {
+                Destroy(sample);
+            }
         }
     }
 
@@ -2742,10 +2921,11 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         if (_previewTexture != null)
         {
-            if (_previewImage != null)
+            if (_previewImage != null && ReferenceEquals(_previewImage.texture, _previewTexture))
             {
-                _previewImage.texture = null;
-                _previewImage.color = new Color(0.04f, 0.045f, 0.05f, 1f);
+                _previewImage.texture = EnsureCheckerTexture();
+                _previewImage.uvRect = new Rect(0f, 0f, 10f, 10f);
+                _previewImage.color = Color.white;
             }
             _previewTexture.Release();
             Destroy(_previewTexture);
@@ -2757,7 +2937,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         _previewCamera = null;
         _previewLight = null;
         _hasPreviewCollider = false;
-        _canPaint = false;
+        _canPaint = DrawableSuitsPlugin.Registry != null && _selectedSuitId >= 0 && DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId) != null;
     }
 
     private void LogCanvasState(string context)
@@ -2808,7 +2988,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         var activeModule = EventSystem.current?.currentInputModule;
-        DrawableSuitsDiagnostics.Info($"UiInputDiagnostics: currentEventSystem={EventSystem.current?.name ?? "null"}; activeModule={activeModule?.GetType().Name ?? "null"}; selected={EventSystem.current?.currentSelectedGameObject?.name ?? "null"}; pointerSource={_pointerSource}; pointer={pointer}; usingMousePointer={usingMousePointer}; mouseAvailable={_mousePositionAvailable}; mousePosition={_lastMousePosition}; gamepadStick={_lastGamepadStick}; virtualCursor={_cursor}; cursorVisible={Cursor.visible}; cursorLock={Cursor.lockState}; canvasScale={_editorCanvasObject?.GetComponent<Canvas>()?.scaleFactor.ToString("0.###") ?? "null"}; raycastHits=[{hitNames}]; overPanel={IsCursorOverEditorPanel()}; overPreview={IsCursorOverPreviewViewport()}; previewRect={(_previewViewportRect != null ? _previewViewportRect.rect.ToString() : "null")}; previewCamera={DrawableSuitsPlugin.DescribeUnityObject(_previewCamera)}; previewCameraEnabled={_previewCamera?.enabled.ToString() ?? "null"}; previewLayer={_previewLayer}; renderTexture={_previewTexture?.width.ToString() ?? "null"}x{_previewTexture?.height.ToString() ?? "null"}");
+        var previewUvSummary = TryGetTexturePreviewUv(pointer, out var previewUv) ? previewUv.ToString() : "none";
+        DrawableSuitsDiagnostics.Info($"UiInputDiagnostics: currentEventSystem={EventSystem.current?.name ?? "null"}; activeModule={activeModule?.GetType().Name ?? "null"}; selected={EventSystem.current?.currentSelectedGameObject?.name ?? "null"}; pointerSource={_pointerSource}; pointer={pointer}; usingMousePointer={usingMousePointer}; mouseAvailable={_mousePositionAvailable}; mousePosition={_lastMousePosition}; gamepadStick={_lastGamepadStick}; virtualCursor={_cursor}; cursorVisible={Cursor.visible}; cursorLock={Cursor.lockState}; canvasScale={_editorCanvasObject?.GetComponent<Canvas>()?.scaleFactor.ToString("0.###") ?? "null"}; raycastHits=[{hitNames}]; overPanel={IsCursorOverEditorPanel()}; overPreview={IsCursorOverPreviewViewport()}; previewUv={previewUvSummary}; lastPreviewUv={(_lastPreviewUvAvailable ? _lastPreviewUv.ToString() : "none")}; previewMode={_previewMode}; editableTexture={DescribeEditableTexture()}; previewImageTexture={DescribePreviewImageTexture()}; previewRect={(_previewViewportRect != null ? _previewViewportRect.rect.ToString() : "null")}; previewCamera={DrawableSuitsPlugin.DescribeUnityObject(_previewCamera)}; previewCameraEnabled={_previewCamera?.enabled.ToString() ?? "null"}; previewLayer={_previewLayer}; renderTexture={_previewTexture?.width.ToString() ?? "null"}x{_previewTexture?.height.ToString() ?? "null"}");
     }
 
     private static void LogEditorControlTree(Transform root)
