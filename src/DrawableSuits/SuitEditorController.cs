@@ -70,6 +70,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private GameObject _previewRoot;
     private GameObject _previewRigRoot;
+    private GameObject _previewPivotRoot;
     private Camera _previewCamera;
     private Light _previewLight;
     private RenderTexture _previewTexture;
@@ -123,6 +124,11 @@ internal sealed class SuitEditorController : MonoBehaviour
     private bool _virtualPointerDown;
     private GameObject _virtualPointerPressTarget;
     private DrawableSliderControl _virtualPointerSlider;
+    private string _pointerSource = "Mouse";
+    private Vector2 _lastMousePosition;
+    private Vector2 _lastGamepadStick;
+    private bool _mousePositionAvailable;
+    private bool _usingGamepadPointer;
     private float _lastUiDiagnosticsTime;
     private readonly List<EventSystemRestoreState> _eventSystemRestoreStates = new();
 
@@ -299,12 +305,14 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         ReapplyPlayerInputLock();
+        EnsureCursorUnlockedWhileOpen();
         HandleControllerCursor();
         UpdateCursorMarker();
         HandleVirtualCursorClick();
         HandleEditorShortcuts();
         UpdatePreviewTransform();
         HandlePaintingInput();
+        RenderPreviewFrame();
         LogUiInputDiagnosticsIfNeeded();
     }
 
@@ -336,7 +344,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         CaptureAndLockPlayerInput();
         _isOpen = true;
         _editorCanvasObject.SetActive(true);
-        _cursor = new Vector2(Screen.width * 0.5f, Screen.height * 0.5f);
+        InitializePointerForOpen(source);
         RefreshFileLists();
         TryRebuildPreviewForCurrentReadiness(source);
         RefreshEditorReadiness($"after preview ({source})");
@@ -420,8 +428,9 @@ internal sealed class SuitEditorController : MonoBehaviour
     private IEnumerator OpenFromPauseMenuNextFrameRoutine(QuickMenuManager quickMenu)
     {
         yield return null;
-        DrawableSuitsDiagnostics.Info($"Pause-menu next-frame open running. quickMenuNull={quickMenu == null}; menuOpen={quickMenu?.isMenuOpen}; cursorVisible={Cursor.visible}; cursorLock={Cursor.lockState}");
-        OpenEditor("PauseMenuButton");
+        DrawableSuitsDiagnostics.Info($"Pause-menu delayed open before OpenEditor. quickMenuNull={quickMenu == null}; menuOpen={quickMenu?.isMenuOpen}; cursorVisible={Cursor.visible}; cursorLock={Cursor.lockState}; eventSystem={EventSystem.current?.name ?? "null"}; inputModule={EventSystem.current?.currentInputModule?.GetType().Name ?? "null"}");
+        var opened = OpenEditor("PauseMenuButton");
+        DrawableSuitsDiagnostics.Info($"Pause-menu delayed open after OpenEditor. opened={opened}; isOpen={_isOpen}; canvasActive={CanvasActiveForDiagnostics}; cursorVisible={Cursor.visible}; cursorLock={Cursor.lockState}; eventSystem={EventSystem.current?.name ?? "null"}; inputModule={EventSystem.current?.currentInputModule?.GetType().Name ?? "null"}");
     }
 
     private static EditorCloseReason GetCloseReasonFromSource(string source)
@@ -1299,6 +1308,30 @@ internal sealed class SuitEditorController : MonoBehaviour
         module.cancel = InputActionReference.Create(cancel);
     }
 
+    private void InitializePointerForOpen(string source)
+    {
+        _mousePositionAvailable = DrawableSuitsInput.TryGetMousePosition(out _lastMousePosition);
+        _lastGamepadStick = Gamepad.current != null ? Gamepad.current.leftStick.ReadValue() : Vector2.zero;
+        _usingGamepadPointer = false;
+        _pointerSource = "Mouse";
+        _cursor = _mousePositionAvailable ? _lastMousePosition : new Vector2(Screen.width * 0.5f, Screen.height * 0.5f);
+        DrawableSuitsDiagnostics.Info($"Pointer initialized for editor open. source={source}; pointerSource={_pointerSource}; mouseAvailable={_mousePositionAvailable}; mouse={_lastMousePosition}; gamepadStick={_lastGamepadStick}; cursor={_cursor}; cursorVisible={Cursor.visible}; cursorLock={Cursor.lockState}");
+    }
+
+    private void EnsureCursorUnlockedWhileOpen()
+    {
+        if (!_isOpen)
+        {
+            return;
+        }
+
+        if (!Cursor.visible || Cursor.lockState != CursorLockMode.None)
+        {
+            DrawableSuitsDiagnostics.Warn($"Editor cursor was recaptured while open; unlocking again. visibleBefore={Cursor.visible}; lockBefore={Cursor.lockState}; pointerSource={_pointerSource}");
+            Cursor.visible = true;
+            Cursor.lockState = CursorLockMode.None;
+        }
+    }
     private void CaptureAndUnlockCursor()
     {
         if (!_cursorStateCaptured)
@@ -1680,23 +1713,45 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void HandleControllerCursor()
     {
-        var gamepad = Gamepad.current;
+        _mousePositionAvailable = DrawableSuitsInput.TryGetMousePosition(out _lastMousePosition);
         var mouseUsed = DrawableSuitsInput.WasMouseUsedThisFrame();
-        if (gamepad == null || mouseUsed)
+        var gamepad = Gamepad.current;
+        _lastGamepadStick = gamepad != null ? gamepad.leftStick.ReadValue() : Vector2.zero;
+        var gamepadMoved = gamepad != null && _lastGamepadStick.sqrMagnitude > 0.0324f;
+        var gamepadActivelyPointing = gamepad != null
+            && (gamepadMoved
+                || gamepad.buttonSouth.isPressed
+                || gamepad.rightTrigger.ReadValue() > 0.2f
+                || gamepad.leftShoulder.isPressed
+                || gamepad.rightShoulder.isPressed);
+
+        if (mouseUsed)
         {
-            if (DrawableSuitsInput.TryGetMousePosition(out var mousePosition))
-            {
-                _cursor = mousePosition;
-            }
-            if (gamepad == null || mouseUsed)
-            {
-                return;
-            }
+            _usingGamepadPointer = false;
+        }
+        else if (gamepadActivelyPointing)
+        {
+            _usingGamepadPointer = true;
+        }
+        else if (gamepad == null)
+        {
+            _usingGamepadPointer = false;
         }
 
-        var delta = gamepad.leftStick.ReadValue() * DrawableSuitsPlugin.ModConfig.ControllerCursorSpeed.Value * Time.unscaledDeltaTime;
-        _cursor.x = Mathf.Clamp(_cursor.x + delta.x, 0f, Screen.width);
-        _cursor.y = Mathf.Clamp(_cursor.y + delta.y, 0f, Screen.height);
+        if (_usingGamepadPointer && gamepad != null)
+        {
+            _pointerSource = "Gamepad";
+            var delta = _lastGamepadStick * DrawableSuitsPlugin.ModConfig.ControllerCursorSpeed.Value * Time.unscaledDeltaTime;
+            _cursor.x = Mathf.Clamp(_cursor.x + delta.x, 0f, Screen.width);
+            _cursor.y = Mathf.Clamp(_cursor.y + delta.y, 0f, Screen.height);
+            return;
+        }
+
+        _pointerSource = "Mouse";
+        if (_mousePositionAvailable)
+        {
+            _cursor = _lastMousePosition;
+        }
     }
 
     private void HandleVirtualCursorClick()
@@ -2344,7 +2399,13 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawableSuitsDiagnostics.Info($"RebuildPreview baking mesh. selectedSuitId={_selectedSuitId}; sourceRenderer={source.name}; verticesBeforeBake={source.sharedMesh?.vertexCount ?? 0}");
         _previewMesh = new Mesh { name = "DrawableSuitsPreviewMesh" };
         source.BakeMesh(_previewMesh, true);
-        var bakedBounds = NormalizePreviewMesh(_previewMesh);
+        if (_previewMesh.vertexCount == 0)
+        {
+            DrawableSuitsDiagnostics.Warn("Preview BakeMesh produced zero vertices; using diagnostic fallback preview mesh.");
+            Destroy(_previewMesh);
+            _previewMesh = CreateFallbackPreviewMesh();
+        }
+        var bakedBounds = NormalizePreviewMesh(_previewMesh, out var normalizedBounds);
         _previewLayer = SelectPreviewLayer();
 
         EnsurePreviewTexture();
@@ -2352,9 +2413,20 @@ internal sealed class SuitEditorController : MonoBehaviour
         _previewRigRoot.hideFlags = HideFlags.HideAndDontSave;
         _previewRigRoot.transform.position = new Vector3(0f, -10000f, 0f);
 
+        _previewPivotRoot = new GameObject("DrawableSuitsPreviewMeshPivot");
+        _previewPivotRoot.hideFlags = HideFlags.HideAndDontSave;
+        _previewPivotRoot.transform.SetParent(_previewRigRoot.transform, false);
+        _previewPivotRoot.transform.localPosition = Vector3.zero;
+        _previewPivotRoot.transform.localRotation = Quaternion.identity;
+        _previewPivotRoot.transform.localScale = Vector3.one;
+        SetLayerRecursively(_previewPivotRoot, _previewLayer);
+
         _previewRoot = new GameObject("DrawableSuitsSuitPreviewMesh");
         _previewRoot.hideFlags = HideFlags.HideAndDontSave;
-        _previewRoot.transform.SetParent(_previewRigRoot.transform, false);
+        _previewRoot.transform.SetParent(_previewPivotRoot.transform, false);
+        _previewRoot.transform.localPosition = Vector3.zero;
+        _previewRoot.transform.localRotation = Quaternion.identity;
+        _previewRoot.transform.localScale = Vector3.one;
         SetLayerRecursively(_previewRoot, _previewLayer);
         _previewRoot.AddComponent<MeshFilter>().sharedMesh = _previewMesh;
         _previewRenderer = _previewRoot.AddComponent<MeshRenderer>();
@@ -2370,11 +2442,11 @@ internal sealed class SuitEditorController : MonoBehaviour
         cameraObject.transform.localRotation = Quaternion.identity;
         SetLayerRecursively(cameraObject, _previewLayer);
         _previewCamera = cameraObject.AddComponent<Camera>();
-        _previewCamera.enabled = false;
+        _previewCamera.enabled = true;
         _previewCamera.clearFlags = CameraClearFlags.SolidColor;
         _previewCamera.backgroundColor = new Color(0.018f, 0.02f, 0.024f, 1f);
         _previewCamera.orthographic = true;
-        _previewCamera.orthographicSize = 1.25f;
+        _previewCamera.orthographicSize = CalculatePreviewOrthographicSize(_previewMesh.bounds);
         _previewCamera.nearClipPlane = 0.01f;
         _previewCamera.farClipPlane = 20f;
         _previewCamera.cullingMask = 1 << _previewLayer;
@@ -2402,20 +2474,47 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         UpdatePreviewTransform();
-        _previewCamera.Render();
-        DrawableSuitsDiagnostics.Info($"RebuildPreview complete. meshVertices={_previewMesh.vertexCount}; bakedBounds={bakedBounds}; normalizedBounds={_previewMesh.bounds}; previewLayer={_previewLayer}; mainCameraMask={Camera.main?.cullingMask.ToString() ?? "null"}; cameraEnabled={_previewCamera.enabled}; cameraMask={_previewCamera.cullingMask}; collider={_previewCollider != null}; material={_previewRenderer.sharedMaterial?.name ?? "null"}; shader={_previewRenderer.sharedMaterial?.shader?.name ?? "null"}; renderTexture={_previewTexture?.width}x{_previewTexture?.height}; rtCreated={_previewTexture?.IsCreated().ToString() ?? "null"}; previewCamera={DrawableSuitsPlugin.DescribeUnityObject(_previewCamera)}; viewport={(_previewViewportRect != null ? _previewViewportRect.rect.ToString() : "null")}");
+        RenderPreviewFrame();
+        DrawableSuitsDiagnostics.Info($"RebuildPreview complete. meshVertices={_previewMesh.vertexCount}; bakedBounds={bakedBounds}; normalizedBounds={normalizedBounds}; finalMeshBounds={_previewMesh.bounds}; previewLayer={_previewLayer}; mainCameraMask={Camera.main?.cullingMask.ToString() ?? "null"}; cameraEnabled={_previewCamera.enabled}; cameraMask={_previewCamera.cullingMask}; collider={_previewCollider != null}; material={_previewRenderer.sharedMaterial?.name ?? "null"}; shader={_previewRenderer.sharedMaterial?.shader?.name ?? "null"}; renderTexture={_previewTexture?.width}x{_previewTexture?.height}; rtCreated={_previewTexture?.IsCreated().ToString() ?? "null"}; previewCamera={DrawableSuitsPlugin.DescribeUnityObject(_previewCamera)}; viewport={(_previewViewportRect != null ? _previewViewportRect.rect.ToString() : "null")}");
     }
 
-    private static Bounds NormalizePreviewMesh(Mesh mesh)
+    private static Mesh CreateFallbackPreviewMesh()
     {
+        var mesh = new Mesh { name = "DrawableSuitsFallbackPreviewMesh" };
+        mesh.vertices = new[]
+        {
+            new Vector3(-0.45f, -0.75f, -0.12f), new Vector3(0.45f, -0.75f, -0.12f), new Vector3(0.45f, 0.75f, -0.12f), new Vector3(-0.45f, 0.75f, -0.12f),
+            new Vector3(-0.45f, -0.75f, 0.12f), new Vector3(0.45f, -0.75f, 0.12f), new Vector3(0.45f, 0.75f, 0.12f), new Vector3(-0.45f, 0.75f, 0.12f)
+        };
+        mesh.triangles = new[]
+        {
+            0, 2, 1, 0, 3, 2,
+            4, 5, 6, 4, 6, 7,
+            0, 1, 5, 0, 5, 4,
+            1, 2, 6, 1, 6, 5,
+            2, 3, 7, 2, 7, 6,
+            3, 0, 4, 3, 4, 7
+        };
+        mesh.uv = new[]
+        {
+            new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(1f, 1f), new Vector2(0f, 1f),
+            new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(1f, 1f), new Vector2(0f, 1f)
+        };
+        mesh.RecalculateNormals();
+        mesh.RecalculateBounds();
+        return mesh;
+    }
+    private static Bounds NormalizePreviewMesh(Mesh mesh, out Bounds normalizedBounds)
+    {
+        normalizedBounds = default;
         if (mesh == null || mesh.vertexCount == 0)
         {
             return default;
         }
 
         var bakedBounds = mesh.bounds;
-        var center = bakedBounds.center;
         var vertices = mesh.vertices;
+        var center = bakedBounds.center;
         for (var i = 0; i < vertices.Length; i++)
         {
             vertices[i] -= center;
@@ -2423,6 +2522,20 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         mesh.vertices = vertices;
         mesh.RecalculateBounds();
+        var recenteredBounds = mesh.bounds;
+        if (recenteredBounds.center.sqrMagnitude > 0.0001f)
+        {
+            vertices = mesh.vertices;
+            var secondaryCenter = recenteredBounds.center;
+            for (var i = 0; i < vertices.Length; i++)
+            {
+                vertices[i] -= secondaryCenter;
+            }
+
+            mesh.vertices = vertices;
+            mesh.RecalculateBounds();
+        }
+
         try
         {
             mesh.RecalculateNormals();
@@ -2432,6 +2545,13 @@ internal sealed class SuitEditorController : MonoBehaviour
             DrawableSuitsDiagnostics.Exception("Preview mesh normal recalculation failed", ex);
         }
 
+        normalizedBounds = mesh.bounds;
+        var safeSize = normalizedBounds.size;
+        if (safeSize.x < 0.01f) safeSize.x = 0.01f;
+        if (safeSize.y < 0.01f) safeSize.y = 0.01f;
+        if (safeSize.z < 0.01f) safeSize.z = 0.01f;
+        mesh.bounds = new Bounds(Vector3.zero, safeSize);
+        normalizedBounds = mesh.bounds;
         return bakedBounds;
     }
 
@@ -2439,7 +2559,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         var mainCamera = Camera.main;
         var mainMask = mainCamera != null ? mainCamera.cullingMask : -1;
-        for (var layer = 31; layer >= 0; layer--)
+        for (var layer = 30; layer >= 0; layer--)
         {
             if ((mainMask & (1 << layer)) == 0)
             {
@@ -2450,6 +2570,15 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         DrawableSuitsDiagnostics.Warn($"No layer outside Camera.main culling mask was available; using layer 2 with normalized off-screen preview rig. mainCamera={mainCamera?.name ?? "null"}; mainMask={mainMask}");
         return 2;
+    }
+
+    private static float CalculatePreviewOrthographicSize(Bounds bounds)
+    {
+        var halfHeight = Mathf.Max(0.25f, bounds.extents.y);
+        var halfWidth = Mathf.Max(0.25f, bounds.extents.x);
+        var viewportAspect = 420f / 540f;
+        var sizeForWidth = halfWidth / Mathf.Max(0.1f, viewportAspect);
+        return Mathf.Clamp(Mathf.Max(halfHeight, sizeForWidth) * 1.35f, 0.75f, 6f);
     }
 
     private void EnsurePreviewTexture()
@@ -2498,6 +2627,10 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         material.mainTexture = texture;
         material.color = Color.white;
+        if (material.HasProperty("_Cull"))
+        {
+            material.SetInt("_Cull", 0);
+        }
         return material;
     }
 
@@ -2520,24 +2653,57 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void UpdatePreviewTransform()
     {
-        if (_previewRoot == null || _previewMesh == null)
+        if (_previewPivotRoot == null || _previewRoot == null || _previewMesh == null)
         {
             return;
         }
 
         var bounds = _previewMesh.bounds;
         var maxSize = Mathf.Max(0.01f, Mathf.Max(bounds.size.x, Mathf.Max(bounds.size.y, bounds.size.z)));
-        var scale = 1.85f / maxSize * _previewScale;
+        _previewPivotRoot.transform.localPosition = Vector3.zero;
+        _previewPivotRoot.transform.localRotation = Quaternion.Euler(0f, _previewYaw, 0f);
+        _previewPivotRoot.transform.localScale = Vector3.one * _previewScale;
         _previewRoot.transform.localPosition = Vector3.zero;
-        _previewRoot.transform.localRotation = Quaternion.Euler(0f, _previewYaw, 0f);
-        _previewRoot.transform.localScale = Vector3.one * scale;
+        _previewRoot.transform.localRotation = Quaternion.identity;
+        _previewRoot.transform.localScale = Vector3.one;
 
         if (_previewCamera != null)
         {
-            _previewCamera.transform.localPosition = new Vector3(0f, 0.05f, -3.2f);
+            var distance = Mathf.Clamp(maxSize * 2.4f, 3.2f, 12f);
+            _previewCamera.transform.localPosition = new Vector3(0f, 0f, -distance);
             _previewCamera.transform.localRotation = Quaternion.identity;
-            _previewCamera.enabled = false;
+            _previewCamera.orthographicSize = CalculatePreviewOrthographicSize(bounds) / Mathf.Max(0.2f, _previewScale);
+            _previewCamera.enabled = true;
+        }
+    }
+
+    private void RenderPreviewFrame()
+    {
+        if (_previewCamera == null || _previewTexture == null)
+        {
+            return;
+        }
+
+        if (!_previewTexture.IsCreated())
+        {
+            _previewTexture.Create();
+        }
+
+        _previewCamera.enabled = true;
+        _previewCamera.targetTexture = _previewTexture;
+        _previewCamera.cullingMask = 1 << _previewLayer;
+        var previousActive = RenderTexture.active;
+        try
+        {
             _previewCamera.Render();
+        }
+        catch (Exception ex)
+        {
+            DrawableSuitsDiagnostics.Exception("Preview camera Render failed", ex);
+        }
+        finally
+        {
+            RenderTexture.active = previousActive;
         }
     }
 
@@ -2549,11 +2715,18 @@ internal sealed class SuitEditorController : MonoBehaviour
             _previewRoot = null;
         }
 
+        if (_previewCamera != null)
+        {
+            _previewCamera.enabled = false;
+        }
+
         if (_previewRigRoot != null)
         {
             Destroy(_previewRigRoot);
             _previewRigRoot = null;
         }
+
+        _previewPivotRoot = null;
 
         if (_previewMesh != null)
         {
@@ -2614,11 +2787,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         _lastUiDiagnosticsTime = Time.unscaledTime;
         var pointer = _cursor;
-        var usingMousePointer = DrawableSuitsInput.WasMouseUsedThisFrame();
-        if (usingMousePointer && DrawableSuitsInput.TryGetMousePosition(out var mousePosition))
-        {
-            pointer = mousePosition;
-        }
+        var usingMousePointer = string.Equals(_pointerSource, "Mouse", StringComparison.OrdinalIgnoreCase);
 
         var hitNames = "none";
         var raycaster = _editorCanvasObject != null ? _editorCanvasObject.GetComponent<GraphicRaycaster>() : null;
@@ -2639,7 +2808,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         var activeModule = EventSystem.current?.currentInputModule;
-        DrawableSuitsDiagnostics.Info($"UiInputDiagnostics: currentEventSystem={EventSystem.current?.name ?? "null"}; activeModule={activeModule?.GetType().Name ?? "null"}; selected={EventSystem.current?.currentSelectedGameObject?.name ?? "null"}; pointer={pointer}; usingMousePointer={usingMousePointer}; virtualCursor={_cursor}; canvasScale={_editorCanvasObject?.GetComponent<Canvas>()?.scaleFactor.ToString("0.###") ?? "null"}; raycastHits=[{hitNames}]; overPanel={IsCursorOverEditorPanel()}; overPreview={IsCursorOverPreviewViewport()}; previewRect={(_previewViewportRect != null ? _previewViewportRect.rect.ToString() : "null")}; previewCamera={DrawableSuitsPlugin.DescribeUnityObject(_previewCamera)}; previewCameraEnabled={_previewCamera?.enabled.ToString() ?? "null"}; previewLayer={_previewLayer}; renderTexture={_previewTexture?.width.ToString() ?? "null"}x{_previewTexture?.height.ToString() ?? "null"}");
+        DrawableSuitsDiagnostics.Info($"UiInputDiagnostics: currentEventSystem={EventSystem.current?.name ?? "null"}; activeModule={activeModule?.GetType().Name ?? "null"}; selected={EventSystem.current?.currentSelectedGameObject?.name ?? "null"}; pointerSource={_pointerSource}; pointer={pointer}; usingMousePointer={usingMousePointer}; mouseAvailable={_mousePositionAvailable}; mousePosition={_lastMousePosition}; gamepadStick={_lastGamepadStick}; virtualCursor={_cursor}; cursorVisible={Cursor.visible}; cursorLock={Cursor.lockState}; canvasScale={_editorCanvasObject?.GetComponent<Canvas>()?.scaleFactor.ToString("0.###") ?? "null"}; raycastHits=[{hitNames}]; overPanel={IsCursorOverEditorPanel()}; overPreview={IsCursorOverPreviewViewport()}; previewRect={(_previewViewportRect != null ? _previewViewportRect.rect.ToString() : "null")}; previewCamera={DrawableSuitsPlugin.DescribeUnityObject(_previewCamera)}; previewCameraEnabled={_previewCamera?.enabled.ToString() ?? "null"}; previewLayer={_previewLayer}; renderTexture={_previewTexture?.width.ToString() ?? "null"}x{_previewTexture?.height.ToString() ?? "null"}");
     }
 
     private static void LogEditorControlTree(Transform root)
