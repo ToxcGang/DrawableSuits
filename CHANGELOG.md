@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.5
+
+- Replaced the camera/RenderTexture model preview as the default editor view with a deterministic live suit texture preview.
+- Changed paint, erase, and decal placement to map the mouse/controller cursor directly to preview texture coordinates, avoiding the black 3D viewport failure path.
+- Added `EnableExperimentalModelPreview`, disabled by default, for the old 3D preview diagnostic path.
+- Added black RenderTexture readback detection that falls back to the texture preview when experimental model rendering produces an empty frame.
+- Improved preview diagnostics with active preview mode, editable texture details, UI texture assignment, and pointer-to-texture coordinates.
+
 ## 0.3.4
 
 - Delayed pause-menu editor opening until after `QuickMenuManager.CloseQuickMenu()` has had a frame to release cursor/UI state.
