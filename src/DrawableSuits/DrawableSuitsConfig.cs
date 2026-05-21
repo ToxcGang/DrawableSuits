@@ -18,7 +18,8 @@ internal sealed class DrawableSuitsConfig
     public ConfigEntry<bool> EnableNetworkSync { get; }
     public ConfigEntry<bool> EnableOsFileDialog { get; }
     public ConfigEntry<bool> EnableExperimentalModelPreview { get; }
-
+    public ConfigEntry<bool> StartInUvFallbackMode { get; }
+    public ConfigEntry<float> ThirdPersonCameraDistance { get; }
     public DrawableSuitsConfig(ConfigFile config)
     {
         OpenEditorKey = config.Bind("Input", "OpenEditorKey", KeyCode.F8, "Keyboard key that opens or closes the suit editor.");
@@ -32,7 +33,9 @@ internal sealed class DrawableSuitsConfig
         EnableNetworkSync = config.Bind("Multiplayer", "EnableNetworkSync", true, "Sync applied and saved suit designs to other DrawableSuits users.");
         MaxSyncBytes = config.Bind("Multiplayer", "MaxSyncBytes", 1048576, "Maximum PNG payload size allowed for multiplayer sync.");
         SyncChunkBytes = config.Bind("Multiplayer", "SyncChunkBytes", 48000, "Byte size for each Netcode custom-message texture chunk.");
-        EnableOsFileDialog = config.Bind("Decals", "EnableOsFileDialog", false, "Disabled/experimental. In-game OS file dialogs are ignored in 0.3.6; place PNG/JPG decals in the Decals folder and press Refresh Decals.");
-        EnableExperimentalModelPreview = config.Bind("Editor", "EnableExperimentalModelPreview", false, "Disabled by default. Uses the old camera/RenderTexture 3D model preview only for diagnostics; the reliable texture preview remains the default.");
+        EnableOsFileDialog = config.Bind("Decals", "EnableOsFileDialog", false, "Disabled/experimental. In-game OS file dialogs are ignored in 0.4.0; place PNG/JPG decals in the Decals folder and press Refresh Decals.");
+        EnableExperimentalModelPreview = config.Bind("Editor", "EnableExperimentalModelPreview", false, "Disabled by default. Uses the old camera/RenderTexture 3D model preview only for diagnostics; third-person world painting is the default.");
+        StartInUvFallbackMode = config.Bind("Editor", "StartInUvFallbackMode", false, "Open directly into the old UV texture fallback instead of third-person world painting. Useful for diagnostics.");
+        ThirdPersonCameraDistance = config.Bind("Editor", "ThirdPersonCameraDistance", 3.4f, "Default third-person editor camera orbit distance.");
     }
 }
