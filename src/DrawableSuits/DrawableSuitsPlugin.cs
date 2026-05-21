@@ -46,6 +46,7 @@ public sealed class DrawableSuitsPlugin : BaseUnityPlugin
         {
             DrawableSuitsDiagnostics.Info("Applying Harmony patches.");
             _harmony.PatchAll();
+            PlayerControllerBPatches.ApplyOptionalGameplayInputPatches(_harmony);
             DrawableSuitsDiagnostics.Info("Harmony patches applied.");
         }
         catch (System.Exception ex)
