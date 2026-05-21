@@ -93,6 +93,15 @@ internal static class PlayerControllerBPatches
     private static readonly string[] OptionalBlockedInputMethods =
     {
         "ScrollMouse_performed",
+        "ScrollMouse_canceled",
+        "SwitchItem_performed",
+        "SwitchItem_canceled",
+        "NextItem_performed",
+        "PreviousItem_performed",
+        "Scan_performed",
+        "PingScan_performed",
+        "ItemPrimaryUse_performed",
+        "ItemInteract_performed",
         "ItemSecondaryUse_performed",
         "ItemTertiaryUse_performed",
         "ActivateItem_performed",
@@ -105,7 +114,6 @@ internal static class PlayerControllerBPatches
         "Emote2_performed",
         "SetFreeCamera_performed",
         "SpeedCheat_performed",
-        "PingScan_performed",
         "BuildMode_performed",
         "ConfirmBuildMode_performed",
         "Delete_performed"
@@ -290,4 +298,3 @@ internal static class QuickMenuManagerPatches
         }
     }
 }
-
