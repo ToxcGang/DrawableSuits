@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.6
+
+- Added PaintAttempt/PaintApplied diagnostics for the texture preview paint path, including pointer source, UV, pixel coordinate, active tool, brush size, opacity, and decal state.
+- Prevented Decal mode from silently no-oping when no decal is selected; the editor now keeps Paint active and shows a clear status message.
+- Added a brush indicator over the texture preview so small brush sizes are easier to see.
+- Disabled and restored known global Lethal Company gameplay actions while the editor is open, including scan, item use, inventory switching, crouch, utility slot, and emote actions where present.
+- Added guarded optional Harmony blocks for leaked PlayerControllerB gameplay callbacks so missing method names do not break startup.
+
 ## 0.3.5
 
 - Replaced the camera/RenderTexture model preview as the default editor view with a deterministic live suit texture preview.
