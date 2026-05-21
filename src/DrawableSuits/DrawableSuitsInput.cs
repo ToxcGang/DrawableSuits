@@ -83,6 +83,19 @@ internal static class DrawableSuitsInput
         }
     }
 
+    internal static float MouseDeltaY()
+    {
+        try
+        {
+            var mouse = Mouse.current;
+            return mouse != null ? mouse.delta.ReadValue().y : 0f;
+        }
+        catch (Exception ex)
+        {
+            DrawableSuitsDiagnostics.Exception("Input System mouse delta polling failed", ex);
+            return 0f;
+        }
+    }
     internal static bool WasMouseUsedThisFrame()
     {
         try
