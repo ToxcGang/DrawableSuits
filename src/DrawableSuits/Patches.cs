@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Reflection;
 using GameNetcodeStuff;
 using HarmonyLib;
 using UnityEngine;
@@ -88,8 +90,87 @@ internal static class UnlockableSuitPatches
 [HarmonyPatch(typeof(PlayerControllerB))]
 internal static class PlayerControllerBPatches
 {
+    private static readonly string[] OptionalBlockedInputMethods =
+    {
+        "ScrollMouse_performed",
+        "ItemSecondaryUse_performed",
+        "ItemTertiaryUse_performed",
+        "ActivateItem_performed",
+        "ActivateItem_canceled",
+        "Discard_performed",
+        "Crouch_performed",
+        "InspectItem_performed",
+        "UseUtilitySlot_performed",
+        "Emote1_performed",
+        "Emote2_performed",
+        "SetFreeCamera_performed",
+        "SpeedCheat_performed",
+        "PingScan_performed",
+        "BuildMode_performed",
+        "ConfirmBuildMode_performed",
+        "Delete_performed"
+    };
+
+    private static readonly HashSet<string> OptionalPatchedMethods = new(StringComparer.Ordinal);
     private static float _lastBlockedInputLogTime;
     private static string _lastBlockedInputMethod;
+
+    internal static void ApplyOptionalGameplayInputPatches(Harmony harmony)
+    {
+        if (harmony == null)
+        {
+            return;
+        }
+
+        var prefix = AccessTools.Method(typeof(PlayerControllerBPatches), nameof(OptionalGameplayInputPrefix));
+        if (prefix == null)
+        {
+            DrawableSuitsDiagnostics.Warn("Optional gameplay input prefix was not found; scan/inventory fallback patches were not applied.");
+            return;
+        }
+
+        var patched = new List<string>();
+        var missing = new List<string>();
+        for (var i = 0; i < OptionalBlockedInputMethods.Length; i++)
+        {
+            var methodName = OptionalBlockedInputMethods[i];
+            if (OptionalPatchedMethods.Contains(methodName))
+            {
+                continue;
+            }
+
+            MethodInfo method = null;
+            try
+            {
+                method = AccessTools.Method(typeof(PlayerControllerB), methodName);
+            }
+            catch (Exception ex)
+            {
+                DrawableSuitsDiagnostics.Exception($"Optional PlayerControllerB input method lookup failed for {methodName}", ex);
+                missing.Add(methodName);
+                continue;
+            }
+
+            if (method == null)
+            {
+                missing.Add(methodName);
+                continue;
+            }
+
+            try
+            {
+                harmony.Patch(method, prefix: new HarmonyMethod(prefix));
+                OptionalPatchedMethods.Add(methodName);
+                patched.Add(methodName);
+            }
+            catch (Exception ex)
+            {
+                DrawableSuitsDiagnostics.Exception($"Failed to apply optional PlayerControllerB input block for {methodName}", ex);
+            }
+        }
+
+        DrawableSuitsDiagnostics.Info($"Optional gameplay input patches applied. patched=[{string.Join(", ", patched)}]; missing=[{string.Join(", ", missing)}]");
+    }
 
     [HarmonyPostfix]
     [HarmonyPatch(nameof(PlayerControllerB.ConnectClientToPlayerObject))]
@@ -135,6 +216,11 @@ internal static class PlayerControllerBPatches
     private static bool LookPerformedPrefix(PlayerControllerB __instance)
     {
         return AllowGameplayInput("Look_performed", __instance);
+    }
+
+    private static bool OptionalGameplayInputPrefix(PlayerControllerB __instance, MethodBase __originalMethod)
+    {
+        return AllowGameplayInput(__originalMethod?.Name ?? "OptionalGameplayInput", __instance);
     }
 
     private static void RunPatch(string context, Action action)
@@ -204,3 +290,4 @@ internal static class QuickMenuManagerPatches
         }
     }
 }
+
