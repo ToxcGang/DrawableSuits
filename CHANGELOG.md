@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0
+
+- Replaced the UV texture-preview workflow as the default editor with an in-world third-person paint mode.
+- Added a third-person editor camera around the local player and force-shows the local suit renderer while editing.
+- Added a hidden baked `MeshCollider` paint proxy from `PlayerControllerB.thisPlayerModel` and raycasts from the editor camera to paint/erase/place decals on suit UV coordinates.
+- Added a surface brush marker and third-person orbit/zoom controls for mouse and controller.
+- Kept the UV texture preview as `Use UV Fallback` and added `StartInUvFallbackMode` plus `ThirdPersonCameraDistance` config entries.
+- Replaced fragile ScrollRect/layout decal and save lists with deterministic anchored row buttons and page controls.
+- Broadened gameplay input suppression aliases for scan, item use, and inventory switching while the editor is open.
+- Updated diagnostics for world camera setup, renderer visibility, paint proxy baking, raycast hits, UV/pixel paint data, and list row creation.
+
 ## 0.3.6
 
 - Added PaintAttempt/PaintApplied diagnostics for the texture preview paint path, including pointer source, UV, pixel coordinate, active tool, brush size, opacity, and decal state.
@@ -132,3 +143,5 @@
 - Added apply/save multiplayer sync using Unity Netcode named messages.
 - Added vanilla and modded suit material reapplication patches.
 - Added Thunderstore manifest metadata.
+
+
