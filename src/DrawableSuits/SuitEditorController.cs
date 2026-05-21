@@ -67,6 +67,36 @@ internal sealed class SuitEditorController : MonoBehaviour
     private bool _hasPreviewCollider;
     private bool _canPaint;
     private int _knownSuitCount;
+    private float _lastPaintDiagnosticsTime;
+    private string _lastPaintDiagnosticsKey = string.Empty;
+    private float _lastMissingDecalWarningTime;
+    private float _lastGameplayActionRelockLogTime;
+
+    private static readonly string[] GameplayInputActionNames =
+    {
+        "Move",
+        "Look",
+        "Jump",
+        "Crouch",
+        "Interact",
+        "ItemSecondaryUse",
+        "ItemTertiaryUse",
+        "ActivateItem",
+        "Discard",
+        "SwitchItem",
+        "PingScan",
+        "InspectItem",
+        "UseUtilitySlot",
+        "BuildMode",
+        "ConfirmBuildMode",
+        "Delete",
+        "Emote1",
+        "Emote2",
+        "SetFreeCamera",
+        "SpeedCheat"
+    };
+
+    private readonly List<DisabledGameplayActionState> _disabledGameplayActions = new();
 
     private GameObject _previewRoot;
     private GameObject _previewRigRoot;
@@ -94,6 +124,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private RectTransform _canvasRect;
     private RectTransform _panelRect;
     private RectTransform _previewViewportRect;
+    private RectTransform _brushIndicator;
+    private Image _brushIndicatorImage;
     private RectTransform _cursorMarker;
     private RectTransform _designListContent;
     private RectTransform _decalListContent;
@@ -148,6 +180,13 @@ internal sealed class SuitEditorController : MonoBehaviour
         internal bool EventSystemEnabled;
         internal BaseInputModule[] Modules;
         internal bool[] ModuleEnabled;
+    }
+
+    private sealed class DisabledGameplayActionState
+    {
+        internal InputAction Action;
+        internal bool WasEnabled;
+        internal string Name;
     }
 
     private sealed class DrawableSliderControl : Selectable, IPointerDownHandler, IDragHandler, IPointerUpHandler
@@ -320,6 +359,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         EnsureCursorUnlockedWhileOpen();
         HandleControllerCursor();
         UpdateCursorMarker();
+        UpdateBrushIndicator();
         HandleVirtualCursorClick();
         HandleEditorShortcuts();
         HandlePaintingInput();
@@ -361,6 +401,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         _editorCanvasObject.SetActive(true);
         InitializePointerForOpen(source);
         RefreshFileLists();
+        EnsureValidToolForCurrentState($"open from {source}");
         TryRebuildPreviewForCurrentReadiness(source);
         RefreshEditorReadiness($"after preview ({source})");
         UpdateCursorMarker();
@@ -641,6 +682,13 @@ internal sealed class SuitEditorController : MonoBehaviour
         _previewImage.uvRect = new Rect(0f, 0f, 10f, 10f);
         _previewImage.color = Color.white;
         _previewImage.raycastTarget = true;
+
+        _brushIndicator = CreateUiObject("BrushIndicator", preview.transform, typeof(RectTransform), typeof(Image)).GetComponent<RectTransform>();
+        _brushIndicator.sizeDelta = new Vector2(16f, 16f);
+        _brushIndicatorImage = _brushIndicator.GetComponent<Image>();
+        _brushIndicatorImage.color = new Color(1f, 1f, 1f, 0.32f);
+        _brushIndicatorImage.raycastTarget = false;
+        _brushIndicator.gameObject.SetActive(false);
         CreateAnchoredText(panel.transform, "PreviewHelp", "Texture preview: paint/erase/decal inside this UV layout. Mouse wheel changes brush size.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(previewX, 638f, previewW, 58f), new Color(0.82f, 0.86f, 0.9f, 1f));
 
         CreateAnchoredText(panel.transform, "DecalHeader", "Decal", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 54f, rightW, 24f), Color.white);
@@ -1400,6 +1448,139 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawableSuitsDiagnostics.Info($"Cursor restored after editor close. leaveUnlocked={leaveUnlockedForSceneChange}; visible={Cursor.visible}; lock={Cursor.lockState}");
     }
 
+    private void CaptureAndLockGameplayActions()
+    {
+        _disabledGameplayActions.Clear();
+        var asset = InputSystem.actions;
+        if (asset == null)
+        {
+            DrawableSuitsDiagnostics.Info("Global gameplay action lock skipped: InputSystem.actions is null.");
+            return;
+        }
+
+        var found = 0;
+        var disabled = 0;
+        var missing = new List<string>();
+        for (var i = 0; i < GameplayInputActionNames.Length; i++)
+        {
+            var name = GameplayInputActionNames[i];
+            InputAction action = null;
+            try
+            {
+                action = asset.FindAction(name, false);
+            }
+            catch (Exception ex)
+            {
+                DrawableSuitsDiagnostics.Exception($"Global gameplay action lookup failed for '{name}'", ex);
+            }
+
+            if (action == null)
+            {
+                missing.Add(name);
+                continue;
+            }
+
+            found++;
+            var wasEnabled = action.enabled;
+            _disabledGameplayActions.Add(new DisabledGameplayActionState
+            {
+                Action = action,
+                WasEnabled = wasEnabled,
+                Name = name
+            });
+
+            if (!wasEnabled)
+            {
+                continue;
+            }
+
+            try
+            {
+                action.Disable();
+                disabled++;
+            }
+            catch (Exception ex)
+            {
+                DrawableSuitsDiagnostics.Exception($"Failed to disable global gameplay action '{name}'", ex);
+            }
+        }
+
+        DrawableSuitsDiagnostics.Info($"Global gameplay actions locked for editor. found={found}; disabled={disabled}; missing=[{string.Join(", ", missing)}]");
+    }
+
+    private void ReapplyGameplayActionLock()
+    {
+        if (_disabledGameplayActions.Count == 0)
+        {
+            return;
+        }
+
+        var relocked = 0;
+        for (var i = 0; i < _disabledGameplayActions.Count; i++)
+        {
+            var state = _disabledGameplayActions[i];
+            if (state?.Action == null || !state.Action.enabled)
+            {
+                continue;
+            }
+
+            try
+            {
+                state.Action.Disable();
+                relocked++;
+            }
+            catch (Exception ex)
+            {
+                DrawableSuitsDiagnostics.Exception($"Failed to re-disable global gameplay action '{state.Name}'", ex);
+            }
+        }
+
+        if (relocked > 0 && Time.unscaledTime - _lastGameplayActionRelockLogTime > 0.75f)
+        {
+            _lastGameplayActionRelockLogTime = Time.unscaledTime;
+            DrawableSuitsDiagnostics.Warn($"Re-disabled {relocked} global gameplay actions while DrawableSuits editor is open.");
+        }
+    }
+
+    private void RestoreGameplayActions()
+    {
+        if (_disabledGameplayActions.Count == 0)
+        {
+            return;
+        }
+
+        var restoredEnabled = 0;
+        var restoredDisabled = 0;
+        for (var i = 0; i < _disabledGameplayActions.Count; i++)
+        {
+            var state = _disabledGameplayActions[i];
+            if (state?.Action == null)
+            {
+                continue;
+            }
+
+            try
+            {
+                if (state.WasEnabled && !state.Action.enabled)
+                {
+                    state.Action.Enable();
+                    restoredEnabled++;
+                }
+                else if (!state.WasEnabled && state.Action.enabled)
+                {
+                    state.Action.Disable();
+                    restoredDisabled++;
+                }
+            }
+            catch (Exception ex)
+            {
+                DrawableSuitsDiagnostics.Exception($"Failed to restore global gameplay action '{state.Name}'", ex);
+            }
+        }
+
+        DrawableSuitsDiagnostics.Info($"Global gameplay actions restored after editor close. tracked={_disabledGameplayActions.Count}; reEnabled={restoredEnabled}; reDisabled={restoredDisabled}");
+        _disabledGameplayActions.Clear();
+    }
     private void CaptureAndLockPlayerInput()
     {
         var player = StartOfRound.Instance?.localPlayerController;
@@ -1418,12 +1599,14 @@ internal sealed class SuitEditorController : MonoBehaviour
         _previousInSpecialMenu = player.inSpecialMenu;
         _previousMovementActionsEnabled = player.playerActions.Movement.enabled;
         _playerInputStateCaptured = true;
+        CaptureAndLockGameplayActions();
         ApplyPlayerInputLock(player, true);
         DrawableSuitsDiagnostics.Info($"Player input locked for editor. player={DrawableSuitsPlugin.DescribeUnityObject(player)}; previousMove={_previousDisableMoveInput}; previousLook={_previousDisableLookInput}; previousInteract={_previousDisableInteract}; previousSpecialMenu={_previousInSpecialMenu}; movementActionsWereEnabled={_previousMovementActionsEnabled}");
     }
 
     private void ReapplyPlayerInputLock()
     {
+        ReapplyGameplayActionLock();
         if (!_playerInputStateCaptured)
         {
             return;
@@ -1453,6 +1636,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         if (!_playerInputStateCaptured)
         {
+            RestoreGameplayActions();
             return;
         }
 
@@ -1478,6 +1662,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             DrawableSuitsDiagnostics.Info("Player input restore skipped because locked player was destroyed or unavailable.");
         }
 
+        RestoreGameplayActions();
         _inputLockedPlayer = null;
         _playerInputStateCaptured = false;
     }
@@ -1607,6 +1792,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             _colorSwatch.color = _brushColor;
         }
+
+        UpdateBrushIndicator();
     }
 
     private void UpdateToolButtons()
@@ -1632,8 +1819,63 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void SetTool(EditorTool tool)
     {
+        if (tool == EditorTool.Decal && _loadedDecal == null)
+        {
+            WarnMissingDecal("tool selection");
+            _tool = EditorTool.Paint;
+            UpdateToolButtons();
+            UpdateBrushIndicator();
+            return;
+        }
+
         _tool = tool;
+        if (tool != EditorTool.Decal && _statusMessage.StartsWith("Select a decal", StringComparison.OrdinalIgnoreCase))
+        {
+            SetStatus(BuildReadinessStatus(), false);
+        }
+
         UpdateToolButtons();
+        UpdateBrushIndicator();
+    }
+
+    private void CycleTool()
+    {
+        if (_tool == EditorTool.Paint)
+        {
+            SetTool(EditorTool.Erase);
+            return;
+        }
+
+        if (_tool == EditorTool.Erase)
+        {
+            SetTool(_loadedDecal != null ? EditorTool.Decal : EditorTool.Paint);
+            return;
+        }
+
+        SetTool(EditorTool.Paint);
+    }
+
+    private void EnsureValidToolForCurrentState(string context)
+    {
+        if (_tool != EditorTool.Decal || _loadedDecal != null)
+        {
+            return;
+        }
+
+        _tool = EditorTool.Paint;
+        SetStatus("Ready. Paint is selected because no decal is loaded.", false);
+        UpdateToolButtons();
+        DrawableSuitsDiagnostics.Info($"Tool reset to Paint. context={context}; reason=no loaded decal");
+    }
+
+    private void WarnMissingDecal(string context)
+    {
+        SetStatus("Select a decal before using Decal. Paint mode is active until a decal is selected.", false);
+        if (Time.unscaledTime - _lastMissingDecalWarningTime > 0.75f)
+        {
+            _lastMissingDecalWarningTime = Time.unscaledTime;
+            DrawableSuitsDiagnostics.Warn($"Decal tool unavailable because no decal is loaded. context={context}; decalCount={_decalFiles.Count}; selectedDecalIndex={_selectedDecalIndex}");
+        }
     }
 
     private void RefreshListButtons()
@@ -1732,6 +1974,45 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
     }
 
+    private void UpdateBrushIndicator()
+    {
+        if (_brushIndicator == null)
+        {
+            return;
+        }
+
+        var uv = Vector2.zero;
+        var show = _isOpen
+            && _canPaint
+            && (_tool == EditorTool.Paint || _tool == EditorTool.Erase)
+            && TryGetTexturePreviewUv(_cursor, out uv);
+        _brushIndicator.gameObject.SetActive(show);
+        if (!show)
+        {
+            return;
+        }
+
+        var rect = _previewViewportRect.rect;
+        _brushIndicator.anchorMin = new Vector2(0f, 0f);
+        _brushIndicator.anchorMax = new Vector2(0f, 0f);
+        _brushIndicator.pivot = new Vector2(0.5f, 0.5f);
+        _brushIndicator.anchoredPosition = new Vector2(
+            Mathf.Lerp(rect.xMin, rect.xMax, uv.x),
+            Mathf.Lerp(rect.yMin, rect.yMax, uv.y));
+
+        var texture = _selectedSuitId >= 0 ? DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId) : null;
+        var textureWidth = texture != null ? texture.width : 1024;
+        var textureHeight = texture != null ? texture.height : 1024;
+        var width = Mathf.Clamp((_brushSize * 2f / Mathf.Max(1f, textureWidth)) * rect.width, 4f, 180f);
+        var height = Mathf.Clamp((_brushSize * 2f / Mathf.Max(1f, textureHeight)) * rect.height, 4f, 180f);
+        _brushIndicator.sizeDelta = new Vector2(width, height);
+        if (_brushIndicatorImage != null)
+        {
+            _brushIndicatorImage.color = _tool == EditorTool.Erase
+                ? new Color(0.82f, 0.92f, 1f, 0.34f)
+                : new Color(_brushColor.r, _brushColor.g, _brushColor.b, 0.34f);
+        }
+    }
     private void HandleControllerCursor()
     {
         _mousePositionAvailable = DrawableSuitsInput.TryGetMousePosition(out _lastMousePosition);
@@ -1939,7 +2220,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             }
             if (gamepad.buttonNorth.wasPressedThisFrame)
             {
-                SetTool((EditorTool)(((int)_tool + 1) % Enum.GetValues(typeof(EditorTool)).Length));
+                CycleTool();
             }
             if (gamepad.buttonWest.wasPressedThisFrame)
             {
@@ -1999,8 +2280,23 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        if (!IsCursorOverPreviewViewport())
+        var texture = DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId);
+        var uvAvailable = TryGetTexturePreviewUv(_cursor, out var uv);
+        var overPreview = IsCursorOverPreviewViewport() && uvAvailable;
+        LogPaintAttemptIfNeeded("paint input", overPreview, uvAvailable, uv, texture, !_strokeActive);
+
+        if (!overPreview || texture == null)
         {
+            _strokeActive = false;
+            return;
+        }
+
+        if (_tool == EditorTool.Decal && _loadedDecal == null)
+        {
+            WarnMissingDecal("paint input");
+            _tool = EditorTool.Paint;
+            UpdateToolButtons();
+            UpdateBrushIndicator();
             _strokeActive = false;
             return;
         }
@@ -2012,9 +2308,46 @@ internal sealed class SuitEditorController : MonoBehaviour
             _strokeActive = true;
         }
 
-        PaintAtCursor();
+        PaintAtCursor(texture, uv);
     }
 
+    private void LogPaintAttemptIfNeeded(string reason, bool overPreview, bool uvAvailable, Vector2 uv, Texture2D texture, bool force)
+    {
+        var pixel = "none";
+        if (uvAvailable && texture != null)
+        {
+            var px = Mathf.RoundToInt(uv.x * (texture.width - 1));
+            var py = Mathf.RoundToInt(uv.y * (texture.height - 1));
+            pixel = $"{px},{py}";
+        }
+
+        var key = $"{reason}|tool={_tool}|over={overPreview}|uv={uvAvailable}:{uv}|pixel={pixel}|brush={Mathf.RoundToInt(_brushSize)}|opacity={_brushOpacity:0.##}|decal={_loadedDecal != null}|source={_pointerSource}";
+        if (!force && Time.unscaledTime - _lastPaintDiagnosticsTime < 0.75f && string.Equals(key, _lastPaintDiagnosticsKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastPaintDiagnosticsTime = Time.unscaledTime;
+        _lastPaintDiagnosticsKey = key;
+        var gamepad = Gamepad.current;
+        var trigger = gamepad != null ? gamepad.rightTrigger.ReadValue().ToString("0.###") : "null";
+        DrawableSuitsDiagnostics.Info($"PaintAttempt: {key}; cursor={_cursor}; texture={DescribeEditableTexture()}; mouseDown={DrawableSuitsInput.IsLeftMousePressed()}; trigger={trigger}");
+    }
+
+    private void LogPaintApplied(Texture2D texture, Vector2 uv)
+    {
+        var px = Mathf.RoundToInt(uv.x * (texture.width - 1));
+        var py = Mathf.RoundToInt(uv.y * (texture.height - 1));
+        var key = $"applied|tool={_tool}|pixel={px},{py}|brush={Mathf.RoundToInt(_brushSize)}|opacity={_brushOpacity:0.##}|decal={_loadedDecal != null}";
+        if (Time.unscaledTime - _lastPaintDiagnosticsTime < 0.5f && string.Equals(key, _lastPaintDiagnosticsKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastPaintDiagnosticsTime = Time.unscaledTime;
+        _lastPaintDiagnosticsKey = key;
+        DrawableSuitsDiagnostics.Info($"PaintApplied: {key}; texture={texture.name} {texture.width}x{texture.height}; uv={uv}; pointerSource={_pointerSource}");
+    }
     private bool IsCursorOverEditorPanel()
     {
         return _panelRect != null && RectTransformUtility.RectangleContainsScreenPoint(_panelRect, _cursor, null);
@@ -2058,9 +2391,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         return true;
     }
 
-    private void PaintAtCursor()
+    private void PaintAtCursor(Texture2D texture, Vector2 uv)
     {
-        var texture = DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId);
         if (texture == null)
         {
             RefreshEditorReadiness("paint preflight failed");
@@ -2068,11 +2400,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        if (!TryGetTexturePreviewUv(_cursor, out var uv))
-        {
-            return;
-        }
-
+        var changed = true;
         switch (_tool)
         {
             case EditorTool.Paint:
@@ -2082,9 +2410,17 @@ internal sealed class SuitEditorController : MonoBehaviour
                 EraseCircle(texture, uv, _brushSize, _brushOpacity);
                 break;
             case EditorTool.Decal:
-                ApplyDecal(texture, uv);
+                changed = ApplyDecal(texture, uv);
                 _strokeActive = false;
                 break;
+            default:
+                changed = false;
+                break;
+        }
+
+        if (!changed)
+        {
+            return;
         }
 
         texture.Apply(false, false);
@@ -2097,6 +2433,9 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             UseTexturePreview("PaintAtCursor", false);
         }
+
+        LogPaintApplied(texture, uv);
+        UpdateBrushIndicator();
     }
 
     private void PaintCircle(Texture2D texture, Vector2 uv, Color color, float radius, float opacity)
@@ -2163,11 +2502,12 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
     }
 
-    private void ApplyDecal(Texture2D target, Vector2 uv)
+    private bool ApplyDecal(Texture2D target, Vector2 uv)
     {
         if (_loadedDecal == null)
         {
-            return;
+            WarnMissingDecal("ApplyDecal");
+            return false;
         }
 
         var centerX = Mathf.RoundToInt(uv.x * (target.width - 1));
@@ -2206,6 +2546,8 @@ internal sealed class SuitEditorController : MonoBehaviour
                 target.SetPixel(tx, ty, Color.Lerp(existing, decalColor, decalColor.a * _brushOpacity));
             }
         }
+
+        return true;
     }
 
     private void SaveUndo()
