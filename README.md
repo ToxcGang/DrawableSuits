@@ -83,6 +83,7 @@ The BepInEx config file controls:
 - Max sync payload size and chunk size.
 - `StartInUvFallbackMode`, disabled by default, opens directly into the old UV fallback view.
 - `ThirdPersonCameraDistance`, the default third-person editor camera distance.
+- `ApplyLocalFirstPersonArms`, disabled by default, is experimental and allows edited materials on local first-person arms/body outside the editor.
 - `EnableExperimentalModelPreview`, disabled by default, keeps the old RenderTexture model preview as diagnostics only.
 - OS file dialog import remains disabled/experimental and is ignored in-game for stability.
 
@@ -92,15 +93,18 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.4.0 behavior:
+Expected 0.4.1 behavior:
 
 - Opening the editor shows a compact side overlay and a third-person camera view of the local player.
 - The diagnostics text should show `Preview mode: WorldThirdPerson` when the default path succeeds.
+- Normal session startup should log `SessionSafetyCheck` with `EditorOpen=False` and no active DrawableSuits cameras.
 - If third-person setup fails, the editor falls back to `TextureFallback` and logs the reason.
 - Decal and saved-design rows are explicit anchored buttons, not ScrollRect/layout rows.
 
 Troubleshooting:
 
+- If entering a session starts on a black screen before opening DrawableSuits, check `SessionSafetyCheck` lines. They list active cameras, camera target textures, local renderer materials, and any repaired DrawableSuits objects. DrawableSuits should report no active DrawableSuits cameras while `EditorOpen=False`.
+- If `LogOutput.log` repeatedly shows `JetpackWarning` `PlayerControllerB.LateUpdate` `NullReferenceException`, DrawableSuits logs a warning but does not patch that mod; use the new camera/material diagnostics to separate DrawableSuits state from external errors.
 - If you cannot see the local suit in third person, check `diagnostics.log` for `WorldThirdPerson setup`, `Forced local player renderer visibility`, `WorldPaintProxy updated`, and `WorldEditorCamera updated`.
 - If painting misses the suit, check `PaintAttempt` entries for `world paint input`, UV coordinates, and whether the cursor is over the editor panel.
 - If decals or saved designs do not appear, check `RefreshFileLists complete` and `ListRowsBuilt` entries.
