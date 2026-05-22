@@ -475,6 +475,73 @@ internal sealed class SuitEditorController : MonoBehaviour
         CloseEditor(EditorCloseReason.PluginDestroy);
     }
 
+    internal int RepairClosedEditorState(string reason)
+    {
+        if (_isOpen)
+        {
+            return 0;
+        }
+
+        var repaired = 0;
+        if (_editorCanvasObject != null && _editorCanvasObject.activeSelf)
+        {
+            _editorCanvasObject.SetActive(false);
+            repaired++;
+        }
+
+        var hadPreviewArtifacts = _previewRoot != null
+            || _previewRigRoot != null
+            || _previewCamera != null
+            || _previewTexture != null
+            || _worldEditorCameraObject != null
+            || _worldEditorCamera != null
+            || _worldPaintProxyObject != null
+            || _worldBrushMarker != null;
+        if (hadPreviewArtifacts)
+        {
+            DestroyPreview();
+            repaired++;
+        }
+
+        if (_editorUiInputActive)
+        {
+            EndEditorUiInput();
+            repaired++;
+        }
+
+        if (_playerInputStateCaptured || _disabledGameplayActions.Count > 0)
+        {
+            RestorePlayerInputState();
+            repaired++;
+        }
+
+        if (_cursorStateCaptured)
+        {
+            RestoreCursorState(IsSceneChangeSafetyReason(reason));
+            repaired++;
+        }
+
+        if (_rendererRestoreStates.Count > 0)
+        {
+            RestorePlayerRenderers();
+            repaired++;
+        }
+
+        if (repaired > 0)
+        {
+            DrawableSuitsDiagnostics.Info($"ClosedEditorStateAssertion reason={reason}; repaired={repaired}; canvasActive={CanvasActiveForDiagnostics}; editorUiInputActive={_editorUiInputActive}; playerInputCaptured={_playerInputStateCaptured}; cursorCaptured={_cursorStateCaptured}; rendererRestoreStates={_rendererRestoreStates.Count}; cursorVisible={Cursor.visible}; cursorLock={Cursor.lockState}");
+        }
+
+        return repaired;
+    }
+
+    private static bool IsSceneChangeSafetyReason(string reason)
+    {
+        return !string.IsNullOrWhiteSpace(reason)
+            && (reason.IndexOf("Scene", StringComparison.OrdinalIgnoreCase) >= 0
+                || reason.IndexOf("MainMenu", StringComparison.OrdinalIgnoreCase) >= 0
+                || reason.IndexOf("InitScene", StringComparison.OrdinalIgnoreCase) >= 0);
+    }
     private void CloseEditor(EditorCloseReason reason)
     {
         if (!_isOpen)
@@ -2852,7 +2919,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             _worldEditorCamera.nearClipPlane = 0.03f;
             _worldEditorCamera.farClipPlane = 150f;
             _worldEditorCamera.cullingMask = (mainCamera != null ? mainCamera.cullingMask : ~0) | (1 << source.gameObject.layer);
-            _worldEditorCamera.enabled = true;
+            _worldEditorCamera.enabled = false;
 
             _worldPaintProxyObject = new GameObject("DrawableSuitsWorldPaintProxy");
             _worldPaintProxyObject.hideFlags = HideFlags.HideAndDontSave;
@@ -2880,8 +2947,11 @@ internal sealed class SuitEditorController : MonoBehaviour
             _worldBrushMarker.SetActive(false);
 
             var proxyReady = UpdateWorldPaintProxy(true);
-            UpdateWorldEditorCamera(true);
             _worldPreviewReady = proxyReady && _worldEditorCamera != null && _worldPaintCollider != null;
+            if (_worldPreviewReady)
+            {
+                UpdateWorldEditorCamera(true);
+            }
             _hasPreviewCollider = _worldPaintCollider != null;
             _canPaint = texture != null && _worldPreviewReady;
             SetStatus(_canPaint ? "Ready. Third-person paint mode is active." : "Third-person editor opened, but paint proxy is not ready.", !_canPaint);
@@ -3042,7 +3112,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         var position = target + rotation * new Vector3(0f, 0.15f, -_worldCameraDistance);
         _worldEditorCamera.transform.position = position;
         _worldEditorCamera.transform.rotation = Quaternion.LookRotation(target - position, Vector3.up);
-        _worldEditorCamera.enabled = true;
+        _worldEditorCamera.enabled = _isOpen && IsWorldThirdPersonMode && _worldPreviewReady;
         if (forceLog)
         {
             DrawableSuitsDiagnostics.Info($"WorldEditorCamera updated. pos={position}; target={target}; yaw={_worldCameraYaw:0.##}; pitch={_worldCameraPitch:0.##}; distance={_worldCameraDistance:0.##}; depth={_worldEditorCamera.depth}; mask={_worldEditorCamera.cullingMask}");
