@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.4
+
+- Made active edited textures player-specific by owner client ID instead of global per suit ID, so editing one player no longer changes every player or rack using the same base suit.
+- Added owner client ID to multiplayer texture sync and late-join active design responses.
+- Stopped mutating `UnlockableItem.suitMaterial` and suit rack materials for player-specific edits.
+- Removed right trigger from third-person camera zoom; right trigger now paints only and controller zoom uses D-pad up/down.
+- Disabled the filled UV fallback brush indicator that looked like a second color-changing cursor.
+- Added first-person overlay hiding/filtering for nearby helmet, visor, viewmodel, arms, hands, camera, and held-item renderers while the editor is open.
+- Added proxy material filtering and diagnostics for visible editor-camera renderers, hidden first-person overlays, proxy material slots, and player-specific sync state.
+
 ## 0.4.3
 
 - Replaced direct live local-player rendering in third-person editor mode with a DrawableSuits-owned `DrawableSuitsWorldAvatarProxy`.
