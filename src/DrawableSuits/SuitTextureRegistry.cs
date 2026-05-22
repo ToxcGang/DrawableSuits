@@ -116,6 +116,43 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
         }
     }
 
+    public void ReapplyAllIfReady(string context)
+    {
+        if (!CanReapplyAll(out var reason))
+        {
+            DrawableSuitsDiagnostics.Info($"ReapplyAll skipped. context={context}; reason={reason}; knownStates={_states.Count}");
+            return;
+        }
+
+        ReapplyAll();
+    }
+
+    private static bool CanReapplyAll(out string reason)
+    {
+        var round = StartOfRound.Instance;
+        if (round == null)
+        {
+            reason = "StartOfRound.Instance=null";
+            return false;
+        }
+
+        var unlockables = round.unlockablesList?.unlockables;
+        if (unlockables == null || unlockables.Count == 0)
+        {
+            reason = "unlockables not ready";
+            return false;
+        }
+
+        if (round.allPlayerScripts == null || round.allPlayerScripts.Length == 0)
+        {
+            reason = "players not ready";
+            return false;
+        }
+
+        reason = "ready";
+        return true;
+    }
+
     public void RefreshKnownSuitMaterials()
     {
         var round = StartOfRound.Instance;
