@@ -5,6 +5,8 @@ namespace DrawableSuits;
 internal sealed class SuitTextureState
 {
     public int SuitId;
+    public ulong OwnerClientId;
+    public bool IsPlayerSpecific;
     public string SuitName;
     public Material OriginalMaterial;
     public Texture OriginalTexture;
