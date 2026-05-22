@@ -28,9 +28,16 @@ internal sealed class DrawableSuitsRuntimeHost : MonoBehaviour
     private void Start()
     {
         _startupHudUntil = Time.realtimeSinceStartup + Mathf.Max(1f, DrawableSuitsPlugin.ModConfig.StartupDiagnosticsSeconds.Value);
-        DrawableSuitsDiagnostics.Info($"RuntimeHost Start. startupHudUntil={_startupHudUntil}; editor={DrawableSuitsPlugin.DescribeUnityObject(DrawableSuitsPlugin.Editor)}");
-        EnsureHudCanvas();
-        UpdateHud(true);
+        DrawableSuitsDiagnostics.Info($"RuntimeHost Start. startupHudUntil={_startupHudUntil}; showStartupDiagnostics={DrawableSuitsPlugin.ModConfig.ShowStartupDiagnostics.Value}; editor={DrawableSuitsPlugin.DescribeUnityObject(DrawableSuitsPlugin.Editor)}");
+        if (ShouldShowHud)
+        {
+            EnsureHudCanvas();
+            UpdateHud(true);
+        }
+        else
+        {
+            DrawableSuitsDiagnostics.Info("RuntimeHost startup HUD suppressed by config; press F9 to show the debug HUD.");
+        }
     }
 
     private void Update()
@@ -43,6 +50,11 @@ internal sealed class DrawableSuitsRuntimeHost : MonoBehaviour
 
         DrawableSuitsPlugin.EnsureRuntimeReady("RuntimeHost.Update");
         HandleInput();
+
+        if (ShouldShowHud && _hudCanvasObject == null)
+        {
+            EnsureHudCanvas();
+        }
 
         if (_hudCanvasObject != null)
         {
