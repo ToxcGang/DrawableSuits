@@ -14,6 +14,7 @@ internal static class SessionSafetyGuard
     {
         "DrawableSuitsThirdPersonCamera",
         "DrawableSuitsPreviewCamera",
+        "DrawableSuitsWorldAvatarProxy",
         "DrawableSuitsWorldPaintProxy",
         "DrawableSuitsWorldBrushMarker"
     };
