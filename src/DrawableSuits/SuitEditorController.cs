@@ -136,6 +136,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private string _worldSourceRendererSummary = "none";
     private GameObject _worldBrushMarker;
     private Material _worldBrushMarkerMaterial;
+    private Material _worldHiddenSubmeshMaterial;
     private int _worldPaintLayer = 30;
     private float _worldCameraYaw;
     private float _worldCameraPitch = 12f;
@@ -778,7 +779,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         _colorSwatch = CreateAnchoredColorSwatch(panel.transform, new Rect(leftX + 238f, 548f, 44f, 92f));
 
         _uvFallbackButton = CreateAnchoredButton(panel.transform, "Use UV Fallback", new Rect(rightX, 54f, 150f, 34f), ToggleUvFallback);
-        CreateAnchoredText(panel.transform, "WorldHelp", "Third-person mode: aim at the visible suit and hold left mouse or right trigger to paint. Right mouse/right stick or bumpers orbit. Wheel zooms; Ctrl+wheel changes brush size.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(rightX, 96f, rightW, 76f), new Color(0.86f, 0.9f, 0.94f, 1f));
+        CreateAnchoredText(panel.transform, "WorldHelp", "Third-person mode: aim at the visible suit and hold left mouse or right trigger to paint. Right mouse/right stick or bumpers orbit. Wheel or D-pad up/down zooms; Ctrl+wheel changes brush size.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(rightX, 96f, rightW, 76f), new Color(0.86f, 0.9f, 0.94f, 1f));
 
         CreateAnchoredText(panel.transform, "DecalHeader", "Decal", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 188f, rightW, 24f), Color.white);
         _decalSizeLabel = CreateAnchoredText(panel.transform, "DecalSizeLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(rightX, 218f, 112f, 24f), Color.white);
@@ -837,7 +838,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         _brushIndicator.gameObject.SetActive(false);
         fallbackPreview.SetActive(false);
 
-        CreateAnchoredText(panel.transform, "ControllerHelp", "Controller: View/Back+Y open/close, left stick cursor, A clicks UI, right trigger paints suit, right stick/bumpers orbit, X undo, Start save.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 858f, 574f, 36f), Color.white);
+        CreateAnchoredText(panel.transform, "ControllerHelp", "Controller: View/Back+Y open/close, left stick cursor, A clicks UI, RT paints only, right stick/bumpers orbit, D-pad up/down zooms, X undo, Start save.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 858f, 574f, 36f), Color.white);
 
         _cursorMarker = CreateUiObject("DrawableSuitsCursor", _editorCanvasObject.transform, typeof(Image)).GetComponent<RectTransform>();
         _cursorMarker.sizeDelta = new Vector2(14f, 14f);
@@ -1958,43 +1959,9 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        if (IsWorldThirdPersonMode)
-        {
-            _brushIndicator.gameObject.SetActive(false);
-            return;
-        }
-
-        var uv = Vector2.zero;
-        var show = _isOpen
-            && _canPaint
-            && (_tool == EditorTool.Paint || _tool == EditorTool.Erase)
-            && TryGetTexturePreviewUv(_cursor, out uv);
-        _brushIndicator.gameObject.SetActive(show);
-        if (!show)
-        {
-            return;
-        }
-
-        var rect = _previewViewportRect.rect;
-        _brushIndicator.anchorMin = new Vector2(0f, 0f);
-        _brushIndicator.anchorMax = new Vector2(0f, 0f);
-        _brushIndicator.pivot = new Vector2(0.5f, 0.5f);
-        _brushIndicator.anchoredPosition = new Vector2(
-            Mathf.Lerp(rect.xMin, rect.xMax, uv.x),
-            Mathf.Lerp(rect.yMin, rect.yMax, uv.y));
-
-        var texture = _selectedSuitId >= 0 ? DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId) : null;
-        var textureWidth = texture != null ? texture.width : 1024;
-        var textureHeight = texture != null ? texture.height : 1024;
-        var width = Mathf.Clamp((_brushSize * 2f / Mathf.Max(1f, textureWidth)) * rect.width, 4f, 180f);
-        var height = Mathf.Clamp((_brushSize * 2f / Mathf.Max(1f, textureHeight)) * rect.height, 4f, 180f);
-        _brushIndicator.sizeDelta = new Vector2(width, height);
-        if (_brushIndicatorImage != null)
-        {
-            _brushIndicatorImage.color = _tool == EditorTool.Erase
-                ? new Color(0.82f, 0.92f, 1f, 0.34f)
-                : new Color(_brushColor.r, _brushColor.g, _brushColor.b, 0.34f);
-        }
+        // The old filled brush preview looked like a second cursor and changed with brush color/size.
+        // Keep it hidden until a proper outline-only indicator is added.
+        _brushIndicator.gameObject.SetActive(false);
     }
     private void HandleControllerCursor()
     {
@@ -2227,10 +2194,10 @@ internal sealed class SuitEditorController : MonoBehaviour
                     _worldCameraPitch -= rightStick.y * 90f * Time.unscaledDeltaTime;
                 }
 
-                var zoomDelta = gamepad.leftTrigger.ReadValue() - gamepad.rightTrigger.ReadValue();
-                if (Mathf.Abs(zoomDelta) > 0.35f && !DrawableSuitsInput.IsLeftMousePressed())
+                var dpad = gamepad.dpad.ReadValue();
+                if (Mathf.Abs(dpad.y) > 0.35f)
                 {
-                    _worldCameraDistance = Mathf.Clamp(_worldCameraDistance + zoomDelta * Time.unscaledDeltaTime * 2f, 1.5f, 8f);
+                    _worldCameraDistance = Mathf.Clamp(_worldCameraDistance - dpad.y * Time.unscaledDeltaTime * 2f, 1.5f, 8f);
                 }
             }
 
@@ -2940,7 +2907,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             _worldAvatarMeshFilter = _worldPaintProxyObject.AddComponent<MeshFilter>();
             _worldAvatarMeshFilter.sharedMesh = _worldPaintMesh;
             _worldAvatarRenderer = _worldPaintProxyObject.AddComponent<MeshRenderer>();
-            _worldAvatarRenderer.sharedMaterial = DrawableSuitsPlugin.Registry.GetRuntimeMaterial(_selectedSuitId) ?? source.sharedMaterial;
+            _worldAvatarRenderer.sharedMaterials = BuildWorldProxyMaterials(source);
             _worldPaintCollider = _worldPaintProxyObject.AddComponent<MeshCollider>();
             _worldPaintCollider.convex = false;
 
@@ -3134,6 +3101,9 @@ internal sealed class SuitEditorController : MonoBehaviour
             || lowerPath.Contains("first person")
             || lowerPath.Contains("viewmodel")
             || lowerPath.Contains("view model")
+            || lowerPath.Contains("helmet")
+            || lowerPath.Contains("visor")
+            || lowerPath.Contains("mask")
             || lowerPath.Contains("camera")
             || lowerPath.Contains("held")
             || lowerPath.Contains("item")
@@ -3210,7 +3180,73 @@ internal sealed class SuitEditorController : MonoBehaviour
             selectedSource.enabled = false;
         }
 
+        hidden += CaptureAndHideNearbyFirstPersonOverlayRenderers(player, selectedSource);
+
         DrawableSuitsDiagnostics.Info($"Hidden local renderers for third-person avatar proxy. hidden={hidden}; selectedSource={DescribeRendererCandidate(selectedSource, "selected")}; main={DescribeRendererState(player.thisPlayerModel)}; lod1={DescribeRendererState(player.thisPlayerModelLOD1)}; lod2={DescribeRendererState(player.thisPlayerModelLOD2)}; arms={DescribeRendererState(player.thisPlayerModelArms)}");
+    }
+
+    private int CaptureAndHideNearbyFirstPersonOverlayRenderers(PlayerControllerB player, Renderer selectedSource)
+    {
+        if (player == null)
+        {
+            return 0;
+        }
+
+        var hidden = 0;
+        var playerPosition = player.transform.position;
+        var camera = Camera.main;
+        var renderers = Resources.FindObjectsOfTypeAll<Renderer>();
+        for (var i = 0; i < renderers.Length; i++)
+        {
+            var renderer = renderers[i];
+            if (renderer == null
+                || ReferenceEquals(renderer, selectedSource)
+                || renderer.gameObject.name.IndexOf("DrawableSuits", StringComparison.OrdinalIgnoreCase) >= 0
+                || !renderer.gameObject.scene.IsValid()
+                || !renderer.gameObject.activeInHierarchy)
+            {
+                continue;
+            }
+
+            var distanceToPlayer = Vector3.Distance(renderer.bounds.center, playerPosition);
+            var distanceToCamera = camera != null ? Vector3.Distance(renderer.bounds.center, camera.transform.position) : float.MaxValue;
+            if (distanceToPlayer > 4.5f && distanceToCamera > 2.5f)
+            {
+                continue;
+            }
+
+            var path = GetTransformPath(renderer.transform);
+            if (!LooksFirstPersonOverlayRenderer(renderer, path))
+            {
+                continue;
+            }
+
+            hidden += CaptureAndHideRenderer(renderer, $"nearby first-person overlay path={path}");
+            DrawableSuitsDiagnostics.Info($"Hidden nearby first-person overlay renderer. renderer={DescribeRendererState(renderer)}; distanceToPlayer={distanceToPlayer:0.##}; distanceToCamera={distanceToCamera:0.##}; material={renderer.sharedMaterial?.name ?? "null"}");
+        }
+
+        return hidden;
+    }
+
+    private static bool LooksFirstPersonOverlayRenderer(Renderer renderer, string path)
+    {
+        var lowerPath = (path ?? string.Empty).ToLowerInvariant();
+        if (LooksFirstPersonOnly(lowerPath)
+            || lowerPath.Contains("local")
+            || lowerPath.Contains("view")
+            || lowerPath.Contains("helmet")
+            || lowerPath.Contains("visor")
+            || lowerPath.Contains("mask")
+            || lowerPath.Contains("head"))
+        {
+            return true;
+        }
+
+        var materialName = renderer?.sharedMaterial?.name ?? string.Empty;
+        return materialName.IndexOf("helmet", StringComparison.OrdinalIgnoreCase) >= 0
+            || materialName.IndexOf("visor", StringComparison.OrdinalIgnoreCase) >= 0
+            || materialName.IndexOf("glass", StringComparison.OrdinalIgnoreCase) >= 0
+            || materialName.IndexOf("view", StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
     private int CaptureAndHideRenderer(Renderer renderer, string reason)
@@ -3344,13 +3380,14 @@ internal sealed class SuitEditorController : MonoBehaviour
             _worldPaintProxyObject.transform.localScale = Vector3.one;
             _worldPaintProxyObject.layer = _worldPaintLayer;
             _worldAvatarMeshFilter.sharedMesh = _worldPaintMesh;
-            _worldAvatarRenderer.sharedMaterial = DrawableSuitsPlugin.Registry.GetRuntimeMaterial(_selectedSuitId) ?? source.sharedMaterial;
+            _worldAvatarRenderer.sharedMaterials = BuildWorldProxyMaterials(source);
             _worldPaintCollider.sharedMesh = null;
             _worldPaintCollider.sharedMesh = _worldPaintMesh;
             source.enabled = false;
             if (forceLog)
             {
-                DrawableSuitsDiagnostics.Info($"WorldAvatarProxy updated. renderer={DescribeRendererCandidate(source, "source")}; vertices={_worldPaintMesh.vertexCount}; bounds={_worldPaintMesh.bounds}; proxyPos={_worldPaintProxyObject.transform.position}; proxyRot={_worldPaintProxyObject.transform.rotation.eulerAngles}; proxyScale={_worldPaintProxyObject.transform.localScale}; layer={_worldPaintLayer}; rendererEnabled={_worldAvatarRenderer.enabled}; proxyMaterial={_worldAvatarRenderer.sharedMaterial?.name ?? "null"}; collider={_worldPaintCollider != null}");
+                DrawableSuitsDiagnostics.Info($"WorldAvatarProxy updated. renderer={DescribeRendererCandidate(source, "source")}; vertices={_worldPaintMesh.vertexCount}; subMeshes={_worldPaintMesh.subMeshCount}; bounds={_worldPaintMesh.bounds}; proxyPos={_worldPaintProxyObject.transform.position}; proxyRot={_worldPaintProxyObject.transform.rotation.eulerAngles}; proxyScale={_worldPaintProxyObject.transform.localScale}; layer={_worldPaintLayer}; rendererEnabled={_worldAvatarRenderer.enabled}; proxyMaterials=[{DescribeMaterials(_worldAvatarRenderer.sharedMaterials)}]; collider={_worldPaintCollider != null}");
+                LogVisibleEditorCameraRenderers(source);
             }
             return true;
         }
@@ -3365,6 +3402,126 @@ internal sealed class SuitEditorController : MonoBehaviour
             {
                 source.enabled = DrawableSuitsPlugin.IsEditorOpen ? false : previousEnabled;
             }
+        }
+    }
+
+    private Material[] BuildWorldProxyMaterials(SkinnedMeshRenderer source)
+    {
+        var runtimeMaterial = DrawableSuitsPlugin.Registry.GetRuntimeMaterial(_selectedSuitId) ?? source?.sharedMaterial;
+        var sourceMaterials = source?.sharedMaterials;
+        var subMeshCount = Mathf.Max(1, _worldPaintMesh != null ? _worldPaintMesh.subMeshCount : (sourceMaterials?.Length ?? 1));
+        var result = new Material[subMeshCount];
+        for (var i = 0; i < result.Length; i++)
+        {
+            var sourceMaterial = sourceMaterials != null && sourceMaterials.Length > 0
+                ? sourceMaterials[Mathf.Min(i, sourceMaterials.Length - 1)]
+                : null;
+            result[i] = MaterialLooksFirstPersonOverlay(sourceMaterial) ? EnsureWorldHiddenSubmeshMaterial() : runtimeMaterial;
+            DrawableSuitsDiagnostics.Info($"World proxy material slot. index={i}; source={sourceMaterial?.name ?? "null"}; assigned={result[i]?.name ?? "null"}; hidden={ReferenceEquals(result[i], _worldHiddenSubmeshMaterial)}");
+        }
+
+        return result;
+    }
+
+    private Material EnsureWorldHiddenSubmeshMaterial()
+    {
+        if (_worldHiddenSubmeshMaterial != null)
+        {
+            return _worldHiddenSubmeshMaterial;
+        }
+
+        var shader = Shader.Find("Unlit/Transparent") ?? Shader.Find("UI/Default") ?? Shader.Find("Standard");
+        _worldHiddenSubmeshMaterial = shader != null
+            ? new Material(shader) { name = "DrawableSuitsHiddenProxySubmesh" }
+            : new Material(Shader.Find("Diffuse")) { name = "DrawableSuitsHiddenProxySubmesh" };
+        _worldHiddenSubmeshMaterial.color = new Color(0f, 0f, 0f, 0f);
+        if (_worldHiddenSubmeshMaterial.HasProperty("_Color"))
+        {
+            _worldHiddenSubmeshMaterial.SetColor("_Color", new Color(0f, 0f, 0f, 0f));
+        }
+        if (_worldHiddenSubmeshMaterial.HasProperty("_Mode"))
+        {
+            _worldHiddenSubmeshMaterial.SetFloat("_Mode", 3f);
+        }
+        if (_worldHiddenSubmeshMaterial.HasProperty("_SrcBlend"))
+        {
+            _worldHiddenSubmeshMaterial.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+        }
+        if (_worldHiddenSubmeshMaterial.HasProperty("_DstBlend"))
+        {
+            _worldHiddenSubmeshMaterial.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+        }
+        if (_worldHiddenSubmeshMaterial.HasProperty("_ZWrite"))
+        {
+            _worldHiddenSubmeshMaterial.SetInt("_ZWrite", 0);
+        }
+        _worldHiddenSubmeshMaterial.renderQueue = 3000;
+        return _worldHiddenSubmeshMaterial;
+    }
+
+    private static bool MaterialLooksFirstPersonOverlay(Material material)
+    {
+        if (material == null)
+        {
+            return false;
+        }
+
+        var name = material.name ?? string.Empty;
+        return name.IndexOf("helmet", StringComparison.OrdinalIgnoreCase) >= 0
+            || name.IndexOf("visor", StringComparison.OrdinalIgnoreCase) >= 0
+            || name.IndexOf("glass", StringComparison.OrdinalIgnoreCase) >= 0
+            || name.IndexOf("arms", StringComparison.OrdinalIgnoreCase) >= 0
+            || name.IndexOf("hand", StringComparison.OrdinalIgnoreCase) >= 0
+            || name.IndexOf("view", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private static string DescribeMaterials(Material[] materials)
+    {
+        if (materials == null || materials.Length == 0)
+        {
+            return "none";
+        }
+
+        var names = new string[materials.Length];
+        for (var i = 0; i < materials.Length; i++)
+        {
+            names[i] = materials[i]?.name ?? "null";
+        }
+
+        return string.Join(", ", names);
+    }
+
+    private void LogVisibleEditorCameraRenderers(Renderer source)
+    {
+        if (_worldEditorCamera == null)
+        {
+            return;
+        }
+
+        var player = StartOfRound.Instance?.localPlayerController;
+        var center = player != null ? player.transform.position : _worldEditorCamera.transform.position;
+        var renderers = Resources.FindObjectsOfTypeAll<Renderer>();
+        var logged = 0;
+        for (var i = 0; i < renderers.Length && logged < 40; i++)
+        {
+            var renderer = renderers[i];
+            if (renderer == null
+                || !renderer.enabled
+                || !renderer.gameObject.activeInHierarchy
+                || !renderer.gameObject.scene.IsValid()
+                || Vector3.Distance(renderer.bounds.center, center) > 5f)
+            {
+                continue;
+            }
+
+            var maskIncludes = (_worldEditorCamera.cullingMask & (1 << renderer.gameObject.layer)) != 0;
+            if (!maskIncludes && renderer.gameObject.layer != _worldPaintLayer)
+            {
+                continue;
+            }
+
+            logged++;
+            DrawableSuitsDiagnostics.Info($"World editor visible renderer candidate. renderer={DescribeRendererState(renderer)}; path={GetTransformPath(renderer.transform)}; source={ReferenceEquals(renderer, source)}; proxy={renderer.gameObject.name.IndexOf("DrawableSuits", StringComparison.OrdinalIgnoreCase) >= 0}; distance={Vector3.Distance(renderer.bounds.center, center):0.##}; material={renderer.sharedMaterial?.name ?? "null"}");
         }
     }
 
@@ -3478,6 +3635,11 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             Destroy(_worldBrushMarkerMaterial);
             _worldBrushMarkerMaterial = null;
+        }
+        if (_worldHiddenSubmeshMaterial != null)
+        {
+            Destroy(_worldHiddenSubmeshMaterial);
+            _worldHiddenSubmeshMaterial = null;
         }
 
         _worldEditorCamera = null;
