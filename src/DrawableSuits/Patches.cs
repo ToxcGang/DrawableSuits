@@ -14,7 +14,11 @@ internal static class StartOfRoundPatches
     [HarmonyPatch("LoadUnlockables")]
     private static void LoadUnlockablesPostfix()
     {
-        RunPatch("StartOfRound.LoadUnlockables", () => DrawableSuitsPlugin.Registry?.ReapplyAll());
+        RunPatch("StartOfRound.LoadUnlockables", () =>
+        {
+            DrawableSuitsPlugin.Registry?.ReapplyAll();
+            SessionSafetyGuard.Run("StartOfRound.LoadUnlockables", true);
+        });
     }
 
     [HarmonyPostfix]
@@ -38,6 +42,7 @@ internal static class StartOfRoundPatches
         RunPatch("StartOfRound.OnPlayerConnectedClientRpc", () =>
         {
             DrawableSuitsPlugin.Registry?.ReapplyAll();
+            SessionSafetyGuard.Run("StartOfRound.OnPlayerConnectedClientRpc", true);
             DrawableSuitsPlugin.Sync?.RequestActiveDesigns();
         });
     }
@@ -187,6 +192,7 @@ internal static class PlayerControllerBPatches
         RunPatch("PlayerControllerB.ConnectClientToPlayerObject", () =>
         {
             DrawableSuitsPlugin.Registry?.ApplyToPlayer(__instance);
+            SessionSafetyGuard.Run("PlayerControllerB.ConnectClientToPlayerObject", true);
             DrawableSuitsPlugin.Sync?.RequestActiveDesigns();
         });
     }
@@ -195,7 +201,11 @@ internal static class PlayerControllerBPatches
     [HarmonyPatch(nameof(PlayerControllerB.SpawnPlayerAnimation))]
     private static void SpawnPlayerAnimationPostfix(PlayerControllerB __instance)
     {
-        RunPatch("PlayerControllerB.SpawnPlayerAnimation", () => DrawableSuitsPlugin.Registry?.ApplyToPlayer(__instance));
+        RunPatch("PlayerControllerB.SpawnPlayerAnimation", () =>
+        {
+            DrawableSuitsPlugin.Registry?.ApplyToPlayer(__instance);
+            SessionSafetyGuard.Run("PlayerControllerB.SpawnPlayerAnimation", true);
+        });
     }
 
     [HarmonyPrefix]
