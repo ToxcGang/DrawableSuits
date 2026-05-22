@@ -20,6 +20,8 @@ public sealed class DrawableSuitsPlugin : BaseUnityPlugin
     internal static bool IsEditorOpen => Editor != null && Editor.IsOpenForDiagnostics;
 
     private Harmony _harmony;
+    private static int _startupSafetyChecksRemaining;
+    private static float _lastStartupSafetyCheckTime;
 
     private void Awake()
     {
@@ -29,7 +31,7 @@ public sealed class DrawableSuitsPlugin : BaseUnityPlugin
         DrawableSuitsPaths.EnsureCreated();
         DrawableSuitsDiagnostics.Initialize();
         DrawableSuitsDiagnostics.Info($"Plugin Awake. pluginInstance={DescribeUnityObject(this)}; pluginGameObject={DescribeUnityObject(gameObject)}; scene={SceneManager.GetActiveScene().name}");
-        DrawableSuitsDiagnostics.Info($"Config OpenEditorKey={ModConfig.OpenEditorKey.Value}; EmergencyOpenKey={ModConfig.EmergencyOpenKey.Value}; DebugOverlayKey={ModConfig.DebugOverlayKey.Value}; ShowStartupDiagnostics={ModConfig.ShowStartupDiagnostics.Value}; StartupDiagnosticsSeconds={ModConfig.StartupDiagnosticsSeconds.Value}; ControllerCursorSpeed={ModConfig.ControllerCursorSpeed.Value}; MaxTextureSize={ModConfig.MaxTextureSize.Value}; MaxUndoStates={ModConfig.MaxUndoStates.Value}; NetworkSync={ModConfig.EnableNetworkSync.Value}; MaxSyncBytes={ModConfig.MaxSyncBytes.Value}; SyncChunkBytes={ModConfig.SyncChunkBytes.Value}; OsFileDialog={ModConfig.EnableOsFileDialog.Value}; ExperimentalModelPreview={ModConfig.EnableExperimentalModelPreview.Value}; StartInUvFallbackMode={ModConfig.StartInUvFallbackMode.Value}; ThirdPersonCameraDistance={ModConfig.ThirdPersonCameraDistance.Value}");
+        DrawableSuitsDiagnostics.Info($"Config OpenEditorKey={ModConfig.OpenEditorKey.Value}; EmergencyOpenKey={ModConfig.EmergencyOpenKey.Value}; DebugOverlayKey={ModConfig.DebugOverlayKey.Value}; ShowStartupDiagnostics={ModConfig.ShowStartupDiagnostics.Value}; StartupDiagnosticsSeconds={ModConfig.StartupDiagnosticsSeconds.Value}; ControllerCursorSpeed={ModConfig.ControllerCursorSpeed.Value}; MaxTextureSize={ModConfig.MaxTextureSize.Value}; MaxUndoStates={ModConfig.MaxUndoStates.Value}; NetworkSync={ModConfig.EnableNetworkSync.Value}; MaxSyncBytes={ModConfig.MaxSyncBytes.Value}; SyncChunkBytes={ModConfig.SyncChunkBytes.Value}; OsFileDialog={ModConfig.EnableOsFileDialog.Value}; ExperimentalModelPreview={ModConfig.EnableExperimentalModelPreview.Value}; StartInUvFallbackMode={ModConfig.StartInUvFallbackMode.Value}; ThirdPersonCameraDistance={ModConfig.ThirdPersonCameraDistance.Value}; ApplyLocalFirstPersonArms={ModConfig.ApplyLocalFirstPersonArms.Value}");
 
         try
         {
@@ -57,6 +59,7 @@ public sealed class DrawableSuitsPlugin : BaseUnityPlugin
 
         SceneManager.sceneLoaded += OnSceneLoaded;
         EnsureRuntimeReady("Plugin.Awake");
+        ResetStartupSafetyChecks("Plugin.Awake");
 
         DrawableSuitsDiagnostics.Info($"{PluginInfo.Name} {PluginInfo.Version} loaded with GUID {PluginInfo.Guid}.");
     }
@@ -65,11 +68,14 @@ public sealed class DrawableSuitsPlugin : BaseUnityPlugin
     {
         DrawableSuitsDiagnostics.Info($"Plugin Start. plugin={DescribeUnityObject(this)}; host={DescribeUnityObject(RuntimeHost)}; editor={DescribeUnityObject(Editor)}");
         EnsureRuntimeReady("Plugin.Start");
+        SessionSafetyGuard.Run("Plugin.Start", true);
+        ResetStartupSafetyChecks("Plugin.Start");
     }
 
     private void Update()
     {
         EnsureRuntimeReady("Plugin.Update");
+        RunStartupSafetyChecksIfNeeded();
     }
 
     private void OnDestroy()
@@ -95,6 +101,38 @@ public sealed class DrawableSuitsPlugin : BaseUnityPlugin
         }
 
         Registry?.ReapplyAll();
+        SessionSafetyGuard.Run($"SceneLoaded:{scene.name}", true);
+        ResetStartupSafetyChecks($"SceneLoaded:{scene.name}");
+    }
+
+
+    private static void ResetStartupSafetyChecks(string reason)
+    {
+        _startupSafetyChecksRemaining = 12;
+        _lastStartupSafetyCheckTime = 0f;
+        DrawableSuitsDiagnostics.Info($"Startup session safety checks armed. reason={reason}; remaining={_startupSafetyChecksRemaining}");
+    }
+
+    private static void RunStartupSafetyChecksIfNeeded()
+    {
+        if (_startupSafetyChecksRemaining <= 0 || IsEditorOpen)
+        {
+            return;
+        }
+
+        if (!HasGameplayEditorContext())
+        {
+            return;
+        }
+
+        if (Time.unscaledTime - _lastStartupSafetyCheckTime < 0.35f)
+        {
+            return;
+        }
+
+        _lastStartupSafetyCheckTime = Time.unscaledTime;
+        _startupSafetyChecksRemaining--;
+        SessionSafetyGuard.Run($"Plugin.UpdateStartup:{_startupSafetyChecksRemaining}", _startupSafetyChecksRemaining == 11 || _startupSafetyChecksRemaining == 0);
     }
 
     internal static bool HasGameplayEditorContext()
