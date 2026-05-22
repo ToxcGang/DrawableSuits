@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.2
+
+- Added `AutoDisableBrokenJetpackWarningLateUpdatePatch`, enabled by default, to disable only the broken `JetpackWarning.Patches.PlayerControllerB_LateUpdate_Postfix` after repeated null-reference errors are detected in `BepInEx/LogOutput.log`.
+- Made `SessionSafetyCheck` run in `SampleSceneRelay` even when `Camera.main` is null and added diagnostics for `Camera.main`, active cameras, local player flags, prompt-related fields, local renderer materials, and JetpackWarning guard status.
+- Kept DrawableSuits editor cameras, paint proxies, brush markers, input locks, and local renderer overrides repaired/restored while `EditorOpen=False`.
+- Gated early scene/session material reapplies until unlockables and player scripts are ready, reducing non-editor startup side effects.
+- Disabled the startup HUD by default for normal builds; `F9` still toggles the debug HUD when needed.
+
 ## 0.4.1
 
 - Added closed-session safety checks on plugin start, scene load, player connect/spawn, and early gameplay frames.
