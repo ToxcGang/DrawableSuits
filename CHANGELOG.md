@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.3
+
+- Replaced direct live local-player rendering in third-person editor mode with a DrawableSuits-owned `DrawableSuitsWorldAvatarProxy`.
+- Added renderer candidate scoring and diagnostics so the editor selects a body/suit `SkinnedMeshRenderer` instead of first-person arms, held items, camera children, or viewmodel pieces.
+- Hid and restored local player/camera renderers while editing so the third-person camera shows the proxy model without first-person rig clutter.
+- Updated world painting to raycast only against the proxy collider layer and to keep the proxy renderer using the active DrawableSuits runtime material.
+- Added diagnostics for selected source renderer, hidden renderer count, avatar proxy, proxy material, camera mask, and restore behavior.
+
 ## 0.4.2
 
 - Added `AutoDisableBrokenJetpackWarningLateUpdatePatch`, enabled by default, to disable only the broken `JetpackWarning.Patches.PlayerControllerB_LateUpdate_Postfix` after repeated null-reference errors are detected in `BepInEx/LogOutput.log`.
