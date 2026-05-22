@@ -1,8 +1,7 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
+using System.Reflection;
 using System.Text;
-using BepInEx;
 using GameNetcodeStuff;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -20,7 +19,6 @@ internal static class SessionSafetyGuard
     };
 
     private static float _lastFullLogTime;
-    private static bool _externalLateUpdateWarningLogged;
 
     internal static void Run(string reason, bool forceLog = false)
     {
@@ -44,6 +42,8 @@ internal static class SessionSafetyGuard
                 }
             }
 
+            JetpackWarningCompatibilityGuard.CheckAndRepair(reason, forceLog || repaired > 0);
+
             var shouldLog = forceLog || repaired > 0 || Time.unscaledTime - _lastFullLogTime >= 2.5f;
             if (!shouldLog)
             {
@@ -51,11 +51,13 @@ internal static class SessionSafetyGuard
             }
 
             _lastFullLogTime = Time.unscaledTime;
-            WarnAboutExternalLateUpdateSpamIfPresent();
             var scene = SceneManager.GetActiveScene();
+            var localPlayer = GetLocalPlayer();
             DrawableSuitsDiagnostics.Info(
                 $"SessionSafetyCheck reason={reason}; scene={scene.name}; editorOpen={editorOpen}; repaired={repaired}; " +
-                $"activeCameras=[{DescribeCameras()}]; localRenderers=[{DescribeLocalRenderers()}]");
+                $"mainCamera={DescribeCamera(Camera.main)}; activeCameras=[{DescribeCameras()}]; " +
+                $"localPlayer=[{DescribeLocalPlayer(localPlayer)}]; prompt=[{DescribePrompt(localPlayer)}]; " +
+                $"localRenderers=[{DescribeLocalRenderers(localPlayer)}]; jetpackWarningGuard={JetpackWarningCompatibilityGuard.Status}");
         }
         catch (Exception ex)
         {
@@ -63,43 +65,21 @@ internal static class SessionSafetyGuard
         }
     }
 
-
-    private static void WarnAboutExternalLateUpdateSpamIfPresent()
+    private static PlayerControllerB GetLocalPlayer()
     {
-        if (_externalLateUpdateWarningLogged)
+        var roundPlayer = StartOfRound.Instance?.localPlayerController;
+        if (roundPlayer != null)
         {
-            return;
+            return roundPlayer;
         }
 
         try
         {
-            var logPath = Path.Combine(Paths.BepInExRootPath, "LogOutput.log");
-            if (!File.Exists(logPath))
-            {
-                return;
-            }
-
-            const int tailBytes = 65536;
-            using var stream = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            if (stream.Length <= 0)
-            {
-                return;
-            }
-
-            stream.Seek(-Math.Min(tailBytes, stream.Length), SeekOrigin.End);
-            using var reader = new StreamReader(stream);
-            var tail = reader.ReadToEnd();
-            if (tail.IndexOf("JetpackWarning", StringComparison.OrdinalIgnoreCase) >= 0
-                && tail.IndexOf("PlayerControllerB.LateUpdate", StringComparison.OrdinalIgnoreCase) >= 0
-                && tail.IndexOf("NullReferenceException", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                _externalLateUpdateWarningLogged = true;
-                DrawableSuitsDiagnostics.Warn("Detected repeated JetpackWarning PlayerControllerB.LateUpdate NullReferenceException entries in BepInEx/LogOutput.log. DrawableSuits will not patch another mod, but this external error can affect session rendering/input while debugging the black-screen issue.");
-            }
+            return UnityEngine.Object.FindObjectOfType<GameNetworkManager>()?.localPlayerController;
         }
-        catch (Exception ex)
+        catch
         {
-            DrawableSuitsDiagnostics.Exception("Failed to scan BepInEx/LogOutput.log for external LateUpdate errors", ex);
+            return null;
         }
     }
 
@@ -151,7 +131,7 @@ internal static class SessionSafetyGuard
         }
 
         var parts = new List<string>();
-        for (var i = 0; i < cameras.Length && parts.Count < 16; i++)
+        for (var i = 0; i < cameras.Length && parts.Count < 24; i++)
         {
             var camera = cameras[i];
             if (camera == null)
@@ -172,15 +152,52 @@ internal static class SessionSafetyGuard
                 continue;
             }
 
-            parts.Add($"{go.name}:enabled={camera.enabled}:active={go.activeInHierarchy}:depth={camera.depth:0.##}:clear={camera.clearFlags}:target={(camera.targetTexture != null ? camera.targetTexture.name : "none")}:mask={camera.cullingMask}");
+            parts.Add(DescribeCamera(camera));
         }
 
         return parts.Count > 0 ? string.Join(" | ", parts) : "none";
     }
 
-    private static string DescribeLocalRenderers()
+    private static string DescribeCamera(Camera camera)
     {
-        var player = StartOfRound.Instance?.localPlayerController;
+        if (camera == null)
+        {
+            return "null";
+        }
+
+        var go = camera.gameObject;
+        return $"{go.name}:enabled={camera.enabled}:active={go.activeInHierarchy}:scene={go.scene.name}:depth={camera.depth:0.##}:clear={camera.clearFlags}:target={(camera.targetTexture != null ? camera.targetTexture.name : "none")}:mask={camera.cullingMask}:near={camera.nearClipPlane:0.###}:far={camera.farClipPlane:0.###}";
+    }
+
+    private static string DescribeLocalPlayer(PlayerControllerB player)
+    {
+        if (player == null)
+        {
+            return "null";
+        }
+
+        return $"{player.name}:pos={FormatVector(player.transform.position)}:moveDisabled={player.disableMoveInput}:lookDisabled={player.disableLookInput}:interactDisabled={player.disableInteract}:specialMenu={player.inSpecialMenu}:controlled={DescribeMember(player, "isPlayerControlled")}:dead={DescribeMember(player, "isPlayerDead")}";
+    }
+
+    private static string DescribePrompt(PlayerControllerB player)
+    {
+        if (player == null)
+        {
+            return "localPlayer=null";
+        }
+
+        var builder = new StringBuilder();
+        AppendMember(builder, player, "hoveringOverTrigger");
+        AppendMember(builder, player, "currentlyGrabbingObject");
+        AppendMember(builder, player, "currentlyHeldObjectServer");
+        AppendMember(builder, player, "currentlyHeldObject");
+        AppendMember(builder, player, "isGrabbingObjectAnimation");
+        AppendMember(builder, player, "isTypingChat");
+        return builder.Length > 0 ? builder.ToString() : "none";
+    }
+
+    private static string DescribeLocalRenderers(PlayerControllerB player)
+    {
         if (player == null)
         {
             return "localPlayer=null";
@@ -219,5 +236,82 @@ internal static class SessionSafetyGuard
             .Append(renderer.gameObject.layer)
             .Append(":material=")
             .Append(material != null ? material.name : "null");
+    }
+
+    private static void AppendMember(StringBuilder builder, object target, string memberName)
+    {
+        var value = DescribeMember(target, memberName);
+        if (string.Equals(value, "<missing>", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (builder.Length > 0)
+        {
+            builder.Append(" | ");
+        }
+
+        builder.Append(memberName).Append("=").Append(value);
+    }
+
+    private static string DescribeMember(object target, string memberName)
+    {
+        if (target == null)
+        {
+            return "null";
+        }
+
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        try
+        {
+            var type = target.GetType();
+            var field = type.GetField(memberName, flags);
+            if (field != null)
+            {
+                return FormatObject(field.GetValue(target));
+            }
+
+            var property = type.GetProperty(memberName, flags);
+            if (property != null && property.GetIndexParameters().Length == 0)
+            {
+                return FormatObject(property.GetValue(target, null));
+            }
+        }
+        catch (Exception ex)
+        {
+            return $"<error:{ex.GetType().Name}>";
+        }
+
+        return "<missing>";
+    }
+
+    private static string FormatObject(object value)
+    {
+        if (value == null)
+        {
+            return "null";
+        }
+
+        if (value is UnityEngine.Object unityObject)
+        {
+            return DrawableSuitsPlugin.DescribeUnityObject(unityObject);
+        }
+
+        if (value is Vector3 vector3)
+        {
+            return FormatVector(vector3);
+        }
+
+        if (value is Vector2 vector2)
+        {
+            return $"({vector2.x:0.###},{vector2.y:0.###})";
+        }
+
+        return value.ToString();
+    }
+
+    private static string FormatVector(Vector3 value)
+    {
+        return $"({value.x:0.###},{value.y:0.###},{value.z:0.###})";
     }
 }
