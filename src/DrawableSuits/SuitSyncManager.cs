@@ -15,6 +15,7 @@ internal sealed class SuitSyncManager : MonoBehaviour
     private const string MessageName = "DrawableSuits.Design";
     private const int MessageKindChunk = 1;
     private const int MessageKindRequestAll = 2;
+    private const int MessageKindChunkV2 = 3;
 
     private readonly Dictionary<string, IncomingPayload> _incoming = new();
     private bool _registered;
@@ -58,7 +59,8 @@ internal sealed class SuitSyncManager : MonoBehaviour
         }
 
         var recipients = manager.IsServer ? OtherClientIds(manager) : new List<ulong> { NetworkManager.ServerClientId };
-        SendTextureChunks(manager, recipients, state.SuitId, state.ActiveDesignName, state.EditableTexture.width, state.EditableTexture.height, bytes);
+        var ownerClientId = state.IsPlayerSpecific ? state.OwnerClientId : manager.LocalClientId;
+        SendTextureChunks(manager, recipients, ownerClientId, state.SuitId, state.ActiveDesignName, state.EditableTexture.width, state.EditableTexture.height, bytes);
     }
 
     public void RequestActiveDesigns()
@@ -118,7 +120,13 @@ internal sealed class SuitSyncManager : MonoBehaviour
 
             if (kind == MessageKindChunk)
             {
-                HandleChunk(senderClientId, reader);
+                HandleChunk(senderClientId, reader, false);
+                return;
+            }
+
+            if (kind == MessageKindChunkV2)
+            {
+                HandleChunk(senderClientId, reader, true);
             }
         }
         catch (Exception ex)
@@ -135,7 +143,7 @@ internal sealed class SuitSyncManager : MonoBehaviour
             return;
         }
 
-        foreach (var state in DrawableSuitsPlugin.Registry.States.Values)
+        foreach (var state in DrawableSuitsPlugin.Registry.ActivePlayerStates)
         {
             if (state?.EditableTexture == null || string.IsNullOrWhiteSpace(state.ActiveDesignName))
             {
@@ -148,12 +156,18 @@ internal sealed class SuitSyncManager : MonoBehaviour
                 continue;
             }
 
-            SendTextureChunks(manager, new List<ulong> { senderClientId }, state.SuitId, state.ActiveDesignName, state.EditableTexture.width, state.EditableTexture.height, bytes);
+            SendTextureChunks(manager, new List<ulong> { senderClientId }, state.OwnerClientId, state.SuitId, state.ActiveDesignName, state.EditableTexture.width, state.EditableTexture.height, bytes);
         }
     }
 
-    private void HandleChunk(ulong senderClientId, FastBufferReader reader)
+    private void HandleChunk(ulong senderClientId, FastBufferReader reader, bool v2)
     {
+        var ownerClientId = senderClientId;
+        if (v2)
+        {
+            reader.ReadValueSafe(out ownerClientId);
+        }
+
         reader.ReadValueSafe(out int suitId);
         reader.ReadValueSafe(out int width);
         reader.ReadValueSafe(out int height);
@@ -172,10 +186,10 @@ internal sealed class SuitSyncManager : MonoBehaviour
         byte[] chunk = null;
         reader.ReadBytesSafe(ref chunk, chunkLength, 0);
 
-        var key = $"{senderClientId}:{suitId}:{hash}";
+        var key = $"{senderClientId}:{ownerClientId}:{suitId}:{hash}";
         if (!_incoming.TryGetValue(key, out var payload))
         {
-            payload = new IncomingPayload(suitId, width, height, designName, hash, totalBytes, chunkCount);
+            payload = new IncomingPayload(ownerClientId, suitId, width, height, designName, hash, totalBytes, chunkCount);
             _incoming[key] = payload;
         }
 
@@ -189,7 +203,7 @@ internal sealed class SuitSyncManager : MonoBehaviour
         var bytes = payload.Combine();
         if (!string.Equals(hash, Hash(bytes), StringComparison.OrdinalIgnoreCase))
         {
-            DrawableSuitsPlugin.ModLogger.LogWarning($"Rejected synced suit {suitId}: hash mismatch.");
+            DrawableSuitsPlugin.ModLogger.LogWarning($"Rejected synced suit {suitId} for client {ownerClientId}: hash mismatch.");
             return;
         }
 
@@ -200,18 +214,19 @@ internal sealed class SuitSyncManager : MonoBehaviour
             return;
         }
 
-        DrawableSuitsPlugin.Registry.ApplyReceivedTexture(suitId, designName, texture);
+        DrawableSuitsPlugin.Registry.ApplyReceivedTexture(ownerClientId, suitId, designName, texture);
         Destroy(texture);
+        DrawableSuitsDiagnostics.Info($"Received synced player suit design. ownerClientId={ownerClientId}; senderClientId={senderClientId}; suitId={suitId}; designName={designName}; bytes={bytes.Length}; version={(v2 ? "v2" : "legacy")}");
 
         var manager = NetworkManager.Singleton;
         if (manager != null && manager.IsServer && senderClientId != manager.LocalClientId)
         {
             var recipients = OtherClientIds(manager).Where(id => id != senderClientId).ToList();
-            SendTextureChunks(manager, recipients, suitId, designName, width, height, bytes);
+            SendTextureChunks(manager, recipients, ownerClientId, suitId, designName, width, height, bytes);
         }
     }
 
-    private static void SendTextureChunks(NetworkManager manager, IReadOnlyList<ulong> recipients, int suitId, string designName, int width, int height, byte[] bytes)
+    private static void SendTextureChunks(NetworkManager manager, IReadOnlyList<ulong> recipients, ulong ownerClientId, int suitId, string designName, int width, int height, byte[] bytes)
     {
         if (manager?.CustomMessagingManager == null || recipients == null || recipients.Count == 0)
         {
@@ -232,7 +247,8 @@ internal sealed class SuitSyncManager : MonoBehaviour
 
             var writerSize = length + 1024 + Encoding.UTF8.GetByteCount(designName) + Encoding.UTF8.GetByteCount(hash);
             using var writer = new FastBufferWriter(writerSize, Allocator.Temp, writerSize);
-            writer.WriteValueSafe(MessageKindChunk);
+            writer.WriteValueSafe(MessageKindChunkV2);
+            writer.WriteValueSafe(ownerClientId);
             writer.WriteValueSafe(suitId);
             writer.WriteValueSafe(width);
             writer.WriteValueSafe(height);
@@ -289,6 +305,7 @@ internal sealed class SuitSyncManager : MonoBehaviour
         private int _received;
 
         public int SuitId { get; }
+        public ulong OwnerClientId { get; }
         public int Width { get; }
         public int Height { get; }
         public string DesignName { get; }
@@ -296,8 +313,9 @@ internal sealed class SuitSyncManager : MonoBehaviour
         public int TotalBytes { get; }
         public bool IsComplete => _received == _chunks.Length;
 
-        public IncomingPayload(int suitId, int width, int height, string designName, string hash, int totalBytes, int chunkCount)
+        public IncomingPayload(ulong ownerClientId, int suitId, int width, int height, string designName, string hash, int totalBytes, int chunkCount)
         {
+            OwnerClientId = ownerClientId;
             SuitId = suitId;
             Width = width;
             Height = height;
