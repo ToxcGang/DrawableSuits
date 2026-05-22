@@ -9,6 +9,7 @@ namespace DrawableSuits;
 internal sealed class SuitTextureRegistry : MonoBehaviour
 {
     private readonly Dictionary<int, SuitTextureState> _states = new();
+    private readonly Dictionary<Renderer, Material[]> _localRendererOriginalMaterials = new();
 
     public IReadOnlyDictionary<int, SuitTextureState> States => _states;
 
@@ -288,17 +289,155 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
         ApplyToPlayer(player, state);
     }
 
-    private static void ApplyToPlayer(PlayerControllerB player, SuitTextureState state)
+    private void ApplyToPlayer(PlayerControllerB player, SuitTextureState state)
     {
         if (player == null || state == null || player.currentSuitID != state.SuitId)
         {
             return;
         }
 
+        var localPlayer = StartOfRound.Instance?.localPlayerController;
+        var isLocal = localPlayer != null && ReferenceEquals(player, localPlayer);
+        if (isLocal && !DrawableSuitsPlugin.IsEditorOpen)
+        {
+            RestoreLocalPlayerMaterials("ApplyToPlayer skipped local closed editor");
+            return;
+        }
+
+        if (isLocal)
+        {
+            SetLocalRendererMaterial(player.thisPlayerModel, state.RuntimeMaterial);
+            SetLocalRendererMaterial(player.thisPlayerModelLOD1, state.RuntimeMaterial);
+            SetLocalRendererMaterial(player.thisPlayerModelLOD2, state.RuntimeMaterial);
+            if (DrawableSuitsPlugin.ModConfig.ApplyLocalFirstPersonArms.Value)
+            {
+                SetLocalRendererMaterial(player.thisPlayerModelArms, state.RuntimeMaterial);
+            }
+            else
+            {
+                RestoreRendererToOriginal(player.thisPlayerModelArms, state.OriginalMaterial, "local first-person arms config disabled");
+            }
+            return;
+        }
+
         SetRendererMaterial(player.thisPlayerModel, state.RuntimeMaterial);
         SetRendererMaterial(player.thisPlayerModelLOD1, state.RuntimeMaterial);
         SetRendererMaterial(player.thisPlayerModelLOD2, state.RuntimeMaterial);
-        SetRendererMaterial(player.thisPlayerModelArms, state.RuntimeMaterial);
+    }
+
+    public int RestoreLocalPlayerMaterials(string reason)
+    {
+        var restored = 0;
+        if (_localRendererOriginalMaterials.Count > 0)
+        {
+            foreach (var pair in _localRendererOriginalMaterials)
+            {
+                var renderer = pair.Key;
+                var materials = pair.Value;
+                if (renderer == null || materials == null || materials.Length == 0)
+                {
+                    continue;
+                }
+
+                renderer.sharedMaterials = CloneMaterials(materials);
+                restored++;
+            }
+            _localRendererOriginalMaterials.Clear();
+        }
+
+        var player = StartOfRound.Instance?.localPlayerController;
+        var state = player != null ? GetOrCreateState(player.currentSuitID) : null;
+        if (player != null && state?.OriginalMaterial != null)
+        {
+            restored += RestoreDrawableRendererFallback(player.thisPlayerModel, state.OriginalMaterial, reason);
+            restored += RestoreDrawableRendererFallback(player.thisPlayerModelLOD1, state.OriginalMaterial, reason);
+            restored += RestoreDrawableRendererFallback(player.thisPlayerModelLOD2, state.OriginalMaterial, reason);
+            restored += RestoreDrawableRendererFallback(player.thisPlayerModelArms, state.OriginalMaterial, reason);
+        }
+
+        if (restored > 0)
+        {
+            DrawableSuitsDiagnostics.Info($"Restored local player materials. reason={reason}; restored={restored}; applyLocalFirstPersonArms={DrawableSuitsPlugin.ModConfig.ApplyLocalFirstPersonArms.Value}");
+        }
+
+        return restored;
+    }
+
+    private void SetLocalRendererMaterial(Renderer renderer, Material material)
+    {
+        if (renderer == null || material == null)
+        {
+            return;
+        }
+
+        if (!_localRendererOriginalMaterials.ContainsKey(renderer))
+        {
+            _localRendererOriginalMaterials[renderer] = CloneMaterials(renderer.sharedMaterials);
+        }
+
+        SetRendererMaterial(renderer, material);
+    }
+
+    private void RestoreRendererToOriginal(Renderer renderer, Material fallbackMaterial, string reason)
+    {
+        if (renderer == null)
+        {
+            return;
+        }
+
+        if (_localRendererOriginalMaterials.TryGetValue(renderer, out var originalMaterials) && originalMaterials != null && originalMaterials.Length > 0)
+        {
+            renderer.sharedMaterials = CloneMaterials(originalMaterials);
+            _localRendererOriginalMaterials.Remove(renderer);
+            DrawableSuitsDiagnostics.Info($"Restored local renderer material. reason={reason}; renderer={renderer.name}");
+            return;
+        }
+
+        RestoreDrawableRendererFallback(renderer, fallbackMaterial, reason);
+    }
+
+    private static int RestoreDrawableRendererFallback(Renderer renderer, Material fallbackMaterial, string reason)
+    {
+        if (renderer == null || fallbackMaterial == null || !RendererUsesDrawableMaterial(renderer))
+        {
+            return 0;
+        }
+
+        renderer.sharedMaterial = fallbackMaterial;
+        DrawableSuitsDiagnostics.Info($"Restored DrawableSuits material fallback. reason={reason}; renderer={renderer.name}; material={fallbackMaterial.name}");
+        return 1;
+    }
+
+    private static bool RendererUsesDrawableMaterial(Renderer renderer)
+    {
+        if (renderer?.sharedMaterials == null)
+        {
+            return false;
+        }
+
+        var materials = renderer.sharedMaterials;
+        for (var i = 0; i < materials.Length; i++)
+        {
+            var materialName = materials[i]?.name ?? string.Empty;
+            if (materialName.IndexOf("DrawableSuits", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static Material[] CloneMaterials(Material[] materials)
+    {
+        if (materials == null)
+        {
+            return Array.Empty<Material>();
+        }
+
+        var clone = new Material[materials.Length];
+        Array.Copy(materials, clone, materials.Length);
+        return clone;
     }
 
     private static void SetRendererMaterial(Renderer renderer, Material material)
@@ -308,7 +447,6 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
             renderer.sharedMaterial = material;
         }
     }
-
     private static UnlockableItem GetUnlockableItem(int suitId)
     {
         var round = StartOfRound.Instance;
