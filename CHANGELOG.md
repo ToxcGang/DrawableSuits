@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.1
+
+- Added closed-session safety checks on plugin start, scene load, player connect/spawn, and early gameplay frames.
+- Destroyed or disabled stray DrawableSuits third-person/preview cameras, paint proxies, and brush markers whenever the editor is closed.
+- Restored closed-editor cursor/input/renderer state and added `SessionSafetyCheck` diagnostics for active cameras and local renderer materials.
+- Stopped applying DrawableSuits runtime materials to the local first-person arms/body outside the editor by default.
+- Added `ApplyLocalFirstPersonArms`, disabled by default and documented as experimental.
+- Hardened third-person editor lifetime so the editor camera is created only during open and remains disabled until setup succeeds.
+- Added a one-time diagnostic warning when the active BepInEx log shows repeated external `JetpackWarning` `PlayerControllerB.LateUpdate` null-reference errors.
+
 ## 0.4.0
 
 - Replaced the UV texture-preview workflow as the default editor with an in-world third-person paint mode.
@@ -143,5 +153,3 @@
 - Added apply/save multiplayer sync using Unity Netcode named messages.
 - Added vanilla and modded suit material reapplication patches.
 - Added Thunderstore manifest metadata.
-
-
