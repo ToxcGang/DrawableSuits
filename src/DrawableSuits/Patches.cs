@@ -16,7 +16,7 @@ internal static class StartOfRoundPatches
     {
         RunPatch("StartOfRound.LoadUnlockables", () =>
         {
-            DrawableSuitsPlugin.Registry?.ReapplyAll();
+            DrawableSuitsPlugin.Registry?.ReapplyAllIfReady("StartOfRound.LoadUnlockables");
             SessionSafetyGuard.Run("StartOfRound.LoadUnlockables", true);
         });
     }
@@ -25,14 +25,14 @@ internal static class StartOfRoundPatches
     [HarmonyPatch("PositionSuitsOnRack")]
     private static void PositionSuitsOnRackPostfix()
     {
-        RunPatch("StartOfRound.PositionSuitsOnRack", () => DrawableSuitsPlugin.Registry?.ReapplyAll());
+        RunPatch("StartOfRound.PositionSuitsOnRack", () => DrawableSuitsPlugin.Registry?.ReapplyAllIfReady("StartOfRound.PositionSuitsOnRack"));
     }
 
     [HarmonyPostfix]
     [HarmonyPatch(nameof(StartOfRound.SyncSuitsClientRpc))]
     private static void SyncSuitsClientRpcPostfix()
     {
-        RunPatch("StartOfRound.SyncSuitsClientRpc", () => DrawableSuitsPlugin.Registry?.ReapplyAll());
+        RunPatch("StartOfRound.SyncSuitsClientRpc", () => DrawableSuitsPlugin.Registry?.ReapplyAllIfReady("StartOfRound.SyncSuitsClientRpc"));
     }
 
     [HarmonyPostfix]
@@ -41,7 +41,7 @@ internal static class StartOfRoundPatches
     {
         RunPatch("StartOfRound.OnPlayerConnectedClientRpc", () =>
         {
-            DrawableSuitsPlugin.Registry?.ReapplyAll();
+            DrawableSuitsPlugin.Registry?.ReapplyAllIfReady("StartOfRound.OnPlayerConnectedClientRpc");
             SessionSafetyGuard.Run("StartOfRound.OnPlayerConnectedClientRpc", true);
             DrawableSuitsPlugin.Sync?.RequestActiveDesigns();
         });
@@ -75,7 +75,7 @@ internal static class UnlockableSuitPatches
     [HarmonyPatch(nameof(UnlockableSuit.SwitchSuitForAllPlayers))]
     private static void SwitchSuitForAllPlayersPostfix()
     {
-        RunPatch("UnlockableSuit.SwitchSuitForAllPlayers", () => DrawableSuitsPlugin.Registry?.ReapplyAll());
+        RunPatch("UnlockableSuit.SwitchSuitForAllPlayers", () => DrawableSuitsPlugin.Registry?.ReapplyAllIfReady("UnlockableSuit.SwitchSuitForAllPlayers"));
     }
 
     private static void RunPatch(string context, Action action)
