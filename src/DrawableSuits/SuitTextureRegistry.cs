@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using GameNetcodeStuff;
+using Unity.Netcode;
 using UnityEngine;
 
 namespace DrawableSuits;
@@ -9,17 +10,73 @@ namespace DrawableSuits;
 internal sealed class SuitTextureRegistry : MonoBehaviour
 {
     private readonly Dictionary<int, SuitTextureState> _states = new();
+    private readonly Dictionary<string, SuitTextureState> _playerStates = new(StringComparer.Ordinal);
     private readonly Dictionary<Renderer, Material[]> _localRendererOriginalMaterials = new();
 
     public IReadOnlyDictionary<int, SuitTextureState> States => _states;
+    public IEnumerable<SuitTextureState> ActivePlayerStates => _playerStates.Values;
 
     public SuitTextureState GetOrCreateState(int suitId)
+    {
+        var localPlayer = StartOfRound.Instance?.localPlayerController;
+        if (localPlayer != null)
+        {
+            return GetOrCreateStateForPlayer(localPlayer, suitId);
+        }
+
+        return GetOrCreateSharedState(suitId);
+    }
+
+    private SuitTextureState GetOrCreateSharedState(int suitId)
     {
         if (_states.TryGetValue(suitId, out var state))
         {
             return state;
         }
 
+        state = CreateState(suitId, 0UL, false, "shared");
+        if (state != null)
+        {
+            _states[suitId] = state;
+        }
+
+        return state;
+    }
+
+    public SuitTextureState GetOrCreateStateForPlayer(PlayerControllerB player, int suitId)
+    {
+        if (player == null)
+        {
+            return GetOrCreateSharedState(suitId);
+        }
+
+        return GetOrCreateStateForClient(GetPlayerClientId(player), suitId);
+    }
+
+    public SuitTextureState GetOrCreateStateForClient(ulong ownerClientId, int suitId)
+    {
+        var key = PlayerStateKey(ownerClientId, suitId);
+        if (_playerStates.TryGetValue(key, out var state))
+        {
+            return state;
+        }
+
+        state = CreateState(suitId, ownerClientId, true, $"client {ownerClientId}");
+        if (state != null)
+        {
+            _playerStates[key] = state;
+        }
+
+        return state;
+    }
+
+    private static string PlayerStateKey(ulong ownerClientId, int suitId)
+    {
+        return $"{ownerClientId}:{suitId}";
+    }
+
+    private SuitTextureState CreateState(int suitId, ulong ownerClientId, bool playerSpecific, string context)
+    {
         var item = GetUnlockableItem(suitId);
         if (item == null || item.suitMaterial == null)
         {
@@ -32,13 +89,17 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
         var editableTexture = TextureTools.CreateEditableCopy(originalTexture, maxSize);
         var material = new Material(item.suitMaterial)
         {
-            name = $"{item.suitMaterial.name} (DrawableSuits)",
+            name = playerSpecific
+                ? $"{item.suitMaterial.name} (DrawableSuits client {ownerClientId})"
+                : $"{item.suitMaterial.name} (DrawableSuits shared)",
             mainTexture = editableTexture
         };
 
-        state = new SuitTextureState
+        var state = new SuitTextureState
         {
             SuitId = suitId,
+            OwnerClientId = ownerClientId,
+            IsPlayerSpecific = playerSpecific,
             SuitName = string.IsNullOrWhiteSpace(item.unlockableName) ? $"Suit {suitId}" : item.unlockableName,
             OriginalMaterial = item.suitMaterial,
             OriginalTexture = originalTexture,
@@ -48,7 +109,7 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
             ActiveDesignName = string.Empty
         };
 
-        _states[suitId] = state;
+        DrawableSuitsDiagnostics.Info($"Created texture state. context={context}; suitId={suitId}; ownerClientId={ownerClientId}; playerSpecific={playerSpecific}; material={material.name}; texture={editableTexture.name} {editableTexture.width}x{editableTexture.height}");
         return state;
     }
 
@@ -57,9 +118,19 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
         return GetOrCreateState(suitId)?.EditableTexture;
     }
 
+    public Texture2D GetEditableTextureForPlayer(PlayerControllerB player, int suitId)
+    {
+        return GetOrCreateStateForPlayer(player, suitId)?.EditableTexture;
+    }
+
     public Material GetRuntimeMaterial(int suitId)
     {
         return GetOrCreateState(suitId)?.RuntimeMaterial;
+    }
+
+    public Material GetRuntimeMaterialForPlayer(PlayerControllerB player, int suitId)
+    {
+        return GetOrCreateStateForPlayer(player, suitId)?.RuntimeMaterial;
     }
 
     public void ApplyEditedTexture(int suitId, string designName, bool broadcast)
@@ -72,7 +143,7 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
 
         state.RuntimeMaterial.mainTexture = state.EditableTexture;
         state.ActiveDesignName = designName ?? string.Empty;
-        ApplyStateToWorld(state);
+        ApplyStateToOwner(state);
 
         if (broadcast)
         {
@@ -82,7 +153,12 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
 
     public void ApplyReceivedTexture(int suitId, string designName, Texture2D texture)
     {
-        var state = GetOrCreateState(suitId);
+        ApplyReceivedTexture(ResolveLocalClientId(), suitId, designName, texture);
+    }
+
+    public void ApplyReceivedTexture(ulong ownerClientId, int suitId, string designName, Texture2D texture)
+    {
+        var state = GetOrCreateStateForClient(ownerClientId, suitId);
         if (state == null || texture == null)
         {
             return;
@@ -91,7 +167,7 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
         TextureTools.CopyInto(state.EditableTexture, texture);
         state.RuntimeMaterial.mainTexture = state.EditableTexture;
         state.ActiveDesignName = designName ?? "Received design";
-        ApplyStateToWorld(state);
+        ApplyStateToOwner(state);
     }
 
     public void ResetSuit(int suitId)
@@ -104,15 +180,20 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
 
         TextureTools.CopyInto(state.EditableTexture, state.BaseTexture);
         state.ActiveDesignName = string.Empty;
-        ApplyStateToWorld(state);
+        ApplyStateToOwner(state);
     }
 
     public void ReapplyAll()
     {
-        RefreshKnownSuitMaterials();
-        foreach (var state in _states.Values)
+        var round = StartOfRound.Instance;
+        if (round?.allPlayerScripts == null)
         {
-            ApplyStateToWorld(state);
+            return;
+        }
+
+        foreach (var player in round.allPlayerScripts)
+        {
+            ApplyToPlayer(player);
         }
     }
 
@@ -155,20 +236,7 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
 
     public void RefreshKnownSuitMaterials()
     {
-        var round = StartOfRound.Instance;
-        if (round?.unlockablesList?.unlockables == null)
-        {
-            return;
-        }
-
-        foreach (var pair in _states)
-        {
-            var item = GetUnlockableItem(pair.Key);
-            if (item != null)
-            {
-                item.suitMaterial = pair.Value.RuntimeMaterial;
-            }
-        }
+        DrawableSuitsDiagnostics.Info("RefreshKnownSuitMaterials skipped: DrawableSuits 0.4.4 keeps active edits player-specific and no longer mutates UnlockableItem.suitMaterial.");
     }
 
     public int GetLocalSuitId()
@@ -281,29 +349,14 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
 
     public void ApplyStateToWorld(SuitTextureState state)
     {
+        ApplyStateToOwner(state);
+    }
+
+    public void ApplyStateToOwner(SuitTextureState state)
+    {
         if (state == null)
         {
             return;
-        }
-
-        var item = GetUnlockableItem(state.SuitId);
-        if (item != null)
-        {
-            item.suitMaterial = state.RuntimeMaterial;
-        }
-
-        foreach (var suit in FindObjectsOfType<UnlockableSuit>(true))
-        {
-            if (suit == null || suit.suitID != state.SuitId)
-            {
-                continue;
-            }
-
-            suit.suitMaterial = state.RuntimeMaterial;
-            if (suit.suitRenderer != null)
-            {
-                suit.suitRenderer.sharedMaterial = state.RuntimeMaterial;
-            }
         }
 
         var round = StartOfRound.Instance;
@@ -311,16 +364,30 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
         {
             foreach (var player in round.allPlayerScripts)
             {
-                ApplyToPlayer(player, state);
+                if (player != null
+                    && player.currentSuitID == state.SuitId
+                    && (!state.IsPlayerSpecific || GetPlayerClientId(player) == state.OwnerClientId))
+                {
+                    ApplyToPlayer(player, state);
+                }
             }
         }
     }
 
     public void ApplyToPlayer(PlayerControllerB player)
     {
-        if (player == null || !_states.TryGetValue(player.currentSuitID, out var state))
+        if (player == null)
         {
             return;
+        }
+
+        var key = PlayerStateKey(GetPlayerClientId(player), player.currentSuitID);
+        if (!_playerStates.TryGetValue(key, out var state))
+        {
+            if (!_states.TryGetValue(player.currentSuitID, out state))
+            {
+                return;
+            }
         }
 
         ApplyToPlayer(player, state);
@@ -383,7 +450,7 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
         }
 
         var player = StartOfRound.Instance?.localPlayerController;
-        var state = player != null ? GetOrCreateState(player.currentSuitID) : null;
+        var state = player != null ? GetOrCreateStateForPlayer(player, player.currentSuitID) : null;
         if (player != null && state?.OriginalMaterial != null)
         {
             restored += RestoreDrawableRendererFallback(player.thisPlayerModel, state.OriginalMaterial, reason);
@@ -484,6 +551,34 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
             renderer.sharedMaterial = material;
         }
     }
+
+    public static ulong GetPlayerClientId(PlayerControllerB player)
+    {
+        if (player == null)
+        {
+            return ResolveLocalClientId();
+        }
+
+        if (player.actualClientId != 0UL || player.playerClientId == 0UL)
+        {
+            return player.actualClientId;
+        }
+
+        return player.playerClientId;
+    }
+
+    private static ulong ResolveLocalClientId()
+    {
+        var manager = NetworkManager.Singleton;
+        if (manager != null && manager.IsClient)
+        {
+            return manager.LocalClientId;
+        }
+
+        var player = StartOfRound.Instance?.localPlayerController;
+        return player != null ? player.actualClientId : 0UL;
+    }
+
     private static UnlockableItem GetUnlockableItem(int suitId)
     {
         var round = StartOfRound.Instance;
