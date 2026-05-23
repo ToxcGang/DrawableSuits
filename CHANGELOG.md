@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.5
+
+- Reworked controller virtual-cursor `A` clicks to resolve only actionable UI controls under the cursor, including buttons, input fields, DrawableSuits sliders, and the new color picker.
+- Stopped normal buttons from keeping stale selected/highlight colors after unrelated clicks while preserving selected styling for tools, decals, and saved designs.
+- Replaced RGB brush sliders with a compact hue-ring and saturation/value color picker with a live hex swatch.
+- Shortened the in-game `Refresh Decals` status message so it no longer overlaps the world-help text or diagnostics area.
+- Added diagnostics for raw UI raycast hits, resolved virtual-cursor targets, press targets, and release targets.
+
 ## 0.4.4
 
 - Made active edited textures player-specific by owner client ID instead of global per suit ID, so editing one player no longer changes every player or rack using the same base suit.
