@@ -5,11 +5,11 @@ DrawableSuits is a Lethal Company v81 BepInEx mod that lets players draw on suit
 ## Features
 
 - Default third-person paint editor: opening DrawableSuits switches to an editor camera around the local player so you can paint directly on the visible suit.
-- Compact side overlay with Paint, Erase, Decal, brush/color sliders, decal controls, design name, visible decal rows, visible saved-design rows, Undo, Redo, Reset, Apply, Save, Load, and Close.
+- Compact side overlay with Paint, Erase, Decal, brush sliders, a hue/SV color picker, decal controls, design name, visible decal rows, visible saved-design rows, Undo, Redo, Reset, Apply, Save, Load, and Close.
 - Pause-menu entry point: use the `DrawableSuits` button below Resume.
 - Fallback shortcuts: `F8` on keyboard or `View/Back + Y` on controller.
 - Emergency open shortcut: `F10`, which opens the editor and does not toggle it closed.
-- Controller support: left stick moves the editor cursor, `A` clicks the UI under the cursor, right trigger paints only, right stick/bumpers orbit the camera, D-pad up/down zooms, `Y` cycles tools, `X` undoes, and Start saves.
+- Controller support: left stick moves the editor cursor, `A` clicks exactly the UI control under the cursor, right trigger paints only, right stick/bumpers orbit the camera, D-pad up/down zooms, `Y` cycles tools, `X` undoes, and Start saves.
 - Direct surface painting: the editor bakes a hidden mesh collider from the local player model and paints by raycasting from the third-person camera to suit UV coordinates.
 - UV fallback mode: press `Use UV Fallback` if third-person setup fails or if you need the old texture-layout view for debugging.
 - PNG/JPG decals from `BepInEx/config/DrawableSuits/Decals`. The in-game OS file dialog is disabled for stability in Gale/Unity.
@@ -40,7 +40,7 @@ Controller:
 
 - `View/Back + Y`: open or close.
 - Left stick: move the editor cursor.
-- `A`: click the UI control under the cursor.
+- `A`: click the button, field, slider, or color picker region directly under the cursor.
 - Right trigger: paint/erase/place decal on the suit.
 - Right stick or bumpers: orbit the third-person editor camera.
 - D-pad up/down: zoom the third-person editor camera.
@@ -97,7 +97,7 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.4.4 behavior:
+Expected 0.4.5 behavior:
 
 - Opening the editor shows a compact side overlay and a third-person camera view of the local player.
 - The diagnostics text should show `Preview mode: WorldThirdPerson` when the default path succeeds.
@@ -107,12 +107,17 @@ Expected 0.4.4 behavior:
 - Decal and saved-design rows are explicit anchored buttons, not ScrollRect/layout rows.
 - Controller right trigger paints only. Camera zoom uses mouse wheel or controller D-pad up/down.
 - Active edited textures are per player/client, not global per suit type.
+- The color changer is a compact hue ring plus saturation/value square with a hex swatch.
+- Normal buttons should not stay highlighted after unrelated clicks; only selected tools, decals, and saved designs keep orange selection styling.
 
 Troubleshooting:
 
 - If entering a session starts on a black screen before opening DrawableSuits, check `SessionSafetyCheck` lines. They list `Camera.main`, active cameras, camera target textures, local player flags, prompt context such as grab/hover fields, local renderer materials, and any repaired DrawableSuits objects. DrawableSuits should report no active DrawableSuits cameras while `EditorOpen=False`.
 - If the black screen shows `Grab: [E]` and `SessionSafetyCheck` reports `Camera.main=null`, inspect `LogOutput.log` for repeated `JetpackWarning` `PlayerControllerB.LateUpdate` `NullReferenceException`. By default, DrawableSuits disables only `JetpackWarning.Patches.PlayerControllerB_LateUpdate_Postfix` after repeated failures and logs the unpatch result in `diagnostics.log`. Set `AutoDisableBrokenJetpackWarningLateUpdatePatch=false` to turn this compatibility guard off.
 - If third person shows first-person arms, a giant helmet, held items, or another partial rig, check `World renderer candidate`, `Hidden nearby first-person overlay renderer`, `World editor visible renderer candidate`, and `WorldAvatarProxy updated` lines. The selected renderer should be a body/suit renderer and the proxy should use only the player-specific DrawableSuits material for suit-compatible submeshes.
+- If controller `A` clicks the wrong UI item, check `Virtual cursor A press` and `Virtual cursor A release` diagnostics. They should show the same resolved button or control that is visually under the cursor.
+- If button highlights stick around, confirm the installed package is 0.4.5 or newer. Normal button selected colors are neutral in 0.4.5.
+- If the color picker does not update paint color, check the hex swatch and `DrawableColorPickerBuilt` diagnostics.
 - If right trigger zooms the third-person camera, confirm the installed package is 0.4.4 or newer. In 0.4.4, right trigger is paint-only and D-pad up/down controls controller zoom.
 - If UV fallback shows a second colored cursor, confirm the installed package is 0.4.4 or newer. The old filled brush indicator is disabled because it looked like another cursor.
 - If editing one player changes every other player wearing the same skin, confirm the installed package is 0.4.4 or newer. Active edits now sync with owner client IDs and do not mutate suit rack/global suit materials.
@@ -122,7 +127,7 @@ Troubleshooting:
 - If scan, inventory scroll, or item use still happen while the editor is open, check for `Global gameplay actions locked` and `Blocked PlayerControllerB` entries.
 - If keyboard or controller shortcuts do not open the editor, use the pause-menu `DrawableSuits` button.
 - If the mouse cannot move after opening from pause, check cursor unlock and `pointerSource=Mouse` diagnostics.
-- Pressing `Refresh Decals` is safe in-game. To import decals, place image files in `BepInEx/config/DrawableSuits/Decals`, then press `Refresh Decals`.
+- Pressing `Refresh Decals` is safe in-game and shows only a short status line. To import decals, place image files in `BepInEx/config/DrawableSuits/Decals`, then press `Refresh Decals`.
 - If you quit to the main menu while the editor is open, DrawableSuits closes the editor during the scene change so main-menu navigation is restored.
 - Lethal Company v81 uses Unity's Input System path; repeated `UnityEngine.Input` exceptions should not appear from DrawableSuits.
 
