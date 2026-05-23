@@ -172,9 +172,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private InputField _designNameInput;
     private DrawableSliderControl _brushSizeSlider;
     private DrawableSliderControl _brushOpacitySlider;
-    private DrawableSliderControl _redSlider;
-    private DrawableSliderControl _greenSlider;
-    private DrawableSliderControl _blueSlider;
+    private DrawableColorPickerControl _colorPicker;
+    private Text _colorHexLabel;
     private DrawableSliderControl _decalSizeSlider;
     private DrawableSliderControl _decalRotationSlider;
     private Image _colorSwatch;
@@ -194,6 +193,9 @@ internal sealed class SuitEditorController : MonoBehaviour
     private bool _virtualPointerDown;
     private GameObject _virtualPointerPressTarget;
     private DrawableSliderControl _virtualPointerSlider;
+    private DrawableColorPickerControl _virtualPointerColorPicker;
+    private Button _virtualPointerButton;
+    private InputField _virtualPointerInput;
     private string _pointerSource = "Mouse";
     private Vector2 _lastMousePosition;
     private Vector2 _lastGamepadStick;
@@ -329,6 +331,307 @@ internal sealed class SuitEditorController : MonoBehaviour
             _handleRect.anchorMax = new Vector2(normalized, 0.5f);
             _handleRect.anchoredPosition = Vector2.zero;
             _handleRect.sizeDelta = new Vector2(16f, 28f);
+        }
+    }
+
+    private sealed class DrawableColorPickerControl : Selectable, IPointerDownHandler, IDragHandler, IPointerUpHandler
+    {
+        private enum DragRegion
+        {
+            None,
+            Hue,
+            SaturationValue
+        }
+
+        private RectTransform _hueRect;
+        private RectTransform _svRect;
+        private RectTransform _hueHandle;
+        private RectTransform _svHandle;
+        private RawImage _hueImage;
+        private RawImage _svImage;
+        private Image _swatch;
+        private Text _hexLabel;
+        private Texture2D _hueTexture;
+        private Texture2D _svTexture;
+        private Action<Color> _onColorChanged;
+        private float _hue;
+        private float _saturation = 1f;
+        private float _value = 1f;
+        private DragRegion _dragRegion;
+
+        internal Text HexLabel => _hexLabel;
+
+        internal void Configure(
+            RectTransform hueRect,
+            RectTransform svRect,
+            RectTransform hueHandle,
+            RectTransform svHandle,
+            RawImage hueImage,
+            RawImage svImage,
+            Image swatch,
+            Text hexLabel,
+            Color initialColor,
+            Action<Color> onColorChanged)
+        {
+            _hueRect = hueRect;
+            _svRect = svRect;
+            _hueHandle = hueHandle;
+            _svHandle = svHandle;
+            _hueImage = hueImage;
+            _svImage = svImage;
+            _swatch = swatch;
+            _hexLabel = hexLabel;
+            _onColorChanged = onColorChanged;
+            BuildHueTexture();
+            SetColor(initialColor, false);
+        }
+
+        internal void SetColor(Color color, bool notify)
+        {
+            Color.RGBToHSV(color, out _hue, out _saturation, out _value);
+            UpdateSaturationValueTexture();
+            UpdateVisuals();
+            if (notify)
+            {
+                _onColorChanged?.Invoke(CurrentColor());
+            }
+        }
+
+        internal bool SetValueFromScreenPosition(Vector2 screenPosition, Camera eventCamera, bool notify)
+        {
+            if (!IsActive() || !IsInteractable())
+            {
+                return false;
+            }
+
+            if (_dragRegion == DragRegion.None)
+            {
+                _dragRegion = ResolveRegion(screenPosition, eventCamera);
+            }
+
+            if (_dragRegion == DragRegion.Hue)
+            {
+                if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(_hueRect, screenPosition, eventCamera, out var localPoint))
+                {
+                    return false;
+                }
+
+                var rect = _hueRect.rect;
+                var center = rect.center;
+                var delta = localPoint - center;
+                if (delta.sqrMagnitude < 1f)
+                {
+                    return false;
+                }
+
+                var angle = Mathf.Atan2(delta.y, delta.x);
+                _hue = Mathf.Repeat(angle / (Mathf.PI * 2f), 1f);
+                UpdateSaturationValueTexture();
+                UpdateVisuals();
+                if (notify)
+                {
+                    _onColorChanged?.Invoke(CurrentColor());
+                }
+
+                return true;
+            }
+
+            if (_dragRegion == DragRegion.SaturationValue)
+            {
+                if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(_svRect, screenPosition, eventCamera, out var localPoint))
+                {
+                    return false;
+                }
+
+                var rect = _svRect.rect;
+                _saturation = Mathf.Clamp01((localPoint.x - rect.xMin) / rect.width);
+                _value = Mathf.Clamp01((localPoint.y - rect.yMin) / rect.height);
+                UpdateVisuals();
+                if (notify)
+                {
+                    _onColorChanged?.Invoke(CurrentColor());
+                }
+
+                return true;
+            }
+
+            return false;
+        }
+
+        public override void OnPointerDown(PointerEventData eventData)
+        {
+            base.OnPointerDown(eventData);
+            _dragRegion = ResolveRegion(eventData.position, eventData.pressEventCamera);
+            SetValueFromScreenPosition(eventData.position, eventData.pressEventCamera, true);
+        }
+
+        public void OnDrag(PointerEventData eventData)
+        {
+            SetValueFromScreenPosition(eventData.position, eventData.pressEventCamera, true);
+        }
+
+        public override void OnPointerUp(PointerEventData eventData)
+        {
+            base.OnPointerUp(eventData);
+            _dragRegion = DragRegion.None;
+        }
+
+        internal void EndVirtualDrag()
+        {
+            _dragRegion = DragRegion.None;
+        }
+
+        private DragRegion ResolveRegion(Vector2 screenPosition, Camera eventCamera)
+        {
+            if (_svRect != null && RectTransformUtility.RectangleContainsScreenPoint(_svRect, screenPosition, eventCamera))
+            {
+                return DragRegion.SaturationValue;
+            }
+
+            if (_hueRect != null && RectTransformUtility.ScreenPointToLocalPointInRectangle(_hueRect, screenPosition, eventCamera, out var localPoint))
+            {
+                var rect = _hueRect.rect;
+                var radius = Mathf.Min(rect.width, rect.height) * 0.5f;
+                var distance = Vector2.Distance(localPoint, rect.center);
+                if (distance >= radius * 0.58f && distance <= radius)
+                {
+                    return DragRegion.Hue;
+                }
+            }
+
+            return DragRegion.None;
+        }
+
+        private Color CurrentColor()
+        {
+            var color = Color.HSVToRGB(_hue, _saturation, _value);
+            color.a = 1f;
+            return color;
+        }
+
+        private void UpdateVisuals()
+        {
+            var color = CurrentColor();
+            if (_swatch != null)
+            {
+                _swatch.color = color;
+            }
+
+            if (_hexLabel != null)
+            {
+                _hexLabel.text = ColorToHex(color);
+            }
+
+            if (_hueHandle != null && _hueRect != null)
+            {
+                var rect = _hueRect.rect;
+                var radius = Mathf.Min(rect.width, rect.height) * 0.43f;
+                var angle = _hue * Mathf.PI * 2f;
+                _hueHandle.anchoredPosition = rect.center + new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * radius;
+            }
+
+            if (_svHandle != null && _svRect != null)
+            {
+                var rect = _svRect.rect;
+                _svHandle.anchoredPosition = new Vector2(
+                    Mathf.Lerp(rect.xMin, rect.xMax, _saturation),
+                    Mathf.Lerp(rect.yMin, rect.yMax, _value));
+            }
+        }
+
+        private void BuildHueTexture()
+        {
+            if (_hueImage == null)
+            {
+                return;
+            }
+
+            _hueTexture = new Texture2D(128, 128, TextureFormat.RGBA32, false)
+            {
+                name = "DrawableSuitsHueRing",
+                wrapMode = TextureWrapMode.Clamp,
+                filterMode = FilterMode.Bilinear
+            };
+
+            var center = new Vector2((_hueTexture.width - 1) * 0.5f, (_hueTexture.height - 1) * 0.5f);
+            var outer = _hueTexture.width * 0.49f;
+            var inner = _hueTexture.width * 0.34f;
+            for (var y = 0; y < _hueTexture.height; y++)
+            {
+                for (var x = 0; x < _hueTexture.width; x++)
+                {
+                    var delta = new Vector2(x, y) - center;
+                    var distance = delta.magnitude;
+                    if (distance < inner || distance > outer)
+                    {
+                        _hueTexture.SetPixel(x, y, Color.clear);
+                        continue;
+                    }
+
+                    var hue = Mathf.Repeat(Mathf.Atan2(delta.y, delta.x) / (Mathf.PI * 2f), 1f);
+                    _hueTexture.SetPixel(x, y, Color.HSVToRGB(hue, 1f, 1f));
+                }
+            }
+
+            _hueTexture.Apply(false, true);
+            _hueImage.texture = _hueTexture;
+            _hueImage.color = Color.white;
+            _hueImage.raycastTarget = true;
+        }
+
+        private void UpdateSaturationValueTexture()
+        {
+            if (_svImage == null)
+            {
+                return;
+            }
+
+            if (_svTexture == null)
+            {
+                _svTexture = new Texture2D(64, 64, TextureFormat.RGBA32, false)
+                {
+                    name = "DrawableSuitsSaturationValue",
+                    wrapMode = TextureWrapMode.Clamp,
+                    filterMode = FilterMode.Bilinear
+                };
+                _svImage.texture = _svTexture;
+                _svImage.raycastTarget = true;
+            }
+
+            for (var y = 0; y < _svTexture.height; y++)
+            {
+                var value = y / (float)(_svTexture.height - 1);
+                for (var x = 0; x < _svTexture.width; x++)
+                {
+                    var saturation = x / (float)(_svTexture.width - 1);
+                    _svTexture.SetPixel(x, y, Color.HSVToRGB(_hue, saturation, value));
+                }
+            }
+
+            _svTexture.Apply(false, false);
+        }
+
+        private static string ColorToHex(Color color)
+        {
+            var r = Mathf.RoundToInt(Mathf.Clamp01(color.r) * 255f);
+            var g = Mathf.RoundToInt(Mathf.Clamp01(color.g) * 255f);
+            var b = Mathf.RoundToInt(Mathf.Clamp01(color.b) * 255f);
+            return $"#{r:X2}{g:X2}{b:X2}";
+        }
+
+        protected override void OnDestroy()
+        {
+            base.OnDestroy();
+            if (_hueTexture != null)
+            {
+                Destroy(_hueTexture);
+                _hueTexture = null;
+            }
+            if (_svTexture != null)
+            {
+                Destroy(_svTexture);
+                _svTexture = null;
+            }
         }
     }
 
@@ -749,7 +1052,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         CreateAnchoredText(panel.transform, "Title", $"{PluginInfo.Name} {PluginInfo.Version}", 24, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 12f, 360f, 34f), new Color(1f, 0.62f, 0.25f, 1f));
         CreateAnchoredButton(panel.transform, "Close", new Rect(512f, 14f, 88f, 34f), CloseEditor);
         _suitLabel = CreateAnchoredText(panel.transform, "SuitLabel", string.Empty, 18, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 54f, 420f, 28f), Color.white);
-        _statusLabel = CreateAnchoredText(panel.transform, "StatusLabel", string.Empty, 15, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 86f, 570f, 46f), new Color(1f, 0.58f, 0.28f, 1f));
+        _statusLabel = CreateAnchoredText(panel.transform, "StatusLabel", string.Empty, 15, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 86f, leftW, 46f), new Color(1f, 0.58f, 0.28f, 1f));
         _statusLabel.color = new Color(1f, 0.58f, 0.28f, 1f);
         _diagnosticsLabel = CreateAnchoredText(panel.transform, "DiagnosticsLabel", string.Empty, 12, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 138f, leftW, 128f), new Color(0.78f, 0.86f, 1f, 1f));
         _diagnosticsLabel.color = new Color(0.78f, 0.86f, 1f, 1f);
@@ -770,13 +1073,11 @@ internal sealed class SuitEditorController : MonoBehaviour
         _brushOpacitySlider = CreateAnchoredSlider(panel.transform, "BrushOpacity", 0.05f, 1f, _brushOpacity, new Rect(leftX + 100f, 480f, 174f, 24f), value => _brushOpacity = value);
 
         CreateAnchoredText(panel.transform, "ColorHeader", "Color", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 518f, leftW, 24f), Color.white);
-        CreateAnchoredText(panel.transform, "RedLabel", "Red", 13, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 548f, 54f, 22f), Color.white);
-        _redSlider = CreateAnchoredSlider(panel.transform, "Red", 0f, 1f, _brushColor.r, new Rect(leftX + 58f, 548f, 174f, 24f), value => { _brushColor.r = value; UpdateColorUi(); });
-        CreateAnchoredText(panel.transform, "GreenLabel", "Green", 13, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 582f, 54f, 22f), Color.white);
-        _greenSlider = CreateAnchoredSlider(panel.transform, "Green", 0f, 1f, _brushColor.g, new Rect(leftX + 58f, 582f, 174f, 24f), value => { _brushColor.g = value; UpdateColorUi(); });
-        CreateAnchoredText(panel.transform, "BlueLabel", "Blue", 13, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 616f, 54f, 22f), Color.white);
-        _blueSlider = CreateAnchoredSlider(panel.transform, "Blue", 0f, 1f, _brushColor.b, new Rect(leftX + 58f, 616f, 174f, 24f), value => { _brushColor.b = value; UpdateColorUi(); });
-        _colorSwatch = CreateAnchoredColorSwatch(panel.transform, new Rect(leftX + 238f, 548f, 44f, 92f));
+        _colorPicker = CreateAnchoredColorPicker(panel.transform, new Rect(leftX, 542f, leftW, 104f), _brushColor, color =>
+        {
+            _brushColor = color;
+            UpdateColorUi();
+        }, out _colorSwatch, out _colorHexLabel);
 
         _uvFallbackButton = CreateAnchoredButton(panel.transform, "Use UV Fallback", new Rect(rightX, 54f, 150f, 34f), ToggleUvFallback);
         CreateAnchoredText(panel.transform, "WorldHelp", "Third-person mode: aim at the visible suit and hold left mouse or right trigger to paint. Right mouse/right stick or bumpers orbit. Wheel or D-pad up/down zooms; Ctrl+wheel changes brush size.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(rightX, 96f, rightW, 76f), new Color(0.86f, 0.9f, 0.94f, 1f));
@@ -955,13 +1256,17 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         var button = go.GetComponent<Button>();
         button.targetGraphic = image;
-        button.onClick.AddListener(() => onClick?.Invoke());
+        button.onClick.AddListener(() =>
+        {
+            onClick?.Invoke();
+            ClearSelectedNormalButton();
+        });
 
         var colors = button.colors;
         colors.normalColor = image.color;
         colors.highlightedColor = new Color(0.24f, 0.26f, 0.28f, 1f);
         colors.pressedColor = new Color(0.34f, 0.36f, 0.38f, 1f);
-        colors.selectedColor = colors.highlightedColor;
+        colors.selectedColor = colors.normalColor;
         button.colors = colors;
 
         var label = CreateAnchoredText(go.transform, "Label", text, 15, FontStyle.Normal, TextAnchor.MiddleCenter, new Rect(0f, 0f, rect.width, rect.height), Color.white);
@@ -973,6 +1278,16 @@ internal sealed class SuitEditorController : MonoBehaviour
         labelRect.offsetMin = Vector2.zero;
         labelRect.offsetMax = Vector2.zero;
         return button;
+    }
+
+    private static void ClearSelectedNormalButton()
+    {
+        var eventSystem = EventSystem.current;
+        var selected = eventSystem != null ? eventSystem.currentSelectedGameObject : null;
+        if (selected != null && selected.GetComponent<InputField>() == null && selected.GetComponent<DrawableSliderControl>() == null && selected.GetComponent<DrawableColorPickerControl>() == null)
+        {
+            eventSystem.SetSelectedGameObject(null);
+        }
     }
 
     private static DrawableSliderControl CreateAnchoredSlider(Transform parent, string name, float min, float max, float value, Rect rect, Action<float> onValueChanged)
@@ -1021,6 +1336,56 @@ internal sealed class SuitEditorController : MonoBehaviour
         slider.Configure(bgRect, fillRect, handleRect, min, max, value, onValueChanged);
         DrawableSuitsDiagnostics.Info($"DrawableSliderBuilt name={name}; root={rect}; trackSize={bgRect.rect.size}; fillSize={fillRect.rect.size}; handleSize={handleRect.rect.size}; min={min}; max={max}; value={value}");
         return slider;
+    }
+
+    private static DrawableColorPickerControl CreateAnchoredColorPicker(Transform parent, Rect rect, Color initialColor, Action<Color> onColorChanged, out Image swatch, out Text hexLabel)
+    {
+        var go = CreateUiObject("ColorPicker", parent, typeof(RectTransform), typeof(Image), typeof(DrawableColorPickerControl));
+        SetAnchoredRect(go.GetComponent<RectTransform>(), rect);
+        var rootImage = go.GetComponent<Image>();
+        rootImage.color = new Color(1f, 1f, 1f, 0.001f);
+        rootImage.raycastTarget = true;
+
+        var hueObject = CreateUiObject("HueRing", go.transform, typeof(RectTransform), typeof(RawImage));
+        var hueRect = hueObject.GetComponent<RectTransform>();
+        SetAnchoredRect(hueRect, new Rect(0f, 0f, 104f, 104f));
+        var hueImage = hueObject.GetComponent<RawImage>();
+
+        var svObject = CreateUiObject("SaturationValue", go.transform, typeof(RectTransform), typeof(RawImage));
+        var svRect = svObject.GetComponent<RectTransform>();
+        SetAnchoredRect(svRect, new Rect(24f, 24f, 56f, 56f));
+        var svImage = svObject.GetComponent<RawImage>();
+
+        var hueHandleObject = CreateUiObject("HueHandle", go.transform, typeof(RectTransform), typeof(Image));
+        var hueHandle = hueHandleObject.GetComponent<RectTransform>();
+        hueHandle.sizeDelta = new Vector2(14f, 14f);
+        var hueHandleImage = hueHandleObject.GetComponent<Image>();
+        hueHandleImage.color = Color.white;
+        hueHandleImage.raycastTarget = false;
+
+        var svHandleObject = CreateUiObject("SaturationValueHandle", go.transform, typeof(RectTransform), typeof(Image));
+        var svHandle = svHandleObject.GetComponent<RectTransform>();
+        svHandle.sizeDelta = new Vector2(12f, 12f);
+        var svHandleImage = svHandleObject.GetComponent<Image>();
+        svHandleImage.color = Color.white;
+        svHandleImage.raycastTarget = false;
+
+        swatch = CreateAnchoredColorSwatch(go.transform, new Rect(126f, 14f, 74f, 74f));
+        hexLabel = CreateAnchoredText(go.transform, "HexLabel", "#FFFFFF", 15, FontStyle.Bold, TextAnchor.MiddleCenter, new Rect(116f, 88f, 94f, 20f), Color.white);
+
+        var picker = go.GetComponent<DrawableColorPickerControl>();
+        picker.targetGraphic = rootImage;
+        picker.Configure(hueRect, svRect, hueHandle, svHandle, hueImage, svImage, swatch, hexLabel, initialColor, onColorChanged);
+
+        var colors = picker.colors;
+        colors.normalColor = Color.white;
+        colors.highlightedColor = Color.white;
+        colors.pressedColor = Color.white;
+        colors.selectedColor = Color.white;
+        picker.colors = colors;
+
+        DrawableSuitsDiagnostics.Info($"DrawableColorPickerBuilt root={rect}; hueRect={hueRect.rect}; svRect={svRect.rect}; initialColor={initialColor}");
+        return picker;
     }
 
     private static Image CreateAnchoredColorSwatch(Transform parent, Rect rect)
@@ -1600,9 +1965,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         if (_brushSizeSlider != null) _brushSizeSlider.SetValue(_brushSize, false);
         if (_brushOpacitySlider != null) _brushOpacitySlider.SetValue(_brushOpacity, false);
-        if (_redSlider != null) _redSlider.SetValue(_brushColor.r, false);
-        if (_greenSlider != null) _greenSlider.SetValue(_brushColor.g, false);
-        if (_blueSlider != null) _blueSlider.SetValue(_brushColor.b, false);
+        if (_colorPicker != null) _colorPicker.SetColor(_brushColor, false);
         if (_decalSizeSlider != null) _decalSizeSlider.SetValue(_decalSize, false);
         if (_decalRotationSlider != null) _decalRotationSlider.SetValue(_decalRotation, false);
 
@@ -1699,8 +2062,20 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             _colorSwatch.color = _brushColor;
         }
+        if (_colorHexLabel != null)
+        {
+            _colorHexLabel.text = ColorToHex(_brushColor);
+        }
 
         UpdateBrushIndicator();
+    }
+
+    private static string ColorToHex(Color color)
+    {
+        var r = Mathf.RoundToInt(Mathf.Clamp01(color.r) * 255f);
+        var g = Mathf.RoundToInt(Mathf.Clamp01(color.g) * 255f);
+        var b = Mathf.RoundToInt(Mathf.Clamp01(color.b) * 255f);
+        return $"#{r:X2}{g:X2}{b:X2}";
     }
 
     private void UpdateToolButtons()
@@ -2014,6 +2389,9 @@ internal sealed class SuitEditorController : MonoBehaviour
             _virtualPointerDown = false;
             _virtualPointerPressTarget = null;
             _virtualPointerSlider = null;
+            _virtualPointerColorPicker = null;
+            _virtualPointerButton = null;
+            _virtualPointerInput = null;
             return;
         }
 
@@ -2027,6 +2405,10 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             _virtualPointerSlider.SetValueFromScreenPosition(_cursor, null, true);
         }
+        if (south.isPressed && _virtualPointerColorPicker != null)
+        {
+            _virtualPointerColorPicker.SetValueFromScreenPosition(_cursor, null, true);
+        }
 
         if (south.wasReleasedThisFrame)
         {
@@ -2039,41 +2421,54 @@ internal sealed class SuitEditorController : MonoBehaviour
         _virtualPointerDown = true;
         _virtualPointerPressTarget = null;
         _virtualPointerSlider = null;
+        _virtualPointerColorPicker = null;
+        _virtualPointerButton = null;
+        _virtualPointerInput = null;
 
         var hits = RaycastEditorUi(_cursor);
-        if (hits.Count == 0)
+        var rawHits = DescribeRaycastHits(hits);
+        if (!TryResolveVirtualCursorTarget(hits, out var resolved, out var button, out var input, out var slider, out var colorPicker))
         {
-            DrawableSuitsDiagnostics.Info($"Virtual cursor A press hit no UI target. cursor={_cursor}");
+            DrawableSuitsDiagnostics.Info($"Virtual cursor A press hit no actionable UI target. cursor={_cursor}; rawHits=[{rawHits}]");
             return;
         }
 
-        var hitObject = hits[0].gameObject;
-        _virtualPointerSlider = hitObject.GetComponentInParent<DrawableSliderControl>();
-        var pointerData = CreateVirtualPointerEventData();
-
-        if (_virtualPointerSlider != null)
+        if (slider != null)
         {
-            EventSystem.current?.SetSelectedGameObject(_virtualPointerSlider.gameObject);
-            _virtualPointerSlider.SetValueFromScreenPosition(_cursor, null, true);
-            _virtualPointerPressTarget = _virtualPointerSlider.gameObject;
-            DrawableSuitsDiagnostics.Info($"Virtual cursor A press captured slider={_virtualPointerSlider.name}; cursor={_cursor}");
+            _virtualPointerSlider = slider;
+            _virtualPointerPressTarget = slider.gameObject;
+            EventSystem.current?.SetSelectedGameObject(slider.gameObject);
+            slider.SetValueFromScreenPosition(_cursor, null, true);
+            DrawableSuitsDiagnostics.Info($"Virtual cursor A press captured slider={slider.name}; resolved={resolved.name}; cursor={_cursor}; rawHits=[{rawHits}]");
             return;
         }
 
-        var eventTarget = ExecuteEvents.GetEventHandler<IPointerClickHandler>(hitObject)
-            ?? ExecuteEvents.GetEventHandler<ISubmitHandler>(hitObject)
-            ?? ExecuteEvents.GetEventHandler<ISelectHandler>(hitObject);
-        if (eventTarget == null)
+        if (colorPicker != null)
         {
-            DrawableSuitsDiagnostics.Info($"Virtual cursor A press hit non-clickable target={hitObject.name}; cursor={_cursor}");
+            _virtualPointerColorPicker = colorPicker;
+            _virtualPointerPressTarget = colorPicker.gameObject;
+            EventSystem.current?.SetSelectedGameObject(colorPicker.gameObject);
+            colorPicker.SetValueFromScreenPosition(_cursor, null, true);
+            DrawableSuitsDiagnostics.Info($"Virtual cursor A press captured colorPicker={colorPicker.name}; resolved={resolved.name}; cursor={_cursor}; rawHits=[{rawHits}]");
             return;
         }
 
-        _virtualPointerPressTarget = eventTarget;
-        EventSystem.current?.SetSelectedGameObject(eventTarget);
-        ExecuteEvents.Execute(eventTarget, pointerData, ExecuteEvents.pointerDownHandler);
-        ExecuteEvents.Execute(eventTarget, pointerData, ExecuteEvents.selectHandler);
-        DrawableSuitsDiagnostics.Info($"Virtual cursor A press target={eventTarget.name}; hit={hitObject.name}; cursor={_cursor}");
+        if (input != null)
+        {
+            _virtualPointerInput = input;
+            _virtualPointerPressTarget = input.gameObject;
+            EventSystem.current?.SetSelectedGameObject(input.gameObject);
+            input.ActivateInputField();
+            DrawableSuitsDiagnostics.Info($"Virtual cursor A press focused input={input.name}; resolved={resolved.name}; cursor={_cursor}; rawHits=[{rawHits}]");
+            return;
+        }
+
+        if (button != null)
+        {
+            _virtualPointerButton = button;
+            _virtualPointerPressTarget = button.gameObject;
+            DrawableSuitsDiagnostics.Info($"Virtual cursor A press captured button={button.name}; resolved={resolved.name}; cursor={_cursor}; rawHits=[{rawHits}]");
+        }
     }
 
     private void EndVirtualPointerPress()
@@ -2085,23 +2480,29 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         _virtualPointerDown = false;
         var pressTarget = _virtualPointerPressTarget;
-        var pointerData = CreateVirtualPointerEventData();
+        var pressButton = _virtualPointerButton;
+        var pressColorPicker = _virtualPointerColorPicker;
         _virtualPointerPressTarget = null;
         _virtualPointerSlider = null;
+        _virtualPointerColorPicker = null;
+        _virtualPointerButton = null;
+        _virtualPointerInput = null;
 
         if (pressTarget == null)
         {
             return;
         }
 
-        ExecuteEvents.Execute(pressTarget, pointerData, ExecuteEvents.pointerUpHandler);
-        var releaseTarget = TopClickableAtCursor();
-        if (releaseTarget == pressTarget)
+        pressColorPicker?.EndVirtualDrag();
+        var hits = RaycastEditorUi(_cursor);
+        TryResolveVirtualCursorTarget(hits, out var releaseTarget, out var releaseButton, out _, out _, out _);
+        if (pressButton != null && releaseButton == pressButton && pressButton.IsActive() && pressButton.IsInteractable())
         {
-            ExecuteEvents.Execute(pressTarget, pointerData, ExecuteEvents.pointerClickHandler);
+            pressButton.onClick.Invoke();
+            ClearSelectedNormalButton();
         }
 
-        DrawableSuitsDiagnostics.Info($"Virtual cursor A release target={pressTarget.name}; releaseTarget={releaseTarget?.name ?? "null"}; cursor={_cursor}");
+        DrawableSuitsDiagnostics.Info($"Virtual cursor A release target={pressTarget.name}; releaseTarget={releaseTarget?.name ?? "null"}; pressButton={pressButton?.name ?? "null"}; releaseButton={releaseButton?.name ?? "null"}; cursor={_cursor}; rawHits=[{DescribeRaycastHits(hits)}]");
     }
 
     private PointerEventData CreateVirtualPointerEventData()
@@ -2119,18 +2520,77 @@ internal sealed class SuitEditorController : MonoBehaviour
     private GameObject TopClickableAtCursor()
     {
         var hits = RaycastEditorUi(_cursor);
+        return TryResolveVirtualCursorTarget(hits, out var target, out _, out _, out _, out _) ? target : null;
+    }
+
+    private static bool TryResolveVirtualCursorTarget(List<RaycastResult> hits, out GameObject target, out Button button, out InputField input, out DrawableSliderControl slider, out DrawableColorPickerControl colorPicker)
+    {
+        target = null;
+        button = null;
+        input = null;
+        slider = null;
+        colorPicker = null;
+
+        if (hits == null)
+        {
+            return false;
+        }
+
         for (var i = 0; i < hits.Count; i++)
         {
-            var target = ExecuteEvents.GetEventHandler<IPointerClickHandler>(hits[i].gameObject)
-                ?? ExecuteEvents.GetEventHandler<ISubmitHandler>(hits[i].gameObject)
-                ?? ExecuteEvents.GetEventHandler<ISelectHandler>(hits[i].gameObject);
-            if (target != null)
+            var hitObject = hits[i].gameObject;
+            if (hitObject == null || !hitObject.activeInHierarchy)
             {
-                return target;
+                continue;
+            }
+
+            slider = hitObject.GetComponentInParent<DrawableSliderControl>();
+            if (slider != null && slider.IsActive() && slider.IsInteractable())
+            {
+                target = slider.gameObject;
+                return true;
+            }
+
+            colorPicker = hitObject.GetComponentInParent<DrawableColorPickerControl>();
+            if (colorPicker != null && colorPicker.IsActive() && colorPicker.IsInteractable())
+            {
+                target = colorPicker.gameObject;
+                return true;
+            }
+
+            input = hitObject.GetComponentInParent<InputField>();
+            if (input != null && input.IsActive() && input.IsInteractable())
+            {
+                target = input.gameObject;
+                return true;
+            }
+
+            button = hitObject.GetComponentInParent<Button>();
+            if (button != null && button.IsActive() && button.IsInteractable())
+            {
+                target = button.gameObject;
+                return true;
             }
         }
 
-        return null;
+        return false;
+    }
+
+    private static string DescribeRaycastHits(List<RaycastResult> hits)
+    {
+        if (hits == null || hits.Count == 0)
+        {
+            return "none";
+        }
+
+        var count = Mathf.Min(8, hits.Count);
+        var names = new string[count];
+        for (var i = 0; i < count; i++)
+        {
+            names[i] = hits[i].gameObject != null ? hits[i].gameObject.name : "null";
+        }
+
+        return string.Join(", ", names);
     }
 
     private List<RaycastResult> RaycastEditorUi(Vector2 screenPosition)
@@ -2735,7 +3195,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private void ImportDecalFromDialog()
     {
         RefreshFileLists();
-        SetStatus("OS file import is disabled in-game. Place PNG/JPG files in BepInEx/config/DrawableSuits/Decals, then press Refresh Decals.", false);
+        SetStatus("Decals refreshed. Add PNG/JPG files to the Decals folder.", false);
         DrawableSuitsDiagnostics.Warn($"OS file dialog import is disabled for stability in {PluginInfo.Version}. EnableOsFileDialog config value is ignored. DecalsPath={DrawableSuitsPaths.Decals}");
     }
 
