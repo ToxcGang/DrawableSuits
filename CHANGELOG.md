@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.7
+
+- Replaced decal and saved-design list rebuilds with stable row pools so Reset, Save, and Load cannot hit stale list row buttons during the same click.
+- Changed Save to preserve only an already selected saved-design row instead of auto-selecting the newly saved file.
+- Fixed hue ring and saturation/value handle placement by parenting handles to their own picker rects and using shared coordinate conversion for input and visuals.
+- Preserved third-person camera yaw, pitch, and zoom when loading a design or switching suits while the editor is open.
+- Reduced repeated world proxy material diagnostics to change-based/rate-limited logs.
+
 ## 0.4.6
 
 - Rebuilt the color picker layout so the saturation/value square sits beside the hue ring instead of covering it.
