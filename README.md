@@ -97,7 +97,7 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.4.5 behavior:
+Expected 0.4.6 behavior:
 
 - Opening the editor shows a compact side overlay and a third-person camera view of the local player.
 - The diagnostics text should show `Preview mode: WorldThirdPerson` when the default path succeeds.
@@ -107,17 +107,19 @@ Expected 0.4.5 behavior:
 - Decal and saved-design rows are explicit anchored buttons, not ScrollRect/layout rows.
 - Controller right trigger paints only. Camera zoom uses mouse wheel or controller D-pad up/down.
 - Active edited textures are per player/client, not global per suit type.
-- The color changer is a compact hue ring plus saturation/value square with a hex swatch.
+- The color changer is a compact side-by-side hue ring and saturation/value square with a swatch and editable `#RRGGBB` hex field.
+- Controller `A` does not activate UI immediately after opening; move the left stick once to arm the virtual cursor, then `A` clicks the control under the cursor.
 - Normal buttons should not stay highlighted after unrelated clicks; only selected tools, decals, and saved designs keep orange selection styling.
+- The decal section has one `Refresh Decals` button. It refreshes decal and save rows and shows only a short status line.
 
 Troubleshooting:
 
 - If entering a session starts on a black screen before opening DrawableSuits, check `SessionSafetyCheck` lines. They list `Camera.main`, active cameras, camera target textures, local player flags, prompt context such as grab/hover fields, local renderer materials, and any repaired DrawableSuits objects. DrawableSuits should report no active DrawableSuits cameras while `EditorOpen=False`.
 - If the black screen shows `Grab: [E]` and `SessionSafetyCheck` reports `Camera.main=null`, inspect `LogOutput.log` for repeated `JetpackWarning` `PlayerControllerB.LateUpdate` `NullReferenceException`. By default, DrawableSuits disables only `JetpackWarning.Patches.PlayerControllerB_LateUpdate_Postfix` after repeated failures and logs the unpatch result in `diagnostics.log`. Set `AutoDisableBrokenJetpackWarningLateUpdatePatch=false` to turn this compatibility guard off.
 - If third person shows first-person arms, a giant helmet, held items, or another partial rig, check `World renderer candidate`, `Hidden nearby first-person overlay renderer`, `World editor visible renderer candidate`, and `WorldAvatarProxy updated` lines. The selected renderer should be a body/suit renderer and the proxy should use only the player-specific DrawableSuits material for suit-compatible submeshes.
-- If controller `A` clicks the wrong UI item, check `Virtual cursor A press` and `Virtual cursor A release` diagnostics. They should show the same resolved button or control that is visually under the cursor.
-- If button highlights stick around, confirm the installed package is 0.4.5 or newer. Normal button selected colors are neutral in 0.4.5.
-- If the color picker does not update paint color, check the hex swatch and `DrawableColorPickerBuilt` diagnostics.
+- If controller `A` clicks the wrong UI item, confirm the installed package is 0.4.6 or newer, move the left stick before the first `A` press, then check `Virtual cursor A press` and `Virtual cursor A release` diagnostics. They should show the same resolved button or control that is visually under the cursor.
+- If button highlights stick around, confirm the installed package is 0.4.6 or newer. Normal button selected colors are neutral in 0.4.6.
+- If the color picker does not update paint color, check the swatch, editable hex field, and `DrawableColorPickerBuilt` diagnostics. Hex input accepts `#RRGGBB` or `RRGGBB`.
 - If right trigger zooms the third-person camera, confirm the installed package is 0.4.4 or newer. In 0.4.4, right trigger is paint-only and D-pad up/down controls controller zoom.
 - If UV fallback shows a second colored cursor, confirm the installed package is 0.4.4 or newer. The old filled brush indicator is disabled because it looked like another cursor.
 - If editing one player changes every other player wearing the same skin, confirm the installed package is 0.4.4 or newer. Active edits now sync with owner client IDs and do not mutate suit rack/global suit materials.
