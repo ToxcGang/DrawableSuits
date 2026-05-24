@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using GameNetcodeStuff;
 using UnityEngine;
@@ -173,7 +174,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private DrawableSliderControl _brushSizeSlider;
     private DrawableSliderControl _brushOpacitySlider;
     private DrawableColorPickerControl _colorPicker;
-    private Text _colorHexLabel;
+    private InputField _colorHexInput;
     private DrawableSliderControl _decalSizeSlider;
     private DrawableSliderControl _decalRotationSlider;
     private Image _colorSwatch;
@@ -201,6 +202,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Vector2 _lastGamepadStick;
     private bool _mousePositionAvailable;
     private bool _usingGamepadPointer;
+    private bool _gamepadClickArmed;
     private float _lastUiDiagnosticsTime;
     private readonly List<EventSystemRestoreState> _eventSystemRestoreStates = new();
 
@@ -350,7 +352,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         private RawImage _hueImage;
         private RawImage _svImage;
         private Image _swatch;
-        private Text _hexLabel;
         private Texture2D _hueTexture;
         private Texture2D _svTexture;
         private Action<Color> _onColorChanged;
@@ -358,8 +359,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         private float _saturation = 1f;
         private float _value = 1f;
         private DragRegion _dragRegion;
-
-        internal Text HexLabel => _hexLabel;
 
         internal void Configure(
             RectTransform hueRect,
@@ -369,7 +368,6 @@ internal sealed class SuitEditorController : MonoBehaviour
             RawImage hueImage,
             RawImage svImage,
             Image swatch,
-            Text hexLabel,
             Color initialColor,
             Action<Color> onColorChanged)
         {
@@ -380,7 +378,6 @@ internal sealed class SuitEditorController : MonoBehaviour
             _hueImage = hueImage;
             _svImage = svImage;
             _swatch = swatch;
-            _hexLabel = hexLabel;
             _onColorChanged = onColorChanged;
             BuildHueTexture();
             SetColor(initialColor, false);
@@ -517,11 +514,6 @@ internal sealed class SuitEditorController : MonoBehaviour
                 _swatch.color = color;
             }
 
-            if (_hexLabel != null)
-            {
-                _hexLabel.text = ColorToHex(color);
-            }
-
             if (_hueHandle != null && _hueRect != null)
             {
                 var rect = _hueRect.rect;
@@ -609,14 +601,6 @@ internal sealed class SuitEditorController : MonoBehaviour
             }
 
             _svTexture.Apply(false, false);
-        }
-
-        private static string ColorToHex(Color color)
-        {
-            var r = Mathf.RoundToInt(Mathf.Clamp01(color.r) * 255f);
-            var g = Mathf.RoundToInt(Mathf.Clamp01(color.g) * 255f);
-            var b = Mathf.RoundToInt(Mathf.Clamp01(color.b) * 255f);
-            return $"#{r:X2}{g:X2}{b:X2}";
         }
 
         protected override void OnDestroy()
@@ -872,6 +856,10 @@ internal sealed class SuitEditorController : MonoBehaviour
         _virtualPointerDown = false;
         _virtualPointerPressTarget = null;
         _virtualPointerSlider = null;
+        _virtualPointerColorPicker = null;
+        _virtualPointerButton = null;
+        _virtualPointerInput = null;
+        _gamepadClickArmed = false;
         RestorePlayerInputState();
         EndEditorUiInput();
         RestoreCursorState(reason == EditorCloseReason.SceneChange);
@@ -1077,7 +1065,9 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             _brushColor = color;
             UpdateColorUi();
-        }, out _colorSwatch, out _colorHexLabel);
+        }, out _colorSwatch, out _colorHexInput);
+        _colorHexInput.onValueChanged.AddListener(PreviewHexInput);
+        _colorHexInput.onEndEdit.AddListener(ApplyHexInput);
 
         _uvFallbackButton = CreateAnchoredButton(panel.transform, "Use UV Fallback", new Rect(rightX, 54f, 150f, 34f), ToggleUvFallback);
         CreateAnchoredText(panel.transform, "WorldHelp", "Third-person mode: aim at the visible suit and hold left mouse or right trigger to paint. Right mouse/right stick or bumpers orbit. Wheel or D-pad up/down zooms; Ctrl+wheel changes brush size.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(rightX, 96f, rightW, 76f), new Color(0.86f, 0.9f, 0.94f, 1f));
@@ -1087,8 +1077,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         _decalSizeSlider = CreateAnchoredSlider(panel.transform, "DecalSize", 16f, 512f, _decalSize, new Rect(rightX + 120f, 220f, 160f, 24f), value => _decalSize = value);
         _decalRotationLabel = CreateAnchoredText(panel.transform, "DecalRotationLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(rightX, 252f, 112f, 24f), Color.white);
         _decalRotationSlider = CreateAnchoredSlider(panel.transform, "DecalRotation", -180f, 180f, _decalRotation, new Rect(rightX + 120f, 254f, 160f, 24f), value => _decalRotation = value);
-        CreateAnchoredButton(panel.transform, "Refresh", new Rect(rightX, 290f, 96f, 34f), RefreshFileLists);
-        CreateAnchoredButton(panel.transform, "Refresh Decals", new Rect(rightX + 104f, 290f, 134f, 34f), ImportDecalFromDialog);
+        CreateAnchoredButton(panel.transform, "Refresh Decals", new Rect(rightX, 290f, 160f, 34f), ImportDecalFromDialog);
         _decalListContent = CreateAnchoredScrollList(panel.transform, "DecalList", new Rect(rightX, 334f, rightW, 132f));
 
         CreateAnchoredText(panel.transform, "DesignHeader", "Design Name", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 486f, rightW, 24f), Color.white);
@@ -1264,7 +1253,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         var colors = button.colors;
         colors.normalColor = image.color;
-        colors.highlightedColor = new Color(0.24f, 0.26f, 0.28f, 1f);
+        colors.highlightedColor = colors.normalColor;
         colors.pressedColor = new Color(0.34f, 0.36f, 0.38f, 1f);
         colors.selectedColor = colors.normalColor;
         button.colors = colors;
@@ -1338,7 +1327,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         return slider;
     }
 
-    private static DrawableColorPickerControl CreateAnchoredColorPicker(Transform parent, Rect rect, Color initialColor, Action<Color> onColorChanged, out Image swatch, out Text hexLabel)
+    private static DrawableColorPickerControl CreateAnchoredColorPicker(Transform parent, Rect rect, Color initialColor, Action<Color> onColorChanged, out Image swatch, out InputField hexInput)
     {
         var go = CreateUiObject("ColorPicker", parent, typeof(RectTransform), typeof(Image), typeof(DrawableColorPickerControl));
         SetAnchoredRect(go.GetComponent<RectTransform>(), rect);
@@ -1348,34 +1337,27 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         var hueObject = CreateUiObject("HueRing", go.transform, typeof(RectTransform), typeof(RawImage));
         var hueRect = hueObject.GetComponent<RectTransform>();
-        SetAnchoredRect(hueRect, new Rect(0f, 0f, 104f, 104f));
+        SetAnchoredRect(hueRect, new Rect(0f, 8f, 88f, 88f));
         var hueImage = hueObject.GetComponent<RawImage>();
 
         var svObject = CreateUiObject("SaturationValue", go.transform, typeof(RectTransform), typeof(RawImage));
         var svRect = svObject.GetComponent<RectTransform>();
-        SetAnchoredRect(svRect, new Rect(24f, 24f, 56f, 56f));
+        SetAnchoredRect(svRect, new Rect(100f, 8f, 88f, 88f));
         var svImage = svObject.GetComponent<RawImage>();
 
-        var hueHandleObject = CreateUiObject("HueHandle", go.transform, typeof(RectTransform), typeof(Image));
-        var hueHandle = hueHandleObject.GetComponent<RectTransform>();
-        hueHandle.sizeDelta = new Vector2(14f, 14f);
-        var hueHandleImage = hueHandleObject.GetComponent<Image>();
-        hueHandleImage.color = Color.white;
-        hueHandleImage.raycastTarget = false;
+        var hueHandle = CreateColorPickerHandle(go.transform, "HueHandle", new Vector2(16f, 16f));
+        var svHandle = CreateColorPickerHandle(go.transform, "SaturationValueHandle", new Vector2(14f, 14f));
 
-        var svHandleObject = CreateUiObject("SaturationValueHandle", go.transform, typeof(RectTransform), typeof(Image));
-        var svHandle = svHandleObject.GetComponent<RectTransform>();
-        svHandle.sizeDelta = new Vector2(12f, 12f);
-        var svHandleImage = svHandleObject.GetComponent<Image>();
-        svHandleImage.color = Color.white;
-        svHandleImage.raycastTarget = false;
-
-        swatch = CreateAnchoredColorSwatch(go.transform, new Rect(126f, 14f, 74f, 74f));
-        hexLabel = CreateAnchoredText(go.transform, "HexLabel", "#FFFFFF", 15, FontStyle.Bold, TextAnchor.MiddleCenter, new Rect(116f, 88f, 94f, 20f), Color.white);
+        swatch = CreateAnchoredColorSwatch(go.transform, new Rect(204f, 8f, 54f, 48f));
+        hexInput = CreateAnchoredInputField(go.transform, "ColorHexInput", ColorToHex(initialColor), new Rect(192f, 64f, 82f, 30f));
+        hexInput.characterLimit = 7;
+        hexInput.contentType = InputField.ContentType.Standard;
+        hexInput.textComponent.alignment = TextAnchor.MiddleCenter;
+        hexInput.textComponent.fontStyle = FontStyle.Bold;
 
         var picker = go.GetComponent<DrawableColorPickerControl>();
         picker.targetGraphic = rootImage;
-        picker.Configure(hueRect, svRect, hueHandle, svHandle, hueImage, svImage, swatch, hexLabel, initialColor, onColorChanged);
+        picker.Configure(hueRect, svRect, hueHandle, svHandle, hueImage, svImage, swatch, initialColor, onColorChanged);
 
         var colors = picker.colors;
         colors.normalColor = Color.white;
@@ -1388,6 +1370,35 @@ internal sealed class SuitEditorController : MonoBehaviour
         return picker;
     }
 
+    private static RectTransform CreateColorPickerHandle(Transform parent, string name, Vector2 size)
+    {
+        var handle = CreateUiObject(name, parent, typeof(RectTransform)).GetComponent<RectTransform>();
+        handle.anchorMin = new Vector2(0.5f, 0.5f);
+        handle.anchorMax = new Vector2(0.5f, 0.5f);
+        handle.pivot = new Vector2(0.5f, 0.5f);
+        handle.sizeDelta = size;
+
+        CreateHandleLine(handle, "Top", new Vector2(0f, size.y * 0.5f), new Vector2(size.x, 2f));
+        CreateHandleLine(handle, "Bottom", new Vector2(0f, -size.y * 0.5f), new Vector2(size.x, 2f));
+        CreateHandleLine(handle, "Left", new Vector2(-size.x * 0.5f, 0f), new Vector2(2f, size.y));
+        CreateHandleLine(handle, "Right", new Vector2(size.x * 0.5f, 0f), new Vector2(2f, size.y));
+        return handle;
+    }
+
+    private static void CreateHandleLine(RectTransform parent, string name, Vector2 position, Vector2 size)
+    {
+        var line = CreateUiObject(name, parent, typeof(RectTransform), typeof(Image));
+        var lineRect = line.GetComponent<RectTransform>();
+        lineRect.anchorMin = new Vector2(0.5f, 0.5f);
+        lineRect.anchorMax = new Vector2(0.5f, 0.5f);
+        lineRect.pivot = new Vector2(0.5f, 0.5f);
+        lineRect.anchoredPosition = position;
+        lineRect.sizeDelta = size;
+        var image = line.GetComponent<Image>();
+        image.color = Color.white;
+        image.raycastTarget = false;
+    }
+
     private static Image CreateAnchoredColorSwatch(Transform parent, Rect rect)
     {
         var go = CreateUiObject("ColorSwatch", parent, typeof(RectTransform), typeof(Image));
@@ -1397,7 +1408,12 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private static InputField CreateAnchoredInputField(Transform parent, string value, Rect rect)
     {
-        var go = CreateUiObject("DesignNameInput", parent, typeof(RectTransform), typeof(Image), typeof(InputField));
+        return CreateAnchoredInputField(parent, "DesignNameInput", value, rect);
+    }
+
+    private static InputField CreateAnchoredInputField(Transform parent, string name, string value, Rect rect)
+    {
+        var go = CreateUiObject(name, parent, typeof(RectTransform), typeof(Image), typeof(InputField));
         SetAnchoredRect(go.GetComponent<RectTransform>(), rect);
         go.GetComponent<Image>().color = new Color(0.08f, 0.085f, 0.09f, 1f);
 
@@ -1625,9 +1641,16 @@ internal sealed class SuitEditorController : MonoBehaviour
         _mousePositionAvailable = DrawableSuitsInput.TryGetMousePosition(out _lastMousePosition);
         _lastGamepadStick = Gamepad.current != null ? Gamepad.current.leftStick.ReadValue() : Vector2.zero;
         _usingGamepadPointer = false;
+        _gamepadClickArmed = false;
+        _virtualPointerDown = false;
+        _virtualPointerPressTarget = null;
+        _virtualPointerSlider = null;
+        _virtualPointerColorPicker = null;
+        _virtualPointerButton = null;
+        _virtualPointerInput = null;
         _pointerSource = "Mouse";
         _cursor = _mousePositionAvailable ? _lastMousePosition : new Vector2(Screen.width * 0.5f, Screen.height * 0.5f);
-        DrawableSuitsDiagnostics.Info($"Pointer initialized for editor open. source={source}; pointerSource={_pointerSource}; mouseAvailable={_mousePositionAvailable}; mouse={_lastMousePosition}; gamepadStick={_lastGamepadStick}; cursor={_cursor}; cursorVisible={Cursor.visible}; cursorLock={Cursor.lockState}");
+        DrawableSuitsDiagnostics.Info($"Pointer initialized for editor open. source={source}; pointerSource={_pointerSource}; gamepadClickArmed={_gamepadClickArmed}; mouseAvailable={_mousePositionAvailable}; mouse={_lastMousePosition}; gamepadStick={_lastGamepadStick}; cursor={_cursor}; cursorVisible={Cursor.visible}; cursorLock={Cursor.lockState}");
     }
 
     private void EnsureCursorUnlockedWhileOpen()
@@ -2062,12 +2085,53 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             _colorSwatch.color = _brushColor;
         }
-        if (_colorHexLabel != null)
+        if (_colorHexInput != null && !_colorHexInput.isFocused)
         {
-            _colorHexLabel.text = ColorToHex(_brushColor);
+            _colorHexInput.SetTextWithoutNotify(ColorToHex(_brushColor));
         }
 
         UpdateBrushIndicator();
+    }
+
+    private void PreviewHexInput(string value)
+    {
+        var length = string.IsNullOrWhiteSpace(value) ? 0 : value.Trim().Length;
+        if (length != 6 && length != 7)
+        {
+            return;
+        }
+
+        if (!TryParseHexColor(value, out var color))
+        {
+            return;
+        }
+
+        _brushColor = color;
+        _colorPicker?.SetColor(_brushColor, false);
+        if (_colorSwatch != null)
+        {
+            _colorSwatch.color = _brushColor;
+        }
+        UpdateBrushIndicator();
+    }
+
+    private void ApplyHexInput(string value)
+    {
+        if (TryParseHexColor(value, out var color))
+        {
+            _brushColor = color;
+            _colorPicker?.SetColor(_brushColor, false);
+            UpdateColorUi();
+            DrawableSuitsDiagnostics.Info($"Applied brush color from hex input. input={value}; color={ColorToHex(_brushColor)}");
+            return;
+        }
+
+        SetStatus("Invalid hex color", false);
+        if (_colorHexInput != null)
+        {
+            _colorHexInput.SetTextWithoutNotify(ColorToHex(_brushColor));
+        }
+        DrawableSuitsDiagnostics.Warn($"Invalid brush color hex input ignored. input={value}");
     }
 
     private static string ColorToHex(Color color)
@@ -2076,6 +2140,33 @@ internal sealed class SuitEditorController : MonoBehaviour
         var g = Mathf.RoundToInt(Mathf.Clamp01(color.g) * 255f);
         var b = Mathf.RoundToInt(Mathf.Clamp01(color.b) * 255f);
         return $"#{r:X2}{g:X2}{b:X2}";
+    }
+
+    private static bool TryParseHexColor(string value, out Color color)
+    {
+        color = Color.white;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var normalized = value.Trim();
+        if (normalized.StartsWith("#", StringComparison.Ordinal))
+        {
+            normalized = normalized.Substring(1);
+        }
+
+        if (normalized.Length != 6 || !int.TryParse(normalized, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var rgb))
+        {
+            return false;
+        }
+
+        color = new Color(
+            ((rgb >> 16) & 0xFF) / 255f,
+            ((rgb >> 8) & 0xFF) / 255f,
+            (rgb & 0xFF) / 255f,
+            1f);
+        return true;
     }
 
     private void UpdateToolButtons()
@@ -2308,10 +2399,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             selectables[i].navigation = navigation;
         }
 
-        if (EventSystem.current != null && EventSystem.current.currentSelectedGameObject == null && selectables.Count > 0)
-        {
-            EventSystem.current.SetSelectedGameObject(selectables[0].gameObject);
-        }
+        ClearSelectedNormalButton();
     }
 
     private void UpdateCursorMarker()
@@ -2345,9 +2433,14 @@ internal sealed class SuitEditorController : MonoBehaviour
         var gamepad = Gamepad.current;
         _lastGamepadStick = gamepad != null ? gamepad.leftStick.ReadValue() : Vector2.zero;
         var gamepadMoved = gamepad != null && _lastGamepadStick.sqrMagnitude > 0.0324f;
+        if (gamepadMoved && !_gamepadClickArmed)
+        {
+            _gamepadClickArmed = true;
+            DrawableSuitsDiagnostics.Info($"Controller virtual cursor armed after stick movement. stick={_lastGamepadStick}; cursor={_cursor}");
+        }
+
         var gamepadActivelyPointing = gamepad != null
             && (gamepadMoved
-                || gamepad.buttonSouth.isPressed
                 || gamepad.rightTrigger.ReadValue() > 0.2f
                 || gamepad.leftShoulder.isPressed
                 || gamepad.rightShoulder.isPressed);
@@ -2398,6 +2491,18 @@ internal sealed class SuitEditorController : MonoBehaviour
         var south = gamepad.buttonSouth;
         if (south.wasPressedThisFrame)
         {
+            if (!_gamepadClickArmed)
+            {
+                DrawableSuitsDiagnostics.Info($"Virtual cursor A press ignored before controller cursor was armed. Move the left stick once before clicking. cursor={_cursor}; rawHits=[{DescribeRaycastHits(RaycastEditorUi(_cursor))}]");
+                _virtualPointerDown = false;
+                _virtualPointerPressTarget = null;
+                _virtualPointerSlider = null;
+                _virtualPointerColorPicker = null;
+                _virtualPointerButton = null;
+                _virtualPointerInput = null;
+                return;
+            }
+
             BeginVirtualPointerPress();
         }
 
@@ -2481,6 +2586,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         _virtualPointerDown = false;
         var pressTarget = _virtualPointerPressTarget;
         var pressButton = _virtualPointerButton;
+        var pressSlider = _virtualPointerSlider;
         var pressColorPicker = _virtualPointerColorPicker;
         _virtualPointerPressTarget = null;
         _virtualPointerSlider = null;
@@ -2500,6 +2606,10 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             pressButton.onClick.Invoke();
             ClearSelectedNormalButton();
+        }
+        else if (pressSlider != null || pressColorPicker != null)
+        {
+            EventSystem.current?.SetSelectedGameObject(null);
         }
 
         DrawableSuitsDiagnostics.Info($"Virtual cursor A release target={pressTarget.name}; releaseTarget={releaseTarget?.name ?? "null"}; pressButton={pressButton?.name ?? "null"}; releaseButton={releaseButton?.name ?? "null"}; cursor={_cursor}; rawHits=[{DescribeRaycastHits(hits)}]");
@@ -2551,13 +2661,6 @@ internal sealed class SuitEditorController : MonoBehaviour
                 return true;
             }
 
-            colorPicker = hitObject.GetComponentInParent<DrawableColorPickerControl>();
-            if (colorPicker != null && colorPicker.IsActive() && colorPicker.IsInteractable())
-            {
-                target = colorPicker.gameObject;
-                return true;
-            }
-
             input = hitObject.GetComponentInParent<InputField>();
             if (input != null && input.IsActive() && input.IsInteractable())
             {
@@ -2569,6 +2672,22 @@ internal sealed class SuitEditorController : MonoBehaviour
             if (button != null && button.IsActive() && button.IsInteractable())
             {
                 target = button.gameObject;
+                return true;
+            }
+        }
+
+        for (var i = 0; i < hits.Count; i++)
+        {
+            var hitObject = hits[i].gameObject;
+            if (hitObject == null || !hitObject.activeInHierarchy)
+            {
+                continue;
+            }
+
+            colorPicker = hitObject.GetComponentInParent<DrawableColorPickerControl>();
+            if (colorPicker != null && colorPicker.IsActive() && colorPicker.IsInteractable())
+            {
+                target = colorPicker.gameObject;
                 return true;
             }
         }
