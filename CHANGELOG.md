@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.6
+
+- Rebuilt the color picker layout so the saturation/value square sits beside the hue ring instead of covering it.
+- Replaced the color handle squares with small outline handles and added editable `#RRGGBB` hex color input.
+- Added a controller virtual-cursor arming guard so the first `A` press after opening cannot close the menu or switch suits before the stick is moved.
+- Removed the duplicate decal refresh button and kept one short-status `Refresh Decals` action.
+- Further neutralized normal button highlight/selection state while preserving selected styling for tools, decals, and saves.
+
 ## 0.4.5
 
 - Reworked controller virtual-cursor `A` clicks to resolve only actionable UI controls under the cursor, including buttons, input fields, DrawableSuits sliders, and the new color picker.
