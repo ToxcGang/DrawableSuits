@@ -143,6 +143,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private float _worldCameraPitch = 12f;
     private float _worldCameraDistance = 3.4f;
     private bool _worldPreviewReady;
+    private string _lastWorldProxyMaterialLogKey = string.Empty;
+    private float _lastWorldProxyMaterialLogTime;
     private Vector2 _lastWorldPaintUv;
     private bool _lastWorldRaycastHit;
     private Vector3 _lastWorldHitPoint;
@@ -161,6 +163,16 @@ internal sealed class SuitEditorController : MonoBehaviour
     private RectTransform _cursorMarker;
     private RectTransform _designListContent;
     private RectTransform _decalListContent;
+    private Text _designEmptyLabel;
+    private Text _decalEmptyLabel;
+    private Text _designPageLabel;
+    private Text _decalPageLabel;
+    private Button _designPrevPageButton;
+    private Button _designNextPageButton;
+    private Button _decalPrevPageButton;
+    private Button _decalNextPageButton;
+    private readonly List<AnchoredListRow> _designRows = new();
+    private readonly List<AnchoredListRow> _decalRows = new();
     private RawImage _previewImage;
     private Text _suitLabel;
     private Text _statusLabel;
@@ -225,6 +237,22 @@ internal sealed class SuitEditorController : MonoBehaviour
         internal int Layer;
         internal bool UpdateWhenOffscreen;
         internal bool HasUpdateWhenOffscreen;
+    }
+
+    private sealed class AnchoredListRow
+    {
+        internal Button Button;
+        internal Text Label;
+        internal Image Image;
+        internal int Index = -1;
+    }
+
+    private struct WorldCameraState
+    {
+        internal bool Valid;
+        internal float Yaw;
+        internal float Pitch;
+        internal float Distance;
     }
 
     private sealed class DisabledGameplayActionState    {
@@ -359,6 +387,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         private float _saturation = 1f;
         private float _value = 1f;
         private DragRegion _dragRegion;
+        private float _lastDiagnosticsTime;
+        private string _lastDiagnosticsKey = string.Empty;
 
         internal void Configure(
             RectTransform hueRect,
@@ -413,18 +443,15 @@ internal sealed class SuitEditorController : MonoBehaviour
                     return false;
                 }
 
-                var rect = _hueRect.rect;
-                var center = rect.center;
-                var delta = localPoint - center;
-                if (delta.sqrMagnitude < 1f)
+                if (!TryGetHueFromLocalPoint(localPoint, _hueRect.rect, out var hue))
                 {
                     return false;
                 }
 
-                var angle = Mathf.Atan2(delta.y, delta.x);
-                _hue = Mathf.Repeat(angle / (Mathf.PI * 2f), 1f);
+                _hue = hue;
                 UpdateSaturationValueTexture();
                 UpdateVisuals();
+                LogPickerDiagnostics("Hue", screenPosition, localPoint);
                 if (notify)
                 {
                     _onColorChanged?.Invoke(CurrentColor());
@@ -440,10 +467,9 @@ internal sealed class SuitEditorController : MonoBehaviour
                     return false;
                 }
 
-                var rect = _svRect.rect;
-                _saturation = Mathf.Clamp01((localPoint.x - rect.xMin) / rect.width);
-                _value = Mathf.Clamp01((localPoint.y - rect.yMin) / rect.height);
+                GetSaturationValueFromLocalPoint(localPoint, _svRect.rect, out _saturation, out _value);
                 UpdateVisuals();
+                LogPickerDiagnostics("SaturationValue", screenPosition, localPoint);
                 if (notify)
                 {
                     _onColorChanged?.Invoke(CurrentColor());
@@ -490,7 +516,7 @@ internal sealed class SuitEditorController : MonoBehaviour
                 var rect = _hueRect.rect;
                 var radius = Mathf.Min(rect.width, rect.height) * 0.5f;
                 var distance = Vector2.Distance(localPoint, rect.center);
-                if (distance >= radius * 0.58f && distance <= radius)
+                if (distance >= radius * 0.68f && distance <= radius)
                 {
                     return DragRegion.Hue;
                 }
@@ -517,18 +543,67 @@ internal sealed class SuitEditorController : MonoBehaviour
             if (_hueHandle != null && _hueRect != null)
             {
                 var rect = _hueRect.rect;
-                var radius = Mathf.Min(rect.width, rect.height) * 0.43f;
-                var angle = _hue * Mathf.PI * 2f;
-                _hueHandle.anchoredPosition = rect.center + new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * radius;
+                _hueHandle.anchoredPosition = GetHueHandlePosition(rect);
             }
 
             if (_svHandle != null && _svRect != null)
             {
                 var rect = _svRect.rect;
-                _svHandle.anchoredPosition = new Vector2(
-                    Mathf.Lerp(rect.xMin, rect.xMax, _saturation),
-                    Mathf.Lerp(rect.yMin, rect.yMax, _value));
+                _svHandle.anchoredPosition = GetSaturationValueHandlePosition(rect);
             }
+        }
+
+        private bool TryGetHueFromLocalPoint(Vector2 localPoint, Rect rect, out float hue)
+        {
+            var delta = localPoint - rect.center;
+            if (delta.sqrMagnitude < 1f)
+            {
+                hue = _hue;
+                return false;
+            }
+
+            hue = Mathf.Repeat(Mathf.Atan2(delta.y, delta.x) / (Mathf.PI * 2f), 1f);
+            return true;
+        }
+
+        private static void GetSaturationValueFromLocalPoint(Vector2 localPoint, Rect rect, out float saturation, out float value)
+        {
+            saturation = rect.width > 0.01f ? Mathf.Clamp01((localPoint.x - rect.xMin) / rect.width) : 0f;
+            value = rect.height > 0.01f ? Mathf.Clamp01((localPoint.y - rect.yMin) / rect.height) : 0f;
+        }
+
+        private Vector2 GetHueHandlePosition(Rect rect)
+        {
+            var radius = Mathf.Min(rect.width, rect.height) * 0.43f;
+            var angle = _hue * Mathf.PI * 2f;
+            return new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * radius;
+        }
+
+        private Vector2 GetSaturationValueHandlePosition(Rect rect)
+        {
+            return new Vector2(
+                (_saturation - 0.5f) * rect.width,
+                (_value - 0.5f) * rect.height);
+        }
+
+        private void LogPickerDiagnostics(string region, Vector2 screenPosition, Vector2 localPoint)
+        {
+            if (Time.unscaledTime - _lastDiagnosticsTime < 0.25f)
+            {
+                return;
+            }
+
+            var hueHandle = _hueHandle != null ? _hueHandle.anchoredPosition : Vector2.zero;
+            var svHandle = _svHandle != null ? _svHandle.anchoredPosition : Vector2.zero;
+            var key = $"{region}:{Mathf.RoundToInt(_hue * 360f)}:{Mathf.RoundToInt(_saturation * 100f)}:{Mathf.RoundToInt(_value * 100f)}:{Mathf.RoundToInt(hueHandle.x)}:{Mathf.RoundToInt(hueHandle.y)}:{Mathf.RoundToInt(svHandle.x)}:{Mathf.RoundToInt(svHandle.y)}";
+            if (string.Equals(key, _lastDiagnosticsKey, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _lastDiagnosticsTime = Time.unscaledTime;
+            _lastDiagnosticsKey = key;
+            DrawableSuitsDiagnostics.Info($"ColorPickerInput region={region}; hue={_hue:0.###}; saturation={_saturation:0.###}; value={_value:0.###}; screen={screenPosition}; local={localPoint}; hueHandle={hueHandle}; svHandle={svHandle}");
         }
 
         private void BuildHueTexture()
@@ -1345,8 +1420,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         SetAnchoredRect(svRect, new Rect(100f, 8f, 88f, 88f));
         var svImage = svObject.GetComponent<RawImage>();
 
-        var hueHandle = CreateColorPickerHandle(go.transform, "HueHandle", new Vector2(16f, 16f));
-        var svHandle = CreateColorPickerHandle(go.transform, "SaturationValueHandle", new Vector2(14f, 14f));
+        var hueHandle = CreateColorPickerHandle(hueRect, "HueHandle", new Vector2(16f, 16f));
+        var svHandle = CreateColorPickerHandle(svRect, "SaturationValueHandle", new Vector2(14f, 14f));
 
         swatch = CreateAnchoredColorSwatch(go.transform, new Rect(204f, 8f, 54f, 48f));
         hexInput = CreateAnchoredInputField(go.transform, "ColorHexInput", ColorToHex(initialColor), new Rect(192f, 64f, 82f, 30f));
@@ -2019,7 +2094,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         UpdateToolButtons();
         UpdateLabels();
         UpdateColorUi();
-        RefreshListButtons();
     }
 
     private string BuildDiagnosticsSummary()
@@ -2255,29 +2329,60 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         if (_designListContent != null)
         {
-            RebuildAnchoredList(_designListContent, _designFiles, _selectedDesignIndex, _designListPage, "Design", index =>
+            UpdateAnchoredList(
+                _designListContent,
+                _designFiles,
+                _selectedDesignIndex,
+                ref _designListPage,
+                "Design",
+                _designRows,
+                ref _designEmptyLabel,
+                ref _designPrevPageButton,
+                ref _designNextPageButton,
+                ref _designPageLabel,
+                index =>
             {
                 _selectedDesignIndex = index;
                 RefreshListButtons();
                 UpdateUiState();
+                DrawableSuitsDiagnostics.Info($"Design row selected. index={index}; file={(_designFiles.Count > index ? _designFiles[index] : "missing")}");
             }, path => Path.GetFileNameWithoutExtension(path));
         }
 
         if (_decalListContent != null)
         {
-            RebuildAnchoredList(_decalListContent, _decalFiles, _selectedDecalIndex, _decalListPage, "Decal", SelectDecal, Path.GetFileName);
+            UpdateAnchoredList(
+                _decalListContent,
+                _decalFiles,
+                _selectedDecalIndex,
+                ref _decalListPage,
+                "Decal",
+                _decalRows,
+                ref _decalEmptyLabel,
+                ref _decalPrevPageButton,
+                ref _decalNextPageButton,
+                ref _decalPageLabel,
+                SelectDecal,
+                Path.GetFileName);
         }
 
         RebuildSelectableNavigation();
     }
 
-    private void RebuildAnchoredList(RectTransform content, List<string> files, int selectedIndex, int page, string listName, Action<int> onSelect, Func<string, string> labelSelector)
+    private void UpdateAnchoredList(
+        RectTransform content,
+        List<string> files,
+        int selectedIndex,
+        ref int page,
+        string listName,
+        List<AnchoredListRow> rowPool,
+        ref Text emptyLabel,
+        ref Button prevPageButton,
+        ref Button nextPageButton,
+        ref Text pageLabel,
+        Action<int> onSelect,
+        Func<string, string> labelSelector)
     {
-        for (var i = content.childCount - 1; i >= 0; i--)
-        {
-            Destroy(content.GetChild(i).gameObject);
-        }
-
         var rect = content.rect;
         var rowHeight = 30f;
         var spacing = 4f;
@@ -2292,43 +2397,213 @@ internal sealed class SuitEditorController : MonoBehaviour
         var startIndex = page * rows;
         var endIndex = Mathf.Min(files.Count, startIndex + rows);
 
-        if (files.Count == 0)
+        EnsureAnchoredListPool(content, listName, rowPool, rows, rowHeight, spacing);
+        EnsureAnchoredListEmptyLabel(content, listName, ref emptyLabel);
+        EnsureAnchoredListPager(content, listName, ref prevPageButton, ref nextPageButton, ref pageLabel);
+        DisableLegacyListChildren(content, rowPool, emptyLabel, prevPageButton, nextPageButton, pageLabel);
+
+        if (emptyLabel != null)
         {
-            CreateAnchoredText(content, $"{listName}Empty", listName == "Decal" ? "No decals found" : "No saved designs", 13, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(8f, 8f, rect.width - 16f, 26f), new Color(0.76f, 0.78f, 0.82f, 1f));
+            emptyLabel.text = listName == "Decal" ? "No decals found" : "No saved designs";
+            emptyLabel.gameObject.SetActive(files.Count == 0);
+            SetAnchoredRect(emptyLabel.GetComponent<RectTransform>(), new Rect(8f, 8f, rect.width - 16f, 26f));
         }
-        else
+
+        for (var slot = 0; slot < rowPool.Count; slot++)
         {
-            for (var i = startIndex; i < endIndex; i++)
+            var row = rowPool[slot];
+            var fileIndex = startIndex + slot;
+            var active = fileIndex < endIndex;
+            if (row?.Button == null)
             {
-                var index = i;
-                var y = 6f + (i - startIndex) * (rowHeight + spacing);
-                var label = labelSelector(files[i]);
-                var button = CreateAnchoredButton(content, TruncateListLabel(label), new Rect(6f, y, rect.width - 12f, rowHeight), () => onSelect(index));
-                button.name = $"{listName}Row{index}";
-                if (i == selectedIndex)
-                {
-                    ApplySelectedListButtonStyle(button);
-                }
+                continue;
+            }
+
+            row.Button.gameObject.SetActive(active);
+            row.Index = active ? fileIndex : -1;
+            row.Button.onClick.RemoveAllListeners();
+            if (!active)
+            {
+                continue;
+            }
+
+            var index = fileIndex;
+            var y = 6f + slot * (rowHeight + spacing);
+            SetAnchoredRect(row.Button.GetComponent<RectTransform>(), new Rect(6f, y, rect.width - 12f, rowHeight));
+            var label = labelSelector(files[index]);
+            SetButtonLabel(row.Button, TruncateListLabel(label));
+            row.Button.onClick.AddListener(() =>
+            {
+                onSelect(index);
+                ClearSelectedNormalButton();
+            });
+
+            if (index == selectedIndex)
+            {
+                ApplySelectedListButtonStyle(row.Button);
+            }
+            else
+            {
+                ApplyNormalListButtonStyle(row.Button);
             }
         }
 
-        if (maxPage > 0)
+        var showPager = maxPage > 0;
+        var currentPage = page;
+        var currentMaxPage = maxPage;
+        if (prevPageButton != null)
         {
-            var y = Mathf.Max(6f, rect.height - 32f);
-            CreateAnchoredButton(content, "<", new Rect(6f, y, 42f, 26f), () =>
+            prevPageButton.gameObject.SetActive(showPager);
+            SetAnchoredRect(prevPageButton.GetComponent<RectTransform>(), new Rect(6f, Mathf.Max(6f, rect.height - 32f), 42f, 26f));
+            prevPageButton.onClick.RemoveAllListeners();
+            prevPageButton.onClick.AddListener(() =>
             {
-                SetListPage(listName, Mathf.Max(0, page - 1));
+                SetListPage(listName, Mathf.Max(0, currentPage - 1));
                 RefreshListButtons();
+                ClearSelectedNormalButton();
             });
-            CreateAnchoredText(content, $"{listName}Page", $"{page + 1}/{maxPage + 1}", 12, FontStyle.Normal, TextAnchor.MiddleCenter, new Rect(54f, y, 64f, 26f), Color.white);
-            CreateAnchoredButton(content, ">", new Rect(124f, y, 42f, 26f), () =>
+        }
+        if (pageLabel != null)
+        {
+            pageLabel.gameObject.SetActive(showPager);
+            pageLabel.text = $"{page + 1}/{maxPage + 1}";
+            SetAnchoredRect(pageLabel.GetComponent<RectTransform>(), new Rect(54f, Mathf.Max(6f, rect.height - 32f), 64f, 26f));
+        }
+        if (nextPageButton != null)
+        {
+            nextPageButton.gameObject.SetActive(showPager);
+            SetAnchoredRect(nextPageButton.GetComponent<RectTransform>(), new Rect(124f, Mathf.Max(6f, rect.height - 32f), 42f, 26f));
+            nextPageButton.onClick.RemoveAllListeners();
+            nextPageButton.onClick.AddListener(() =>
             {
-                SetListPage(listName, Mathf.Min(maxPage, page + 1));
+                SetListPage(listName, Mathf.Min(currentMaxPage, currentPage + 1));
                 RefreshListButtons();
+                ClearSelectedNormalButton();
             });
         }
 
-        DrawableSuitsDiagnostics.Info($"ListRowsBuilt name={listName}; fileCount={files.Count}; selected={selectedIndex}; page={page}; maxPage={maxPage}; rows={rows}; rect={rect}; childCount={content.childCount}");
+        DrawableSuitsDiagnostics.Info($"ListRowsUpdated name={listName}; fileCount={files.Count}; selected={selectedIndex}; page={page}; maxPage={maxPage}; visibleRows={rows}; pooledRows={rowPool.Count}; rect={rect}; childCount={content.childCount}");
+    }
+
+    private void EnsureAnchoredListPool(RectTransform content, string listName, List<AnchoredListRow> rowPool, int rows, float rowHeight, float spacing)
+    {
+        while (rowPool.Count < rows)
+        {
+            var slot = rowPool.Count;
+            var y = 6f + slot * (rowHeight + spacing);
+            var button = CreateAnchoredButton(content, $"{listName}Row", new Rect(6f, y, content.rect.width - 12f, rowHeight), null);
+            button.name = $"{listName}RowSlot{slot}";
+            button.onClick.RemoveAllListeners();
+            ApplyNormalListButtonStyle(button);
+            rowPool.Add(new AnchoredListRow
+            {
+                Button = button,
+                Label = button.GetComponentInChildren<Text>(true),
+                Image = button.GetComponent<Image>(),
+                Index = -1
+            });
+        }
+
+        for (var i = rows; i < rowPool.Count; i++)
+        {
+            if (rowPool[i]?.Button != null)
+            {
+                rowPool[i].Button.onClick.RemoveAllListeners();
+                rowPool[i].Button.gameObject.SetActive(false);
+                rowPool[i].Index = -1;
+            }
+        }
+    }
+
+    private void EnsureAnchoredListEmptyLabel(RectTransform content, string listName, ref Text emptyLabel)
+    {
+        if (emptyLabel != null)
+        {
+            return;
+        }
+
+        emptyLabel = CreateAnchoredText(content, $"{listName}Empty", string.Empty, 13, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(8f, 8f, content.rect.width - 16f, 26f), new Color(0.76f, 0.78f, 0.82f, 1f));
+        emptyLabel.gameObject.SetActive(false);
+    }
+
+    private void EnsureAnchoredListPager(RectTransform content, string listName, ref Button prevPageButton, ref Button nextPageButton, ref Text pageLabel)
+    {
+        if (prevPageButton == null)
+        {
+            prevPageButton = CreateAnchoredButton(content, "<", new Rect(6f, content.rect.height - 32f, 42f, 26f), null);
+            prevPageButton.name = $"{listName}PrevPageButton";
+            prevPageButton.onClick.RemoveAllListeners();
+            prevPageButton.gameObject.SetActive(false);
+        }
+
+        if (pageLabel == null)
+        {
+            pageLabel = CreateAnchoredText(content, $"{listName}Page", string.Empty, 12, FontStyle.Normal, TextAnchor.MiddleCenter, new Rect(54f, content.rect.height - 32f, 64f, 26f), Color.white);
+            pageLabel.gameObject.SetActive(false);
+        }
+
+        if (nextPageButton == null)
+        {
+            nextPageButton = CreateAnchoredButton(content, ">", new Rect(124f, content.rect.height - 32f, 42f, 26f), null);
+            nextPageButton.name = $"{listName}NextPageButton";
+            nextPageButton.onClick.RemoveAllListeners();
+            nextPageButton.gameObject.SetActive(false);
+        }
+    }
+
+    private static void DisableLegacyListChildren(RectTransform content, List<AnchoredListRow> rowPool, Text emptyLabel, Button prevPageButton, Button nextPageButton, Text pageLabel)
+    {
+        for (var i = content.childCount - 1; i >= 0; i--)
+        {
+            var child = content.GetChild(i);
+            var go = child != null ? child.gameObject : null;
+            if (go == null || IsKnownListChild(go, rowPool, emptyLabel, prevPageButton, nextPageButton, pageLabel))
+            {
+                continue;
+            }
+
+            DisableRaycastsAndSelectables(go);
+            go.SetActive(false);
+            UnityEngine.Object.Destroy(go);
+        }
+    }
+
+    private static bool IsKnownListChild(GameObject go, List<AnchoredListRow> rowPool, Text emptyLabel, Button prevPageButton, Button nextPageButton, Text pageLabel)
+    {
+        if (emptyLabel != null && go == emptyLabel.gameObject) return true;
+        if (prevPageButton != null && go == prevPageButton.gameObject) return true;
+        if (nextPageButton != null && go == nextPageButton.gameObject) return true;
+        if (pageLabel != null && go == pageLabel.gameObject) return true;
+        for (var i = 0; i < rowPool.Count; i++)
+        {
+            if (rowPool[i]?.Button != null && go == rowPool[i].Button.gameObject)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void DisableRaycastsAndSelectables(GameObject go)
+    {
+        var selectables = go.GetComponentsInChildren<Selectable>(true);
+        for (var i = 0; i < selectables.Length; i++)
+        {
+            if (selectables[i] != null)
+            {
+                selectables[i].interactable = false;
+            }
+        }
+
+        var graphics = go.GetComponentsInChildren<Graphic>(true);
+        for (var i = 0; i < graphics.Length; i++)
+        {
+            if (graphics[i] != null)
+            {
+                graphics[i].raycastTarget = false;
+            }
+        }
     }
 
     private void SetListPage(string listName, int page)
@@ -2370,6 +2645,29 @@ internal sealed class SuitEditorController : MonoBehaviour
         colors.selectedColor = colors.highlightedColor;
         button.colors = colors;
     }
+
+    private static void ApplyNormalListButtonStyle(Button button)
+    {
+        if (button == null)
+        {
+            return;
+        }
+
+        var normal = new Color(0.14f, 0.15f, 0.16f, 0.98f);
+        var image = button.GetComponent<Image>();
+        if (image != null)
+        {
+            image.color = normal;
+        }
+
+        var colors = button.colors;
+        colors.normalColor = normal;
+        colors.highlightedColor = normal;
+        colors.selectedColor = normal;
+        colors.pressedColor = new Color(0.34f, 0.36f, 0.38f, 1f);
+        button.colors = colors;
+    }
+
     private void RebuildSelectableNavigation()
     {
         if (_panelRect == null)
@@ -3248,11 +3546,12 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawableSuitsDiagnostics.Info($"SaveDesign requested. selectedSuitId={_selectedSuitId}; designName={_designName}");
         if (DrawableSuitsPlugin.Registry.SaveDesign(_selectedSuitId, _designName))
         {
+            var previouslySelectedDesign = GetSelectedFilePath(_designFiles, _selectedDesignIndex);
             RefreshFileLists();
-            _selectedDesignIndex = _designFiles.FindIndex(path => string.Equals(Path.GetFileNameWithoutExtension(path), TextureTools.SanitizeFileName(_designName), StringComparison.OrdinalIgnoreCase));
-            RefreshListButtons();
+            _selectedDesignIndex = FindFileIndex(_designFiles, previouslySelectedDesign);
+            SetStatus("Design saved.", false);
             UpdateUiState();
-            DrawableSuitsDiagnostics.Info("SaveDesign succeeded.");
+            DrawableSuitsDiagnostics.Info($"SaveDesign succeeded. preservedSelectedDesign={previouslySelectedDesign ?? "none"}; selectedDesignIndex={_selectedDesignIndex}");
         }
         else
         {
@@ -3292,6 +3591,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private void RefreshFileLists()
     {
         DrawableSuitsPaths.EnsureCreated();
+        var selectedDesignPath = GetSelectedFilePath(_designFiles, _selectedDesignIndex);
+        var selectedDecalPath = GetSelectedFilePath(_decalFiles, _selectedDecalIndex);
         _designFiles.Clear();
         _designFiles.AddRange(Directory.GetFiles(DrawableSuitsPaths.Saves, "*.json"));
         _designFiles.Sort(StringComparer.OrdinalIgnoreCase);
@@ -3305,10 +3606,33 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         _decalFiles.Sort(StringComparer.OrdinalIgnoreCase);
-        _selectedDesignIndex = Mathf.Clamp(_selectedDesignIndex, -1, _designFiles.Count - 1);
-        _selectedDecalIndex = Mathf.Clamp(_selectedDecalIndex, -1, _decalFiles.Count - 1);
+        _selectedDesignIndex = FindFileIndex(_designFiles, selectedDesignPath);
+        _selectedDecalIndex = FindFileIndex(_decalFiles, selectedDecalPath);
         RefreshListButtons();
-        DrawableSuitsDiagnostics.Info($"RefreshFileLists complete. designCount={_designFiles.Count}; decalCount={_decalFiles.Count}; savesPath={DrawableSuitsPaths.Saves}; decalsPath={DrawableSuitsPaths.Decals}");
+        DrawableSuitsDiagnostics.Info($"RefreshFileLists complete. designCount={_designFiles.Count}; decalCount={_decalFiles.Count}; selectedDesign={_selectedDesignIndex}; selectedDecal={_selectedDecalIndex}; savesPath={DrawableSuitsPaths.Saves}; decalsPath={DrawableSuitsPaths.Decals}");
+    }
+
+    private static string GetSelectedFilePath(List<string> files, int index)
+    {
+        return index >= 0 && index < files.Count ? files[index] : null;
+    }
+
+    private static int FindFileIndex(List<string> files, string selectedPath)
+    {
+        if (string.IsNullOrWhiteSpace(selectedPath))
+        {
+            return -1;
+        }
+
+        for (var i = 0; i < files.Count; i++)
+        {
+            if (string.Equals(files[i], selectedPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return i;
+            }
+        }
+
+        return -1;
     }
 
     private void ImportDecalFromDialog()
@@ -3387,6 +3711,28 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private bool IsWorldThirdPersonMode => string.Equals(_previewMode, "WorldThirdPerson", StringComparison.OrdinalIgnoreCase);
 
+    private WorldCameraState CaptureWorldCameraState()
+    {
+        return new WorldCameraState
+        {
+            Valid = IsWorldThirdPersonMode && _worldEditorCamera != null && _worldPreviewReady,
+            Yaw = _worldCameraYaw,
+            Pitch = _worldCameraPitch,
+            Distance = _worldCameraDistance
+        };
+    }
+
+    private static bool ShouldPreserveWorldCameraState(string context, WorldCameraState state)
+    {
+        if (!state.Valid || string.IsNullOrWhiteSpace(context))
+        {
+            return false;
+        }
+
+        return context.IndexOf("LoadSelectedDesign", StringComparison.OrdinalIgnoreCase) >= 0
+            || context.IndexOf("SelectSuit", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
     private void ToggleUvFallback()
     {
         _uvFallbackMode = !_uvFallbackMode;
@@ -3411,6 +3757,8 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void TryRebuildPreviewForCurrentReadiness(string context)
     {
+        var preservedCameraState = CaptureWorldCameraState();
+        var preserveCamera = ShouldPreserveWorldCameraState(context, preservedCameraState);
         var editableTexture = _selectedSuitId >= 0 ? DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId) : null;
         if (editableTexture == null)
         {
@@ -3429,7 +3777,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        if (SetupWorldThirdPersonPreview(context))
+        if (SetupWorldThirdPersonPreview(context, preserveCamera ? preservedCameraState : default))
         {
             return;
         }
@@ -3440,7 +3788,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         SetStatus("Third-person setup failed; using UV fallback preview.", true);
     }
 
-    private bool SetupWorldThirdPersonPreview(string context)
+    private bool SetupWorldThirdPersonPreview(string context, WorldCameraState preservedCameraState = default)
     {
         DestroyPreview();
         var texture = _selectedSuitId >= 0 ? DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId) : null;
@@ -3456,9 +3804,20 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             _usingTexturePreview = false;
             _previewMode = "WorldThirdPerson";
-            _worldCameraDistance = Mathf.Clamp(DrawableSuitsPlugin.ModConfig.ThirdPersonCameraDistance.Value, 1.5f, 8f);
-            _worldCameraYaw = player.transform.eulerAngles.y;
-            _worldCameraPitch = 12f;
+            if (preservedCameraState.Valid)
+            {
+                _worldCameraYaw = preservedCameraState.Yaw;
+                _worldCameraPitch = preservedCameraState.Pitch;
+                _worldCameraDistance = preservedCameraState.Distance;
+                DrawableSuitsDiagnostics.Info($"World camera state preserved for preview rebuild. context={context}; yaw={_worldCameraYaw:0.##}; pitch={_worldCameraPitch:0.##}; distance={_worldCameraDistance:0.##}");
+            }
+            else
+            {
+                _worldCameraDistance = Mathf.Clamp(DrawableSuitsPlugin.ModConfig.ThirdPersonCameraDistance.Value, 1.5f, 8f);
+                _worldCameraYaw = player.transform.eulerAngles.y;
+                _worldCameraPitch = 12f;
+                DrawableSuitsDiagnostics.Info($"World camera state initialized for preview setup. context={context}; yaw={_worldCameraYaw:0.##}; pitch={_worldCameraPitch:0.##}; distance={_worldCameraDistance:0.##}");
+            }
             _worldPaintLayer = SelectWorldPaintLayer();
             _worldSourceRenderer = source;
             _worldSourceRendererSummary = DescribeRendererCandidate(source, "selected");
@@ -3486,7 +3845,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             _worldAvatarMeshFilter = _worldPaintProxyObject.AddComponent<MeshFilter>();
             _worldAvatarMeshFilter.sharedMesh = _worldPaintMesh;
             _worldAvatarRenderer = _worldPaintProxyObject.AddComponent<MeshRenderer>();
-            _worldAvatarRenderer.sharedMaterials = BuildWorldProxyMaterials(source);
+            _worldAvatarRenderer.sharedMaterials = BuildWorldProxyMaterials(source, true);
             _worldPaintCollider = _worldPaintProxyObject.AddComponent<MeshCollider>();
             _worldPaintCollider.convex = false;
 
@@ -3959,7 +4318,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             _worldPaintProxyObject.transform.localScale = Vector3.one;
             _worldPaintProxyObject.layer = _worldPaintLayer;
             _worldAvatarMeshFilter.sharedMesh = _worldPaintMesh;
-            _worldAvatarRenderer.sharedMaterials = BuildWorldProxyMaterials(source);
+            _worldAvatarRenderer.sharedMaterials = BuildWorldProxyMaterials(source, forceLog);
             _worldPaintCollider.sharedMesh = null;
             _worldPaintCollider.sharedMesh = _worldPaintMesh;
             source.enabled = false;
@@ -3984,19 +4343,30 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
     }
 
-    private Material[] BuildWorldProxyMaterials(SkinnedMeshRenderer source)
+    private Material[] BuildWorldProxyMaterials(SkinnedMeshRenderer source, bool forceLog = false)
     {
         var runtimeMaterial = DrawableSuitsPlugin.Registry.GetRuntimeMaterial(_selectedSuitId) ?? source?.sharedMaterial;
         var sourceMaterials = source?.sharedMaterials;
         var subMeshCount = Mathf.Max(1, _worldPaintMesh != null ? _worldPaintMesh.subMeshCount : (sourceMaterials?.Length ?? 1));
         var result = new Material[subMeshCount];
+        var logParts = new string[subMeshCount];
         for (var i = 0; i < result.Length; i++)
         {
             var sourceMaterial = sourceMaterials != null && sourceMaterials.Length > 0
                 ? sourceMaterials[Mathf.Min(i, sourceMaterials.Length - 1)]
                 : null;
             result[i] = MaterialLooksFirstPersonOverlay(sourceMaterial) ? EnsureWorldHiddenSubmeshMaterial() : runtimeMaterial;
-            DrawableSuitsDiagnostics.Info($"World proxy material slot. index={i}; source={sourceMaterial?.name ?? "null"}; assigned={result[i]?.name ?? "null"}; hidden={ReferenceEquals(result[i], _worldHiddenSubmeshMaterial)}");
+            logParts[i] = $"{i}:{sourceMaterial?.name ?? "null"}->{result[i]?.name ?? "null"}:hidden={ReferenceEquals(result[i], _worldHiddenSubmeshMaterial)}";
+        }
+
+        var logKey = $"{_selectedSuitId}:{source?.name ?? "null"}:{string.Join("|", logParts)}";
+        if (forceLog
+            || !string.Equals(logKey, _lastWorldProxyMaterialLogKey, StringComparison.Ordinal)
+            || Time.unscaledTime - _lastWorldProxyMaterialLogTime > 10f)
+        {
+            _lastWorldProxyMaterialLogKey = logKey;
+            _lastWorldProxyMaterialLogTime = Time.unscaledTime;
+            DrawableSuitsDiagnostics.Info($"World proxy materials assigned. selectedSuitId={_selectedSuitId}; source={source?.name ?? "null"}; runtime={runtimeMaterial?.name ?? "null"}; slots=[{string.Join(", ", logParts)}]");
         }
 
         return result;
