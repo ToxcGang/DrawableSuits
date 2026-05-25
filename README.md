@@ -6,12 +6,14 @@ DrawableSuits is a Lethal Company v81 BepInEx mod that lets players draw on suit
 
 - Default third-person paint editor: opening DrawableSuits switches to an editor camera around the local player so you can paint directly on the visible suit.
 - Compact side overlay with Paint, Erase, Decal, brush sliders, a hue/SV color picker, decal controls, design name, visible decal rows, visible saved-design rows, Undo, Redo, Reset, Apply, Save, Load, and Close.
+- Part-isolated painting: select `All`, `Helmet`, `Torso`, either arm, either leg, or generated `Other` geometry; the editor shows only the selected part and blocks strokes or decals from spilling into other parts.
+- Decal placement preview: Decal mode shows a translucent live preview before stamping, then places one decal per click or right-trigger press.
 - Pause-menu entry point: use the `DrawableSuits` button below Resume.
 - Fallback shortcuts: `F8` on keyboard or `View/Back + Y` on controller.
 - Emergency open shortcut: `F10`, which opens the editor and does not toggle it closed.
 - Controller support: left stick moves the editor cursor, `A` clicks exactly the UI control under the cursor, right trigger paints only, right stick/bumpers orbit the camera, D-pad up/down zooms, `Y` cycles tools, `X` undoes, and Start saves.
 - Direct surface painting: the editor bakes a hidden mesh collider from the local player model and paints by raycasting from the third-person camera to suit UV coordinates.
-- UV fallback mode: press `Use UV Fallback` if third-person setup fails or if you need the old texture-layout view for debugging.
+- UV fallback mode: press `Use UV Fallback` if third-person setup fails; when a part is selected it shows and edits only that part's UV islands.
 - PNG/JPG decals from `BepInEx/config/DrawableSuits/Decals`. The in-game OS file dialog is disabled for stability in Gale/Unity.
 - Reusable saved designs stored as JSON metadata plus PNG texture files.
 - Apply/save multiplayer sync for other players who also have DrawableSuits installed, keyed per player so two players wearing the same suit can have different edits.
@@ -30,7 +32,8 @@ Keyboard and mouse:
 - Pause menu `DrawableSuits`: primary open path.
 - `F8`: toggle editor.
 - `F10`: emergency open.
-- Left mouse: paint/erase/place decal when aiming at the suit.
+- Left mouse: paint/erase continuously; in Decal mode, stamp one decal at the preview location.
+- Part buttons: select a body region to display and edit only that portion of the suit; select `All` for the full model.
 - Right mouse: orbit the third-person editor camera.
 - Mouse wheel: zoom the third-person camera.
 - Ctrl + mouse wheel: change brush size.
@@ -41,7 +44,7 @@ Controller:
 - `View/Back + Y`: open or close.
 - Left stick: move the editor cursor.
 - `A`: click the button, field, slider, or color picker region directly under the cursor.
-- Right trigger: paint/erase/place decal on the suit.
+- Right trigger: paint/erase continuously; in Decal mode, stamp one decal at the preview location.
 - Right stick or bumpers: orbit the third-person editor camera.
 - D-pad up/down: zoom the third-person editor camera.
 - `Y`: cycle Paint/Erase/Decal. Decal is skipped until a decal is selected.
@@ -71,6 +74,8 @@ DrawableSuits no longer replaces every rack/player using the same base suit when
 
 DrawableSuits works with modded suits by detecting unlockables that expose a `suitMaterial`. Saved designs are reusable on any suit, but loading a design onto a suit with a different UV layout can stretch or misplace drawings and decals.
 
+Part isolation is generated automatically from the selected body mesh. Recognized humanoid bones are used when available; other suits fall back to spatial body regions. Empty regions are disabled, and geometry that cannot be classified is exposed through `Other`.
+
 ## Configuration
 
 The BepInEx config file controls:
@@ -97,7 +102,7 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.4.7 behavior:
+Expected 0.5.0 behavior:
 
 - Opening the editor shows a compact side overlay and a third-person camera view of the local player.
 - The diagnostics text should show `Preview mode: WorldThirdPerson` when the default path succeeds.
@@ -114,9 +119,18 @@ Expected 0.4.7 behavior:
 - Controller `A` does not activate UI immediately after opening; move the left stick once to arm the virtual cursor, then `A` clicks the control under the cursor.
 - Normal buttons should not stay highlighted after unrelated clicks; only selected tools, decals, and saved designs keep orange selection styling.
 - The decal section has one `Refresh Decals` button. It refreshes decal and save rows and shows only a short status line.
+- In Decal mode with a selected decal, hovering over the suit shows a translucent preview and status `Previewing decal. Click/RT to stamp.`
+- Decal placement is single-shot: holding left mouse or RT places one decal until the input is released and pressed again.
+- UV fallback mode shows a non-interactive rotated decal preview over the texture panel.
+- Part buttons default to `All`; selecting a region renders only that avatar proxy region in third person and restricts painting, erase, and decals to its UV mask.
+- UV fallback mode hides UV islands outside the selected part while preserving the same complete saved texture data.
 
 Troubleshooting:
 
+- If no decal preview appears, confirm a decal row is selected and Decal tool is active, then check `DecalPreviewUpdated` or `DecalPreviewHidden` diagnostics.
+- If a requested part is unavailable on a modded suit, it contained no classified geometry; use `All` or check `PartClassifierBuilt` diagnostics for triangle and mask counts.
+- If painting a selected part changes another visible surface, check for the shared-UV warning in the status/log. A suit that maps multiple body regions to the same texture pixels cannot be fully isolated at the texture level.
+- If decals stamp repeatedly while holding input, confirm the installed package is 0.4.8 or newer and check for `DecalStampCommitted` entries; there should be one per press/release cycle.
 - If entering a session starts on a black screen before opening DrawableSuits, check `SessionSafetyCheck` lines. They list `Camera.main`, active cameras, camera target textures, local player flags, prompt context such as grab/hover fields, local renderer materials, and any repaired DrawableSuits objects. DrawableSuits should report no active DrawableSuits cameras while `EditorOpen=False`.
 - If the black screen shows `Grab: [E]` and `SessionSafetyCheck` reports `Camera.main=null`, inspect `LogOutput.log` for repeated `JetpackWarning` `PlayerControllerB.LateUpdate` `NullReferenceException`. By default, DrawableSuits disables only `JetpackWarning.Patches.PlayerControllerB_LateUpdate_Postfix` after repeated failures and logs the unpatch result in `diagnostics.log`. Set `AutoDisableBrokenJetpackWarningLateUpdatePatch=false` to turn this compatibility guard off.
 - If third person shows first-person arms, a giant helmet, held items, or another partial rig, check `World renderer candidate`, `Hidden nearby first-person overlay renderer`, `World editor visible renderer candidate`, and `WorldAvatarProxy updated` lines. The selected renderer should be a body/suit renderer and the proxy should use only the player-specific DrawableSuits material for suit-compatible submeshes.
@@ -146,3 +160,5 @@ Troubleshooting:
 - Very large decal images are resized to the configured maximum texture size.
 - Multiplayer sync is designed for applied designs, not every brush stroke.
 - The old UV fallback view remains available for debugging and edge cases.
+- Some modded suits may classify imperfectly when their rig does not use recognizable humanoid bone names; spatial fallback is used automatically.
+- Parts that share the same UV pixels cannot be independently textured, although strokes are still clipped to the generated selected-part mask.
