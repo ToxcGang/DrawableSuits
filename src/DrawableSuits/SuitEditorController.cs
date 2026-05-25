@@ -31,6 +31,18 @@ internal sealed class SuitEditorController : MonoBehaviour
         Decal
     }
 
+    private enum SuitPart
+    {
+        All,
+        Helmet,
+        Torso,
+        LeftArm,
+        RightArm,
+        LeftLeg,
+        RightLeg,
+        Other
+    }
+
     private readonly Stack<Color32[]> _undo = new();
     private readonly Stack<Color32[]> _redo = new();
     private readonly List<string> _designFiles = new();
@@ -43,12 +55,14 @@ internal sealed class SuitEditorController : MonoBehaviour
     private int _selectedDecalIndex = -1;
     private string _designName = "MyDrawableSuit";
     private EditorTool _tool = EditorTool.Paint;
+    private SuitPart _selectedPart = SuitPart.All;
     private Color _brushColor = Color.red;
     private float _brushSize = 16f;
     private float _brushOpacity = 1f;
     private float _decalSize = 128f;
     private float _decalRotation;
     private bool _strokeActive;
+    private bool _decalStampArmed = true;
     private string _statusMessage = string.Empty;
     private bool _cursorStateCaptured;
     private bool _previousCursorVisible;
@@ -104,6 +118,17 @@ internal sealed class SuitEditorController : MonoBehaviour
         "SpeedCheat"
     };
 
+    private static readonly SuitPart[] IsolatedSuitParts =
+    {
+        SuitPart.Helmet,
+        SuitPart.Torso,
+        SuitPart.LeftArm,
+        SuitPart.RightArm,
+        SuitPart.LeftLeg,
+        SuitPart.RightLeg,
+        SuitPart.Other
+    };
+
     private readonly List<DisabledGameplayActionState> _disabledGameplayActions = new();
 
     private GameObject _previewRoot;
@@ -138,6 +163,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private GameObject _worldBrushMarker;
     private Material _worldBrushMarkerMaterial;
     private Material _worldHiddenSubmeshMaterial;
+    private Material _worldDecalPreviewMaterial;
     private int _worldPaintLayer = 30;
     private float _worldCameraYaw;
     private float _worldCameraPitch = 12f;
@@ -149,10 +175,32 @@ internal sealed class SuitEditorController : MonoBehaviour
     private bool _lastWorldRaycastHit;
     private Vector3 _lastWorldHitPoint;
     private Vector3 _lastWorldHitNormal;
+    private Texture2D _decalPreviewTexture;
+    private RawImage _uvDecalPreviewImage;
+    private RectTransform _uvDecalPreviewRect;
+    private bool _worldDecalPreviewApplied;
+    private bool _decalPreviewVisible;
+    private bool _suppressDecalPreviewUntilRelease;
+    private int _decalPreviewSerial;
+    private string _lastDecalPreviewKey = string.Empty;
+    private string _lastDecalPreviewLogKey = string.Empty;
+    private float _lastDecalPreviewLogTime;
     private int _designListPage;
     private int _decalListPage;
     private readonly List<RendererRestoreState> _rendererRestoreStates = new();
     private Texture2D _loadedDecal;
+    private readonly Dictionary<SuitPart, int[][]> _partTrianglesBySubmesh = new();
+    private readonly Dictionary<SuitPart, bool[]> _partUvMasks = new();
+    private readonly Dictionary<SuitPart, int> _partTriangleCounts = new();
+    private readonly Dictionary<SuitPart, int> _partMaskPixelCounts = new();
+    private readonly Dictionary<SuitPart, Button> _partButtons = new();
+    private Texture2D _partFilteredPreviewTexture;
+    private bool _partDataReady;
+    private bool _partUvOverlapDetected;
+    private int _partDataTextureWidth;
+    private int _partDataTextureHeight;
+    private int _partDataSourceId;
+    private string _partClassifierSource = "none";
 
     private GameObject _editorCanvasObject;
     private RectTransform _canvasRect;
@@ -193,6 +241,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Button _paintButton;
     private Button _eraseButton;
     private Button _decalButton;
+    private Button _otherPartButton;
     private Button _applyButton;
     private Button _saveButton;
     private Button _loadButton;
@@ -742,6 +791,8 @@ internal sealed class SuitEditorController : MonoBehaviour
             Destroy(_editorUiActions);
             _editorUiActions = null;
         }
+
+        ClearPartIsolationData();
     }
 
     private void Update()
@@ -773,6 +824,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             UpdateBrushIndicator();
         }
+        UpdateDecalPlacementPreview();
         HandlePaintingInput();
         if (DrawableSuitsPlugin.ModConfig.EnableExperimentalModelPreview.Value && !_usingTexturePreview && !IsWorldThirdPersonMode)
         {
@@ -809,6 +861,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         CaptureAndUnlockCursor();
         CaptureAndLockPlayerInput();
         _isOpen = true;
+        _selectedPart = SuitPart.All;
+        ClearPartIsolationData();
         _editorCanvasObject.SetActive(true);
         InitializePointerForOpen(source);
         RefreshFileLists();
@@ -989,6 +1043,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void RefreshEditorReadiness(string context)
     {
+        var priorSelectedSuitId = _selectedSuitId;
         var localSuitId = DrawableSuitsPlugin.Registry.GetLocalSuitId();
         var suitIds = DrawableSuitsPlugin.Registry.GetSuitIds();
         _knownSuitCount = suitIds.Count;
@@ -999,6 +1054,11 @@ internal sealed class SuitEditorController : MonoBehaviour
         else if (!suitIds.Contains(_selectedSuitId))
         {
             _selectedSuitId = localSuitId >= 0 ? localSuitId : FirstKnownSuitId();
+        }
+        if (priorSelectedSuitId >= 0 && priorSelectedSuitId != _selectedSuitId)
+        {
+            _selectedPart = SuitPart.All;
+            ClearPartIsolationData();
         }
 
         var player = StartOfRound.Instance?.localPlayerController;
@@ -1030,7 +1090,13 @@ internal sealed class SuitEditorController : MonoBehaviour
             missing.Add("selected suit has no editable material/texture");
         }
 
-        return missing.Count == 0 ? $"Ready. Preview: {_previewMode}." : "Diagnostics: " + string.Join("; ", missing);
+        if (missing.Count > 0)
+        {
+            return "Diagnostics: " + string.Join("; ", missing);
+        }
+
+        var overlapWarning = _partUvOverlapDetected && _selectedPart != SuitPart.All ? " Shared UV regions detected." : string.Empty;
+        return $"Ready. Preview: {_previewMode}. Editing: {PartDisplayName(_selectedPart)}.{overlapWarning}";
     }
 
     private bool EnsureEditorCanvas(out string failureReason)
@@ -1102,7 +1168,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         _panelRect.anchorMax = new Vector2(0f, 1f);
         _panelRect.pivot = new Vector2(0f, 1f);
         _panelRect.anchoredPosition = new Vector2(24f, -24f);
-        _panelRect.sizeDelta = new Vector2(620f, 900f);
+        _panelRect.sizeDelta = new Vector2(620f, 1010f);
 
         var panelImage = panel.GetComponent<Image>();
         panelImage.color = new Color(0.025f, 0.03f, 0.035f, 0.88f);
@@ -1124,19 +1190,30 @@ internal sealed class SuitEditorController : MonoBehaviour
         CreateAnchoredButton(panel.transform, "Use Current", new Rect(leftX + 90f, 282f, 112f, 34f), () => SelectSuit(DrawableSuitsPlugin.Registry.GetLocalSuitId()));
         CreateAnchoredButton(panel.transform, "Next", new Rect(leftX + 210f, 282f, 72f, 34f), () => SelectAdjacentSuit(1));
 
-        CreateAnchoredText(panel.transform, "ToolHeader", "Tool", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 334f, leftW, 24f), Color.white);
-        _paintButton = CreateAnchoredButton(panel.transform, "Paint", new Rect(leftX, 362f, 84f, 34f), () => SetTool(EditorTool.Paint));
-        _eraseButton = CreateAnchoredButton(panel.transform, "Erase", new Rect(leftX + 92f, 362f, 84f, 34f), () => SetTool(EditorTool.Erase));
-        _decalButton = CreateAnchoredButton(panel.transform, "Decal", new Rect(leftX + 184f, 362f, 84f, 34f), () => SetTool(EditorTool.Decal));
+        CreateAnchoredText(panel.transform, "PartHeader", "Part", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 326f, leftW, 24f), Color.white);
+        _partButtons[SuitPart.All] = CreateAnchoredButton(panel.transform, "All", new Rect(leftX, 354f, 62f, 30f), () => SelectPart(SuitPart.All));
+        _partButtons[SuitPart.Helmet] = CreateAnchoredButton(panel.transform, "Helmet", new Rect(leftX + 68f, 354f, 66f, 30f), () => SelectPart(SuitPart.Helmet));
+        _partButtons[SuitPart.Torso] = CreateAnchoredButton(panel.transform, "Torso", new Rect(leftX + 140f, 354f, 62f, 30f), () => SelectPart(SuitPart.Torso));
+        _otherPartButton = CreateAnchoredButton(panel.transform, "Other", new Rect(leftX + 208f, 354f, 66f, 30f), () => SelectPart(SuitPart.Other));
+        _partButtons[SuitPart.Other] = _otherPartButton;
+        _partButtons[SuitPart.LeftArm] = CreateAnchoredButton(panel.transform, "L Arm", new Rect(leftX, 390f, 62f, 30f), () => SelectPart(SuitPart.LeftArm));
+        _partButtons[SuitPart.RightArm] = CreateAnchoredButton(panel.transform, "R Arm", new Rect(leftX + 68f, 390f, 66f, 30f), () => SelectPart(SuitPart.RightArm));
+        _partButtons[SuitPart.LeftLeg] = CreateAnchoredButton(panel.transform, "L Leg", new Rect(leftX + 140f, 390f, 62f, 30f), () => SelectPart(SuitPart.LeftLeg));
+        _partButtons[SuitPart.RightLeg] = CreateAnchoredButton(panel.transform, "R Leg", new Rect(leftX + 208f, 390f, 66f, 30f), () => SelectPart(SuitPart.RightLeg));
 
-        CreateAnchoredText(panel.transform, "BrushHeader", "Brush", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 414f, leftW, 24f), Color.white);
-        _brushSizeLabel = CreateAnchoredText(panel.transform, "BrushSizeLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 444f, 94f, 24f), Color.white);
-        _brushSizeSlider = CreateAnchoredSlider(panel.transform, "BrushSize", 1f, 96f, _brushSize, new Rect(leftX + 100f, 446f, 174f, 24f), value => _brushSize = value);
-        _brushOpacityLabel = CreateAnchoredText(panel.transform, "BrushOpacityLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 478f, 94f, 24f), Color.white);
-        _brushOpacitySlider = CreateAnchoredSlider(panel.transform, "BrushOpacity", 0.05f, 1f, _brushOpacity, new Rect(leftX + 100f, 480f, 174f, 24f), value => _brushOpacity = value);
+        CreateAnchoredText(panel.transform, "ToolHeader", "Tool", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 426f, leftW, 24f), Color.white);
+        _paintButton = CreateAnchoredButton(panel.transform, "Paint", new Rect(leftX, 454f, 84f, 34f), () => SetTool(EditorTool.Paint));
+        _eraseButton = CreateAnchoredButton(panel.transform, "Erase", new Rect(leftX + 92f, 454f, 84f, 34f), () => SetTool(EditorTool.Erase));
+        _decalButton = CreateAnchoredButton(panel.transform, "Decal", new Rect(leftX + 184f, 454f, 84f, 34f), () => SetTool(EditorTool.Decal));
 
-        CreateAnchoredText(panel.transform, "ColorHeader", "Color", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 518f, leftW, 24f), Color.white);
-        _colorPicker = CreateAnchoredColorPicker(panel.transform, new Rect(leftX, 542f, leftW, 104f), _brushColor, color =>
+        CreateAnchoredText(panel.transform, "BrushHeader", "Brush", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 506f, leftW, 24f), Color.white);
+        _brushSizeLabel = CreateAnchoredText(panel.transform, "BrushSizeLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 536f, 94f, 24f), Color.white);
+        _brushSizeSlider = CreateAnchoredSlider(panel.transform, "BrushSize", 1f, 96f, _brushSize, new Rect(leftX + 100f, 538f, 174f, 24f), value => _brushSize = value);
+        _brushOpacityLabel = CreateAnchoredText(panel.transform, "BrushOpacityLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 570f, 94f, 24f), Color.white);
+        _brushOpacitySlider = CreateAnchoredSlider(panel.transform, "BrushOpacity", 0.05f, 1f, _brushOpacity, new Rect(leftX + 100f, 572f, 174f, 24f), value => _brushOpacity = value);
+
+        CreateAnchoredText(panel.transform, "ColorHeader", "Color", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 610f, leftW, 24f), Color.white);
+        _colorPicker = CreateAnchoredColorPicker(panel.transform, new Rect(leftX, 634f, leftW, 104f), _brushColor, color =>
         {
             _brushColor = color;
             UpdateColorUi();
@@ -1166,6 +1243,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             SaveUndo();
             DrawableSuitsPlugin.Registry.ResetSuit(_selectedSuitId);
             _redo.Clear();
+            InvalidateDecalPreview("reset");
             UpdateUiState();
         });
 
@@ -1178,7 +1256,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         var fallbackPreview = CreateUiObject("PreviewViewport", panel.transform, typeof(RectTransform), typeof(Image));
         _previewViewportRect = fallbackPreview.GetComponent<RectTransform>();
-        SetAnchoredRect(_previewViewportRect, new Rect(leftX, 654f, 274f, 190f));
+        SetAnchoredRect(_previewViewportRect, new Rect(leftX, 748f, 274f, 190f));
         var previewBackground = fallbackPreview.GetComponent<Image>();
         previewBackground.color = new Color(0.025f, 0.028f, 0.032f, 1f);
         previewBackground.raycastTarget = true;
@@ -1195,6 +1273,17 @@ internal sealed class SuitEditorController : MonoBehaviour
         _previewImage.color = Color.white;
         _previewImage.raycastTarget = true;
 
+        _uvDecalPreviewRect = CreateUiObject("UvDecalPlacementPreview", fallbackPreview.transform, typeof(RectTransform), typeof(RawImage)).GetComponent<RectTransform>();
+        _uvDecalPreviewRect.anchorMin = new Vector2(0f, 1f);
+        _uvDecalPreviewRect.anchorMax = new Vector2(0f, 1f);
+        _uvDecalPreviewRect.pivot = new Vector2(0.5f, 0.5f);
+        _uvDecalPreviewRect.anchoredPosition = Vector2.zero;
+        _uvDecalPreviewRect.sizeDelta = new Vector2(32f, 32f);
+        _uvDecalPreviewImage = _uvDecalPreviewRect.GetComponent<RawImage>();
+        _uvDecalPreviewImage.color = new Color(1f, 1f, 1f, 0.62f);
+        _uvDecalPreviewImage.raycastTarget = false;
+        _uvDecalPreviewRect.gameObject.SetActive(false);
+
         _brushIndicator = CreateUiObject("BrushIndicator", fallbackPreview.transform, typeof(RectTransform), typeof(Image)).GetComponent<RectTransform>();
         _brushIndicator.sizeDelta = new Vector2(16f, 16f);
         _brushIndicatorImage = _brushIndicator.GetComponent<Image>();
@@ -1203,7 +1292,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         _brushIndicator.gameObject.SetActive(false);
         fallbackPreview.SetActive(false);
 
-        CreateAnchoredText(panel.transform, "ControllerHelp", "Controller: View/Back+Y open/close, left stick cursor, A clicks UI, RT paints only, right stick/bumpers orbit, D-pad up/down zooms, X undo, Start save.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 858f, 574f, 36f), Color.white);
+        CreateAnchoredText(panel.transform, "ControllerHelp", "Controller: View/Back+Y open/close, left stick cursor, A clicks UI, RT paints only, right stick/bumpers orbit, D-pad up/down zooms, X undo, Start save.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 954f, 574f, 36f), Color.white);
 
         _cursorMarker = CreateUiObject("DrawableSuitsCursor", _editorCanvasObject.transform, typeof(Image)).GetComponent<RectTransform>();
         _cursorMarker.sizeDelta = new Vector2(14f, 14f);
@@ -2092,6 +2181,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         SetButtonLabel(_uvFallbackButton, _uvFallbackMode ? "Use Third Person" : "Use UV Fallback");
 
         UpdateToolButtons();
+        UpdatePartButtons();
         UpdateLabels();
         UpdateColorUi();
     }
@@ -2102,6 +2192,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         return string.Join("\n", new[]
         {
             $"Selected suit id: {_selectedSuitId}",
+            $"Selected part: {PartDisplayName(_selectedPart)}",
+            $"Part classifier: {_partClassifierSource}; UV overlap: {_partUvOverlapDetected}",
             $"Suit count: {_knownSuitCount}",
             $"Local player found: {_hasLocalPlayer}",
             $"Player model found: {_hasPlayerModel}",
@@ -2250,6 +2342,69 @@ internal sealed class SuitEditorController : MonoBehaviour
         SetToolButtonColor(_decalButton, _tool == EditorTool.Decal);
     }
 
+    private void UpdatePartButtons()
+    {
+        foreach (var entry in _partButtons)
+        {
+            var part = entry.Key;
+            var button = entry.Value;
+            if (button == null)
+            {
+                continue;
+            }
+
+            var hasTriangles = part == SuitPart.All || (GetPartTriangleCount(part) > 0 && GetPartMaskPixelCount(part) > 0);
+            if (part == SuitPart.Other)
+            {
+                button.gameObject.SetActive(hasTriangles);
+            }
+
+            button.interactable = hasTriangles;
+            SetToolButtonColor(button, part == _selectedPart);
+        }
+    }
+
+    private void SelectPart(SuitPart part)
+    {
+        if (part != SuitPart.All && (GetPartTriangleCount(part) <= 0 || GetPartMaskPixelCount(part) <= 0))
+        {
+            SetStatus($"{PartDisplayName(part)} is not available on this suit.", false);
+            UpdateUiState();
+            return;
+        }
+
+        _selectedPart = part;
+        HideDecalPlacementPreview("part changed", false);
+        if (IsWorldThirdPersonMode)
+        {
+            UpdateWorldPaintProxy(true);
+        }
+        else
+        {
+            UseTexturePreview("part changed", true);
+        }
+
+        var warning = _partUvOverlapDetected && part != SuitPart.All
+            ? " Shared UV pixels may also affect another part."
+            : string.Empty;
+        SetStatus($"Editing: {PartDisplayName(part)}.{warning}", false);
+        DrawableSuitsDiagnostics.Info($"Suit part selected. part={part}; triangles={GetPartTriangleCount(part)}; maskPixels={GetPartMaskPixelCount(part)}; classifier={_partClassifierSource}; overlap={_partUvOverlapDetected}; mode={_previewMode}");
+        InvalidateDecalPreview("part changed");
+        UpdateUiState();
+    }
+
+    private static string PartDisplayName(SuitPart part)
+    {
+        switch (part)
+        {
+            case SuitPart.LeftArm: return "Left Arm";
+            case SuitPart.RightArm: return "Right Arm";
+            case SuitPart.LeftLeg: return "Left Leg";
+            case SuitPart.RightLeg: return "Right Leg";
+            default: return part.ToString();
+        }
+    }
+
     private static void SetToolButtonColor(Button button, bool selected)
     {
         if (button == null)
@@ -2270,12 +2425,23 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             WarnMissingDecal("tool selection");
             _tool = EditorTool.Paint;
+            HideDecalPlacementPreview("decal tool missing decal", false);
             UpdateToolButtons();
             UpdateBrushIndicator();
             return;
         }
 
         _tool = tool;
+        _decalStampArmed = true;
+        _suppressDecalPreviewUntilRelease = false;
+        if (tool == EditorTool.Decal)
+        {
+            InvalidateDecalPreview("decal tool selected");
+        }
+        else
+        {
+            HideDecalPlacementPreview("tool changed", false);
+        }
         if (tool != EditorTool.Decal && _statusMessage.StartsWith("Select a decal", StringComparison.OrdinalIgnoreCase))
         {
             SetStatus(BuildReadinessStatus(), false);
@@ -2724,6 +2890,339 @@ internal sealed class SuitEditorController : MonoBehaviour
         // Keep it hidden until a proper outline-only indicator is added.
         _brushIndicator.gameObject.SetActive(false);
     }
+
+    private void UpdateDecalPlacementPreview()
+    {
+        if (!_isOpen || _tool != EditorTool.Decal || _loadedDecal == null || !_canPaint || _suppressDecalPreviewUntilRelease)
+        {
+            HideDecalPlacementPreview("not eligible", false);
+            return;
+        }
+
+        var texture = DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId);
+        if (texture == null)
+        {
+            HideDecalPlacementPreview("no editable texture", false);
+            return;
+        }
+
+        if (IsWorldThirdPersonMode)
+        {
+            if (IsCursorOverEditorPanel() || !TryGetWorldPaintHit(out var hit, false))
+            {
+                HideDecalPlacementPreview("world miss", false);
+                return;
+            }
+
+            ShowWorldDecalPlacementPreview(texture, hit.textureCoord);
+            return;
+        }
+
+        if (!TryGetTexturePreviewUv(_cursor, out var uv) || !IsCursorOverPreviewViewport())
+        {
+            HideDecalPlacementPreview("uv miss", false);
+            return;
+        }
+
+        if (!IsUvTargetInSelectedPart(texture, uv))
+        {
+            HideDecalPlacementPreview("uv outside selected part", false);
+            return;
+        }
+
+        ShowUvDecalPlacementPreview(texture, uv);
+    }
+
+    private void ShowWorldDecalPlacementPreview(Texture2D sourceTexture, Vector2 uv)
+    {
+        if (_worldAvatarRenderer == null || _worldSourceRenderer == null || sourceTexture == null || _loadedDecal == null)
+        {
+            HideDecalPlacementPreview("world dependencies missing", false);
+            return;
+        }
+
+        if (!EnsureDecalPreviewTexture(sourceTexture))
+        {
+            HideDecalPlacementPreview("preview texture failed", true);
+            return;
+        }
+
+        var key = BuildDecalPreviewKey("WorldThirdPerson", sourceTexture, uv);
+        if (!string.Equals(key, _lastDecalPreviewKey, StringComparison.Ordinal))
+        {
+            _decalPreviewTexture.SetPixels32(sourceTexture.GetPixels32());
+            CompositeDecal(_decalPreviewTexture, _loadedDecal, uv, _decalSize, _decalRotation, Mathf.Clamp01(_brushOpacity * 0.62f));
+            _decalPreviewTexture.Apply(false, false);
+            _lastDecalPreviewKey = key;
+        }
+
+        var previewMaterial = EnsureWorldDecalPreviewMaterial(sourceTexture);
+        if (previewMaterial == null)
+        {
+            HideDecalPlacementPreview("preview material failed", true);
+            return;
+        }
+
+        previewMaterial.mainTexture = _decalPreviewTexture;
+        var baseMaterials = BuildWorldProxyMaterials(_worldSourceRenderer, false);
+        var previewMaterials = new Material[baseMaterials.Length];
+        for (var i = 0; i < baseMaterials.Length; i++)
+        {
+            previewMaterials[i] = ReferenceEquals(baseMaterials[i], _worldHiddenSubmeshMaterial) ? baseMaterials[i] : previewMaterial;
+        }
+
+        _worldAvatarRenderer.sharedMaterials = previewMaterials;
+        _worldDecalPreviewApplied = true;
+        _decalPreviewVisible = true;
+        if (_uvDecalPreviewRect != null)
+        {
+            _uvDecalPreviewRect.gameObject.SetActive(false);
+        }
+
+        SetDecalPreviewStatus();
+        LogDecalPreviewUpdated("WorldThirdPerson", sourceTexture, uv, false);
+    }
+
+    private void ShowUvDecalPlacementPreview(Texture2D sourceTexture, Vector2 uv)
+    {
+        if (_uvDecalPreviewRect == null || _uvDecalPreviewImage == null || _previewViewportRect == null || sourceTexture == null || _loadedDecal == null)
+        {
+            HideDecalPlacementPreview("uv dependencies missing", false);
+            return;
+        }
+
+        RestoreWorldDecalPreviewMaterial();
+        if (_selectedPart != SuitPart.All && EnsureDecalPreviewTexture(sourceTexture))
+        {
+            _decalPreviewTexture.SetPixels32(sourceTexture.GetPixels32());
+            CompositeDecal(_decalPreviewTexture, _loadedDecal, uv, _decalSize, _decalRotation, Mathf.Clamp01(_brushOpacity * 0.62f));
+            _decalPreviewTexture.Apply(false, false);
+            _previewImage.texture = BuildFilteredPartPreviewTexture(_decalPreviewTexture);
+            _uvDecalPreviewRect.gameObject.SetActive(false);
+            _decalPreviewVisible = true;
+            _lastDecalPreviewKey = BuildDecalPreviewKey("TextureFallback", sourceTexture, uv);
+            SetDecalPreviewStatus();
+            LogDecalPreviewUpdated("TextureFallback", sourceTexture, uv, false);
+            return;
+        }
+
+        var rect = _previewViewportRect.rect;
+        var localX = Mathf.Lerp(rect.xMin, rect.xMax, uv.x);
+        var localY = Mathf.Lerp(rect.yMin, rect.yMax, uv.y);
+        var displayWidth = Mathf.Clamp(_decalSize / Mathf.Max(1f, sourceTexture.width) * rect.width, 4f, rect.width * 1.5f);
+        var displayHeight = Mathf.Clamp(_decalSize / Mathf.Max(1f, sourceTexture.height) * rect.height, 4f, rect.height * 1.5f);
+
+        _uvDecalPreviewImage.texture = _loadedDecal;
+        _uvDecalPreviewImage.color = new Color(1f, 1f, 1f, 0.62f);
+        _uvDecalPreviewImage.raycastTarget = false;
+        _uvDecalPreviewRect.anchoredPosition = new Vector2(localX, localY);
+        _uvDecalPreviewRect.sizeDelta = new Vector2(displayWidth, displayHeight);
+        _uvDecalPreviewRect.localRotation = Quaternion.Euler(0f, 0f, _decalRotation);
+        _uvDecalPreviewRect.gameObject.SetActive(true);
+
+        _decalPreviewVisible = true;
+        _lastDecalPreviewKey = BuildDecalPreviewKey("TextureFallback", sourceTexture, uv);
+        SetDecalPreviewStatus();
+        LogDecalPreviewUpdated("TextureFallback", sourceTexture, uv, false);
+    }
+
+    private bool EnsureDecalPreviewTexture(Texture2D sourceTexture)
+    {
+        if (sourceTexture == null)
+        {
+            return false;
+        }
+
+        if (_decalPreviewTexture != null
+            && _decalPreviewTexture.width == sourceTexture.width
+            && _decalPreviewTexture.height == sourceTexture.height
+            && _decalPreviewTexture.format == TextureFormat.RGBA32)
+        {
+            return true;
+        }
+
+        if (_decalPreviewTexture != null)
+        {
+            Destroy(_decalPreviewTexture);
+        }
+
+        _decalPreviewTexture = new Texture2D(sourceTexture.width, sourceTexture.height, TextureFormat.RGBA32, false)
+        {
+            name = "DrawableSuitsDecalPlacementPreview",
+            filterMode = sourceTexture.filterMode,
+            wrapMode = TextureWrapMode.Clamp,
+            hideFlags = HideFlags.HideAndDontSave
+        };
+        InvalidateDecalPreview("preview texture recreated");
+        return true;
+    }
+
+    private Material EnsureWorldDecalPreviewMaterial(Texture2D sourceTexture)
+    {
+        var baseMaterial = DrawableSuitsPlugin.Registry.GetRuntimeMaterial(_selectedSuitId)
+            ?? _worldAvatarRenderer?.sharedMaterial
+            ?? _worldSourceRenderer?.sharedMaterial;
+        if (baseMaterial == null)
+        {
+            return null;
+        }
+
+        if (_worldDecalPreviewMaterial == null || _worldDecalPreviewMaterial.shader != baseMaterial.shader)
+        {
+            if (_worldDecalPreviewMaterial != null)
+            {
+                Destroy(_worldDecalPreviewMaterial);
+            }
+
+            _worldDecalPreviewMaterial = new Material(baseMaterial)
+            {
+                name = "DrawableSuitsWorldDecalPlacementPreviewMaterial",
+                hideFlags = HideFlags.HideAndDontSave
+            };
+        }
+
+        _worldDecalPreviewMaterial.mainTexture = _decalPreviewTexture ?? sourceTexture;
+        if (_worldDecalPreviewMaterial.HasProperty("_Color"))
+        {
+            _worldDecalPreviewMaterial.SetColor("_Color", Color.white);
+        }
+
+        return _worldDecalPreviewMaterial;
+    }
+
+    private void HideDecalPlacementPreview(string reason, bool forceLog)
+    {
+        var wasVisible = _decalPreviewVisible || _worldDecalPreviewApplied || (_uvDecalPreviewRect != null && _uvDecalPreviewRect.gameObject.activeSelf);
+        if (_uvDecalPreviewRect != null)
+        {
+            _uvDecalPreviewRect.gameObject.SetActive(false);
+        }
+
+        RestoreWorldDecalPreviewMaterial();
+        if (_usingTexturePreview && wasVisible)
+        {
+            UseTexturePreview("decal preview hidden", false);
+        }
+        _decalPreviewVisible = false;
+        if (_statusMessage.StartsWith("Previewing decal", StringComparison.OrdinalIgnoreCase))
+        {
+            SetStatus(BuildReadinessStatus(), false);
+        }
+
+        if (wasVisible || forceLog)
+        {
+            LogDecalPreviewHidden(reason, forceLog);
+        }
+    }
+
+    private void RestoreWorldDecalPreviewMaterial()
+    {
+        if (!_worldDecalPreviewApplied)
+        {
+            return;
+        }
+
+        if (_worldAvatarRenderer != null && _worldSourceRenderer != null)
+        {
+            _worldAvatarRenderer.sharedMaterials = BuildWorldProxyMaterials(_worldSourceRenderer, false);
+        }
+
+        _worldDecalPreviewApplied = false;
+    }
+
+    private void DestroyDecalPlacementPreviewResources()
+    {
+        HideDecalPlacementPreview("destroy preview resources", true);
+        if (_decalPreviewTexture != null)
+        {
+            Destroy(_decalPreviewTexture);
+            _decalPreviewTexture = null;
+        }
+        if (_worldDecalPreviewMaterial != null)
+        {
+            Destroy(_worldDecalPreviewMaterial);
+            _worldDecalPreviewMaterial = null;
+        }
+        _lastDecalPreviewKey = string.Empty;
+    }
+
+    private void InvalidateDecalPreview(string reason)
+    {
+        _decalPreviewSerial++;
+        _lastDecalPreviewKey = string.Empty;
+        if (_decalPreviewVisible)
+        {
+            LogDecalPreviewHidden($"invalidated: {reason}", false);
+        }
+    }
+
+    private string BuildDecalPreviewKey(string mode, Texture2D sourceTexture, Vector2 uv)
+    {
+        var px = sourceTexture != null ? Mathf.RoundToInt(uv.x * (sourceTexture.width - 1)) : -1;
+        var py = sourceTexture != null ? Mathf.RoundToInt(uv.y * (sourceTexture.height - 1)) : -1;
+        return $"{_decalPreviewSerial}|{mode}|suit={_selectedSuitId}|pixel={px},{py}|size={Mathf.RoundToInt(_decalSize)}|rot={Mathf.RoundToInt(_decalRotation * 10f)}|opacity={Mathf.RoundToInt(_brushOpacity * 1000f)}|decal={CurrentDecalName()}|texture={sourceTexture?.width ?? 0}x{sourceTexture?.height ?? 0}";
+    }
+
+    private void SetDecalPreviewStatus()
+    {
+        if (!_statusMessage.StartsWith("Previewing decal", StringComparison.OrdinalIgnoreCase))
+        {
+            SetStatus("Previewing decal. Click/RT to stamp.", false);
+        }
+    }
+
+    private void LogDecalPreviewUpdated(string mode, Texture2D texture, Vector2 uv, bool force)
+    {
+        if (texture == null)
+        {
+            return;
+        }
+
+        var px = Mathf.RoundToInt(uv.x * (texture.width - 1));
+        var py = Mathf.RoundToInt(uv.y * (texture.height - 1));
+        var key = $"updated|mode={mode}|pixel={px},{py}|size={Mathf.RoundToInt(_decalSize)}|rotation={Mathf.RoundToInt(_decalRotation)}|opacity={_brushOpacity:0.##}|decal={CurrentDecalName()}|preview={_decalPreviewTexture?.width ?? 0}x{_decalPreviewTexture?.height ?? 0}";
+        if (!force && Time.unscaledTime - _lastDecalPreviewLogTime < 0.5f && string.Equals(key, _lastDecalPreviewLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastDecalPreviewLogTime = Time.unscaledTime;
+        _lastDecalPreviewLogKey = key;
+        DrawableSuitsDiagnostics.Info($"DecalPreviewUpdated: {key}; uv={uv}; pointerSource={_pointerSource}; cursor={_cursor}");
+    }
+
+    private void LogDecalPreviewHidden(string reason, bool force)
+    {
+        var key = $"hidden|reason={reason}|mode={_previewMode}|decal={CurrentDecalName()}";
+        if (!force && Time.unscaledTime - _lastDecalPreviewLogTime < 0.75f && string.Equals(key, _lastDecalPreviewLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastDecalPreviewLogTime = Time.unscaledTime;
+        _lastDecalPreviewLogKey = key;
+        DrawableSuitsDiagnostics.Info($"DecalPreviewHidden: {key}; pointerSource={_pointerSource}; cursor={_cursor}");
+    }
+
+    private void LogDecalStampCommitted(string mode, Texture2D texture, Vector2 uv)
+    {
+        if (texture == null)
+        {
+            return;
+        }
+
+        var px = Mathf.RoundToInt(uv.x * (texture.width - 1));
+        var py = Mathf.RoundToInt(uv.y * (texture.height - 1));
+        DrawableSuitsDiagnostics.Info($"DecalStampCommitted: mode={mode}; pointerSource={_pointerSource}; uv={uv}; pixel={px},{py}; decal={CurrentDecalName()}; size={Mathf.RoundToInt(_decalSize)}; rotation={Mathf.RoundToInt(_decalRotation)}; opacity={_brushOpacity:0.##}; previewTexture={_decalPreviewTexture?.width ?? 0}x{_decalPreviewTexture?.height ?? 0}");
+    }
+
+    private string CurrentDecalName()
+    {
+        return _selectedDecalIndex >= 0 && _selectedDecalIndex < _decalFiles.Count
+            ? Path.GetFileName(_decalFiles[_selectedDecalIndex])
+            : "none";
+    }
+
     private void HandleControllerCursor()
     {
         _mousePositionAvailable = DrawableSuitsInput.TryGetMousePosition(out _lastMousePosition);
@@ -3144,12 +3643,14 @@ internal sealed class SuitEditorController : MonoBehaviour
         if (_bootstrapShell)
         {
             _strokeActive = false;
+            _decalStampArmed = true;
             return;
         }
 
         if (!_canPaint)
         {
             _strokeActive = false;
+            _decalStampArmed = true;
             return;
         }
 
@@ -3166,6 +3667,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         if (!painting)
         {
             _strokeActive = false;
+            _decalStampArmed = true;
+            _suppressDecalPreviewUntilRelease = false;
             return;
         }
 
@@ -3174,8 +3677,21 @@ internal sealed class SuitEditorController : MonoBehaviour
         var overPreview = IsCursorOverPreviewViewport() && uvAvailable;
         LogPaintAttemptIfNeeded("paint input", overPreview, uvAvailable, uv, texture, !_strokeActive);
 
+        if (_tool == EditorTool.Decal)
+        {
+            HandleSingleDecalStampInput(texture, overPreview && IsUvTargetInSelectedPart(texture, uv), uv, "TextureFallback");
+            return;
+        }
+
         if (!overPreview || texture == null)
         {
+            _strokeActive = false;
+            return;
+        }
+
+        if (!IsUvTargetInSelectedPart(texture, uv))
+        {
+            SetStatus($"Aim at the visible {PartDisplayName(_selectedPart)} UV region to paint.", false);
             _strokeActive = false;
             return;
         }
@@ -3208,6 +3724,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         if (!painting)
         {
             _strokeActive = false;
+            _decalStampArmed = true;
+            _suppressDecalPreviewUntilRelease = false;
             return;
         }
 
@@ -3215,6 +3733,13 @@ internal sealed class SuitEditorController : MonoBehaviour
         var hitAvailable = TryGetWorldPaintHit(out var hit, true);
         var uv = hitAvailable ? hit.textureCoord : default;
         LogPaintAttemptIfNeeded("world paint input", hitAvailable, hitAvailable, uv, texture, !_strokeActive);
+
+        if (_tool == EditorTool.Decal)
+        {
+            HandleSingleDecalStampInput(texture, hitAvailable, uv, "WorldThirdPerson");
+            return;
+        }
+
         if (!hitAvailable || texture == null)
         {
             if (!_statusMessage.StartsWith("Aim at your suit", StringComparison.OrdinalIgnoreCase))
@@ -3249,6 +3774,43 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         PaintAtCursor(texture, uv);
     }
+
+    private void HandleSingleDecalStampInput(Texture2D texture, bool targetAvailable, Vector2 uv, string mode)
+    {
+        _strokeActive = false;
+        if (!_decalStampArmed)
+        {
+            return;
+        }
+
+        _decalStampArmed = false;
+        _suppressDecalPreviewUntilRelease = true;
+        HideDecalPlacementPreview("stamp input", false);
+
+        if (!targetAvailable || texture == null)
+        {
+            if (string.Equals(mode, "WorldThirdPerson", StringComparison.OrdinalIgnoreCase))
+            {
+                SetStatus("Aim at your visible suit to stamp the decal.", false);
+            }
+            return;
+        }
+
+        if (_loadedDecal == null)
+        {
+            WarnMissingDecal($"{mode} stamp");
+            _tool = EditorTool.Paint;
+            UpdateToolButtons();
+            return;
+        }
+
+        SaveUndo();
+        _redo.Clear();
+        if (PaintAtCursor(texture, uv))
+        {
+            LogDecalStampCommitted(mode, texture, uv);
+        }
+    }
     private void LogPaintAttemptIfNeeded(string reason, bool overPreview, bool uvAvailable, Vector2 uv, Texture2D texture, bool force)
     {
         var pixel = "none";
@@ -3259,7 +3821,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             pixel = $"{px},{py}";
         }
 
-        var key = $"{reason}|tool={_tool}|over={overPreview}|uv={uvAvailable}:{uv}|pixel={pixel}|brush={Mathf.RoundToInt(_brushSize)}|opacity={_brushOpacity:0.##}|decal={_loadedDecal != null}|source={_pointerSource}";
+        var key = $"{reason}|part={_selectedPart}|tool={_tool}|over={overPreview}|uv={uvAvailable}:{uv}|pixel={pixel}|allowed={(uvAvailable && texture != null ? IsUvTargetInSelectedPart(texture, uv).ToString() : "n/a")}|brush={Mathf.RoundToInt(_brushSize)}|opacity={_brushOpacity:0.##}|decal={_loadedDecal != null}|source={_pointerSource}";
         if (!force && Time.unscaledTime - _lastPaintDiagnosticsTime < 0.75f && string.Equals(key, _lastPaintDiagnosticsKey, StringComparison.Ordinal))
         {
             return;
@@ -3276,7 +3838,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         var px = Mathf.RoundToInt(uv.x * (texture.width - 1));
         var py = Mathf.RoundToInt(uv.y * (texture.height - 1));
-        var key = $"applied|tool={_tool}|pixel={px},{py}|brush={Mathf.RoundToInt(_brushSize)}|opacity={_brushOpacity:0.##}|decal={_loadedDecal != null}";
+        var key = $"applied|part={_selectedPart}|tool={_tool}|pixel={px},{py}|brush={Mathf.RoundToInt(_brushSize)}|opacity={_brushOpacity:0.##}|decal={_loadedDecal != null}";
         if (Time.unscaledTime - _lastPaintDiagnosticsTime < 0.5f && string.Equals(key, _lastPaintDiagnosticsKey, StringComparison.Ordinal))
         {
             return;
@@ -3329,23 +3891,23 @@ internal sealed class SuitEditorController : MonoBehaviour
         return true;
     }
 
-    private void PaintAtCursor(Texture2D texture, Vector2 uv)
+    private bool PaintAtCursor(Texture2D texture, Vector2 uv)
     {
         if (texture == null)
         {
             RefreshEditorReadiness("paint preflight failed");
             UpdateUiState();
-            return;
+            return false;
         }
 
         var changed = true;
         switch (_tool)
         {
             case EditorTool.Paint:
-                PaintCircle(texture, uv, _brushColor, _brushSize, _brushOpacity);
+                changed = PaintCircle(texture, uv, _brushColor, _brushSize, _brushOpacity);
                 break;
             case EditorTool.Erase:
-                EraseCircle(texture, uv, _brushSize, _brushOpacity);
+                changed = EraseCircle(texture, uv, _brushSize, _brushOpacity);
                 break;
             case EditorTool.Decal:
                 changed = ApplyDecal(texture, uv);
@@ -3358,10 +3920,11 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         if (!changed)
         {
-            return;
+            return false;
         }
 
         texture.Apply(false, false);
+        InvalidateDecalPreview("texture changed by paint");
         if (_previewMaterial != null)
         {
             _previewMaterial.mainTexture = texture;
@@ -3374,9 +3937,10 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         LogPaintApplied(texture, uv);
         UpdateBrushIndicator();
+        return true;
     }
 
-    private void PaintCircle(Texture2D texture, Vector2 uv, Color color, float radius, float opacity)
+    private bool PaintCircle(Texture2D texture, Vector2 uv, Color color, float radius, float opacity)
     {
         var cx = Mathf.RoundToInt(uv.x * (texture.width - 1));
         var cy = Mathf.RoundToInt(uv.y * (texture.height - 1));
@@ -3387,6 +3951,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         var yMin = Mathf.Max(0, cy - r);
         var yMax = Mathf.Min(texture.height - 1, cy + r);
 
+        var changed = false;
         for (var y = yMin; y <= yMax; y++)
         {
             for (var x = xMin; x <= xMax; x++)
@@ -3394,6 +3959,10 @@ internal sealed class SuitEditorController : MonoBehaviour
                 var dx = x - cx;
                 var dy = y - cy;
                 if (dx * dx + dy * dy > r2)
+                {
+                    continue;
+                }
+                if (!IsPixelInSelectedPart(texture, x, y))
                 {
                     continue;
                 }
@@ -3401,16 +3970,18 @@ internal sealed class SuitEditorController : MonoBehaviour
                 var falloff = 1f - Mathf.Sqrt(dx * dx + dy * dy) / Mathf.Max(1f, r);
                 var existing = texture.GetPixel(x, y);
                 texture.SetPixel(x, y, Color.Lerp(existing, color, opacity * Mathf.Clamp01(falloff + 0.25f)));
+                changed = true;
             }
         }
+        return changed;
     }
 
-    private void EraseCircle(Texture2D texture, Vector2 uv, float radius, float opacity)
+    private bool EraseCircle(Texture2D texture, Vector2 uv, float radius, float opacity)
     {
         var state = DrawableSuitsPlugin.Registry.GetOrCreateState(_selectedSuitId);
         if (state?.BaseTexture == null)
         {
-            return;
+            return false;
         }
 
         var cx = Mathf.RoundToInt(uv.x * (texture.width - 1));
@@ -3422,6 +3993,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         var yMin = Mathf.Max(0, cy - r);
         var yMax = Mathf.Min(texture.height - 1, cy + r);
 
+        var changed = false;
         for (var y = yMin; y <= yMax; y++)
         {
             for (var x = xMin; x <= xMax; x++)
@@ -3432,12 +4004,18 @@ internal sealed class SuitEditorController : MonoBehaviour
                 {
                     continue;
                 }
+                if (!IsPixelInSelectedPart(texture, x, y))
+                {
+                    continue;
+                }
 
                 var existing = texture.GetPixel(x, y);
                 var original = state.BaseTexture.GetPixel(x, y);
                 texture.SetPixel(x, y, Color.Lerp(existing, original, opacity));
+                changed = true;
             }
         }
+        return changed;
     }
 
     private bool ApplyDecal(Texture2D target, Vector2 uv)
@@ -3448,13 +4026,24 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
+        return CompositeDecal(target, _loadedDecal, uv, _decalSize, _decalRotation, _brushOpacity);
+    }
+
+    private bool CompositeDecal(Texture2D target, Texture2D decal, Vector2 uv, float decalSize, float decalRotation, float opacity)
+    {
+        if (target == null || decal == null)
+        {
+            return false;
+        }
+
         var centerX = Mathf.RoundToInt(uv.x * (target.width - 1));
         var centerY = Mathf.RoundToInt(uv.y * (target.height - 1));
-        var size = Mathf.RoundToInt(_decalSize);
+        var size = Mathf.RoundToInt(decalSize);
         var half = Mathf.Max(1, size / 2);
-        var radians = _decalRotation * Mathf.Deg2Rad;
+        var radians = decalRotation * Mathf.Deg2Rad;
         var cos = Mathf.Cos(radians);
         var sin = Mathf.Sin(radians);
+        var changed = false;
 
         for (var y = -half; y <= half; y++)
         {
@@ -3473,19 +4062,56 @@ internal sealed class SuitEditorController : MonoBehaviour
                 {
                     continue;
                 }
+                if (!IsPixelInSelectedPart(target, tx, ty))
+                {
+                    continue;
+                }
 
-                var decalColor = _loadedDecal.GetPixelBilinear(u, v);
+                var decalColor = decal.GetPixelBilinear(u, v);
                 if (decalColor.a <= 0.01f)
                 {
                     continue;
                 }
 
                 var existing = target.GetPixel(tx, ty);
-                target.SetPixel(tx, ty, Color.Lerp(existing, decalColor, decalColor.a * _brushOpacity));
+                target.SetPixel(tx, ty, Color.Lerp(existing, decalColor, decalColor.a * Mathf.Clamp01(opacity)));
+                changed = true;
             }
         }
 
-        return true;
+        return changed;
+    }
+
+    private bool IsUvTargetInSelectedPart(Texture2D texture, Vector2 uv)
+    {
+        if (_selectedPart == SuitPart.All || texture == null)
+        {
+            return true;
+        }
+
+        var x = Mathf.RoundToInt(Mathf.Clamp01(uv.x) * (texture.width - 1));
+        var y = Mathf.RoundToInt(Mathf.Clamp01(uv.y) * (texture.height - 1));
+        return IsPixelInSelectedPart(texture, x, y);
+    }
+
+    private bool IsPixelInSelectedPart(Texture2D texture, int x, int y)
+    {
+        if (_selectedPart == SuitPart.All)
+        {
+            return true;
+        }
+
+        if (texture == null
+            || !_partUvMasks.TryGetValue(_selectedPart, out var mask)
+            || mask == null
+            || texture.width != _partDataTextureWidth
+            || texture.height != _partDataTextureHeight
+            || x < 0 || x >= texture.width || y < 0 || y >= texture.height)
+        {
+            return false;
+        }
+
+        return mask[y * texture.width + x];
     }
 
     private void SaveUndo()
@@ -3515,6 +4141,11 @@ internal sealed class SuitEditorController : MonoBehaviour
         texture.SetPixels32(_undo.Pop());
         texture.Apply(false, false);
         DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, false);
+        InvalidateDecalPreview("undo");
+        if (_usingTexturePreview)
+        {
+            UseTexturePreview("Undo", false);
+        }
     }
 
     private void Redo()
@@ -3529,6 +4160,11 @@ internal sealed class SuitEditorController : MonoBehaviour
         texture.SetPixels32(_redo.Pop());
         texture.Apply(false, false);
         DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, false);
+        InvalidateDecalPreview("redo");
+        if (_usingTexturePreview)
+        {
+            UseTexturePreview("Redo", false);
+        }
     }
 
     private static void TrimOldest(Stack<Color32[]> stack)
@@ -3577,6 +4213,7 @@ internal sealed class SuitEditorController : MonoBehaviour
                 _designNameInput.text = _designName;
             }
             RefreshEditorReadiness("before load design preview");
+            InvalidateDecalPreview("load design");
             TryRebuildPreviewForCurrentReadiness("LoadSelectedDesign");
             RefreshEditorReadiness("after load design");
             UpdateUiState();
@@ -3650,6 +4287,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         _selectedDecalIndex = index;
+        InvalidateDecalPreview("select decal");
         if (_loadedDecal != null)
         {
             Destroy(_loadedDecal);
@@ -3692,10 +4330,13 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         _selectedSuitId = suitId;
+        _selectedPart = SuitPart.All;
+        ClearPartIsolationData();
         DrawableSuitsPlugin.Registry.GetOrCreateState(_selectedSuitId);
         _undo.Clear();
         _redo.Clear();
         DrawableSuitsDiagnostics.Info($"SelectSuit selected suitId={_selectedSuitId}; name={DrawableSuitsPlugin.Registry.GetSuitName(_selectedSuitId)}");
+        InvalidateDecalPreview("select suit");
         RefreshEditorReadiness("after select suit");
         UpdateUiState();
         TryRebuildPreviewForCurrentReadiness("SelectSuit");
@@ -3771,9 +4412,10 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         if (_uvFallbackMode)
         {
+            EnsurePartIsolationDataForCurrentSuit(editableTexture, "UV fallback setup");
             DestroyPreview();
             UseTexturePreview(context, true);
-            SetStatus("Ready. UV fallback preview is active.", false);
+            SetStatus($"Ready. UV fallback preview is active. Editing: {PartDisplayName(_selectedPart)}.", false);
             return;
         }
 
@@ -3786,6 +4428,355 @@ internal sealed class SuitEditorController : MonoBehaviour
         DestroyPreview();
         UseTexturePreview(context, true);
         SetStatus("Third-person setup failed; using UV fallback preview.", true);
+    }
+
+    private void EnsurePartIsolationDataForCurrentSuit(Texture2D texture, string context)
+    {
+        if (texture == null)
+        {
+            return;
+        }
+
+        var player = StartOfRound.Instance?.localPlayerController;
+        var source = _worldSourceRenderer ?? FindBestSuitRenderer(player);
+        if (source == null)
+        {
+            DrawableSuitsDiagnostics.Warn($"Part isolation skipped [{context}] because no suit renderer was found.");
+            return;
+        }
+
+        if (_partDataReady
+            && _partDataSourceId == source.GetInstanceID()
+            && _partDataTextureWidth == texture.width
+            && _partDataTextureHeight == texture.height)
+        {
+            return;
+        }
+
+        var mesh = new Mesh { name = "DrawableSuitsPartClassificationMesh" };
+        var previousEnabled = source.enabled;
+        try
+        {
+            source.enabled = true;
+            source.BakeMesh(mesh, true);
+            BuildPartIsolationData(source, mesh, texture, context);
+        }
+        catch (Exception ex)
+        {
+            DrawableSuitsDiagnostics.Exception($"Part isolation mesh bake failed [{context}]", ex);
+        }
+        finally
+        {
+            source.enabled = DrawableSuitsPlugin.IsEditorOpen ? false : previousEnabled;
+            Destroy(mesh);
+        }
+    }
+
+    private void BuildPartIsolationData(SkinnedMeshRenderer source, Mesh bakedMesh, Texture2D texture, string context)
+    {
+        if (source == null || bakedMesh == null || texture == null || bakedMesh.vertexCount == 0)
+        {
+            return;
+        }
+
+        ClearPartIsolationData();
+        var subMeshCount = Mathf.Max(1, bakedMesh.subMeshCount);
+        foreach (SuitPart part in Enum.GetValues(typeof(SuitPart)))
+        {
+            _partTrianglesBySubmesh[part] = new int[subMeshCount][];
+            _partTriangleCounts[part] = 0;
+        }
+
+        var workingTriangles = new Dictionary<SuitPart, List<int>[]>();
+        foreach (SuitPart part in Enum.GetValues(typeof(SuitPart)))
+        {
+            var lists = new List<int>[subMeshCount];
+            for (var submesh = 0; submesh < subMeshCount; submesh++)
+            {
+                lists[submesh] = new List<int>();
+            }
+            workingTriangles[part] = lists;
+        }
+
+        var vertices = bakedMesh.vertices;
+        var sourceMesh = source.sharedMesh;
+        var boneWeights = sourceMesh != null && sourceMesh.boneWeights != null && sourceMesh.boneWeights.Length == vertices.Length
+            ? sourceMesh.boneWeights
+            : null;
+        var bones = source.bones;
+        var usedBoneClassification = false;
+        var allTriangleCount = 0;
+        for (var submesh = 0; submesh < subMeshCount; submesh++)
+        {
+            var triangles = bakedMesh.GetTriangles(submesh);
+            workingTriangles[SuitPart.All][submesh].AddRange(triangles);
+            for (var i = 0; i + 2 < triangles.Length; i += 3)
+            {
+                var a = triangles[i];
+                var b = triangles[i + 1];
+                var c = triangles[i + 2];
+                var classified = ClassifyTriangle(source, bakedMesh.bounds, vertices, boneWeights, bones, a, b, c, out var usedBones);
+                usedBoneClassification |= usedBones;
+                workingTriangles[classified][submesh].Add(a);
+                workingTriangles[classified][submesh].Add(b);
+                workingTriangles[classified][submesh].Add(c);
+                _partTriangleCounts[classified] = GetPartTriangleCount(classified) + 1;
+                allTriangleCount++;
+            }
+        }
+
+        _partTriangleCounts[SuitPart.All] = allTriangleCount;
+        foreach (SuitPart part in Enum.GetValues(typeof(SuitPart)))
+        {
+            var destination = _partTrianglesBySubmesh[part];
+            var lists = workingTriangles[part];
+            for (var submesh = 0; submesh < subMeshCount; submesh++)
+            {
+                destination[submesh] = lists[submesh].ToArray();
+            }
+        }
+
+        _partClassifierSource = usedBoneClassification ? "Bones+BoundsFallback" : "BoundsFallback";
+        BuildPartUvMasks(bakedMesh, texture);
+        _partDataReady = true;
+        _partDataSourceId = source.GetInstanceID();
+        _partDataTextureWidth = texture.width;
+        _partDataTextureHeight = texture.height;
+        var countParts = new List<string>();
+        foreach (SuitPart part in Enum.GetValues(typeof(SuitPart)))
+        {
+            countParts.Add($"{part}=triangles:{GetPartTriangleCount(part)},pixels:{GetPartMaskPixelCount(part)}");
+        }
+        DrawableSuitsDiagnostics.Info($"PartClassifierBuilt[{context}]: source={_partClassifierSource}; renderer={source.name}; texture={texture.width}x{texture.height}; overlap={_partUvOverlapDetected}; {string.Join("; ", countParts)}");
+        UpdatePartButtons();
+    }
+
+    private SuitPart ClassifyTriangle(
+        SkinnedMeshRenderer source,
+        Bounds bounds,
+        Vector3[] vertices,
+        BoneWeight[] weights,
+        Transform[] bones,
+        int a,
+        int b,
+        int c,
+        out bool usedBones)
+    {
+        usedBones = false;
+        if (a < 0 || b < 0 || c < 0 || a >= vertices.Length || b >= vertices.Length || c >= vertices.Length)
+        {
+            return SuitPart.Other;
+        }
+
+        if (weights != null && bones != null && bones.Length > 0)
+        {
+            var scores = new float[Enum.GetValues(typeof(SuitPart)).Length];
+            AccumulateVertexBoneScores(weights[a], bones, scores);
+            AccumulateVertexBoneScores(weights[b], bones, scores);
+            AccumulateVertexBoneScores(weights[c], bones, scores);
+            var bestPart = SuitPart.Other;
+            var bestScore = 0f;
+            for (var i = 0; i < IsolatedSuitParts.Length - 1; i++)
+            {
+                var part = IsolatedSuitParts[i];
+                if (scores[(int)part] > bestScore)
+                {
+                    bestScore = scores[(int)part];
+                    bestPart = part;
+                }
+            }
+            if (bestScore > 0.08f)
+            {
+                usedBones = true;
+                return bestPart;
+            }
+        }
+
+        var center = (vertices[a] + vertices[b] + vertices[c]) / 3f;
+        var height = Mathf.InverseLerp(bounds.min.y, bounds.max.y, center.y);
+        var xOffset = center.x - bounds.center.x;
+        var side = Mathf.Abs(xOffset) / Mathf.Max(0.001f, bounds.extents.x);
+        if (height >= 0.82f)
+        {
+            return SuitPart.Helmet;
+        }
+        if (height <= 0.45f)
+        {
+            return xOffset <= 0f ? SuitPart.LeftLeg : SuitPart.RightLeg;
+        }
+        if (height <= 0.8f && side >= 0.55f)
+        {
+            return xOffset <= 0f ? SuitPart.LeftArm : SuitPart.RightArm;
+        }
+        return SuitPart.Torso;
+    }
+
+    private static void AccumulateVertexBoneScores(BoneWeight weight, Transform[] bones, float[] scores)
+    {
+        AccumulateBoneScore(weight.boneIndex0, weight.weight0, bones, scores);
+        AccumulateBoneScore(weight.boneIndex1, weight.weight1, bones, scores);
+        AccumulateBoneScore(weight.boneIndex2, weight.weight2, bones, scores);
+        AccumulateBoneScore(weight.boneIndex3, weight.weight3, bones, scores);
+    }
+
+    private static void AccumulateBoneScore(int boneIndex, float weight, Transform[] bones, float[] scores)
+    {
+        if (weight <= 0f || boneIndex < 0 || boneIndex >= bones.Length || bones[boneIndex] == null)
+        {
+            return;
+        }
+
+        if (TryMapBoneToPart(bones[boneIndex].name, out var part))
+        {
+            scores[(int)part] += weight;
+        }
+    }
+
+    private static bool TryMapBoneToPart(string boneName, out SuitPart part)
+    {
+        part = SuitPart.Other;
+        var lower = (boneName ?? string.Empty).ToLowerInvariant();
+        var left = lower.Contains("left") || lower.Contains("_l") || lower.EndsWith(".l", StringComparison.Ordinal) || lower.EndsWith(" l", StringComparison.Ordinal);
+        var right = lower.Contains("right") || lower.Contains("_r") || lower.EndsWith(".r", StringComparison.Ordinal) || lower.EndsWith(" r", StringComparison.Ordinal);
+        if (lower.Contains("head") || lower.Contains("neck") || lower.Contains("helmet"))
+        {
+            part = SuitPart.Helmet;
+            return true;
+        }
+        if ((lower.Contains("arm") || lower.Contains("shoulder") || lower.Contains("hand") || lower.Contains("wrist")) && (left || right))
+        {
+            part = left ? SuitPart.LeftArm : SuitPart.RightArm;
+            return true;
+        }
+        if ((lower.Contains("leg") || lower.Contains("thigh") || lower.Contains("foot") || lower.Contains("calf")) && (left || right))
+        {
+            part = left ? SuitPart.LeftLeg : SuitPart.RightLeg;
+            return true;
+        }
+        if (lower.Contains("spine") || lower.Contains("chest") || lower.Contains("torso") || lower.Contains("hips") || lower.Contains("pelvis") || lower.Contains("body"))
+        {
+            part = SuitPart.Torso;
+            return true;
+        }
+        return false;
+    }
+
+    private void BuildPartUvMasks(Mesh mesh, Texture2D texture)
+    {
+        var pixelCount = texture.width * texture.height;
+        var allMask = new bool[pixelCount];
+        for (var i = 0; i < allMask.Length; i++)
+        {
+            allMask[i] = true;
+        }
+        _partUvMasks[SuitPart.All] = allMask;
+        _partMaskPixelCounts[SuitPart.All] = pixelCount;
+        var uv = mesh.uv;
+        if (uv == null || uv.Length != mesh.vertexCount)
+        {
+            DrawableSuitsDiagnostics.Warn("Part UV masks unavailable because the baked suit mesh does not expose matching UV coordinates.");
+            return;
+        }
+
+        for (var i = 0; i < IsolatedSuitParts.Length; i++)
+        {
+            var part = IsolatedSuitParts[i];
+            var mask = new bool[pixelCount];
+            if (_partTrianglesBySubmesh.TryGetValue(part, out var submeshes))
+            {
+                for (var submesh = 0; submesh < submeshes.Length; submesh++)
+                {
+                    var triangles = submeshes[submesh];
+                    for (var triangle = 0; triangle + 2 < triangles.Length; triangle += 3)
+                    {
+                        RasterizeUvTriangle(mask, texture.width, texture.height, uv[triangles[triangle]], uv[triangles[triangle + 1]], uv[triangles[triangle + 2]]);
+                    }
+                }
+            }
+            _partUvMasks[part] = mask;
+            var count = 0;
+            for (var pixel = 0; pixel < mask.Length; pixel++)
+            {
+                if (mask[pixel]) count++;
+            }
+            _partMaskPixelCounts[part] = count;
+        }
+
+        var overlapPixels = 0;
+        for (var pixel = 0; pixel < pixelCount; pixel++)
+        {
+            var owners = 0;
+            for (var i = 0; i < IsolatedSuitParts.Length; i++)
+            {
+                if (_partUvMasks[IsolatedSuitParts[i]][pixel]) owners++;
+            }
+            if (owners > 1) overlapPixels++;
+        }
+        _partUvOverlapDetected = overlapPixels > 0;
+        if (_partUvOverlapDetected)
+        {
+            DrawableSuitsDiagnostics.Warn($"Part UV masks share {overlapPixels} texture pixels across body parts. Isolation cannot prevent shared-UV surfaces from displaying the same edited pixel.");
+        }
+    }
+
+    private static void RasterizeUvTriangle(bool[] mask, int width, int height, Vector2 a, Vector2 b, Vector2 c)
+    {
+        var pa = new Vector2(Mathf.Clamp01(a.x) * (width - 1), Mathf.Clamp01(a.y) * (height - 1));
+        var pb = new Vector2(Mathf.Clamp01(b.x) * (width - 1), Mathf.Clamp01(b.y) * (height - 1));
+        var pc = new Vector2(Mathf.Clamp01(c.x) * (width - 1), Mathf.Clamp01(c.y) * (height - 1));
+        var minX = Mathf.Max(0, Mathf.FloorToInt(Mathf.Min(pa.x, Mathf.Min(pb.x, pc.x))));
+        var maxX = Mathf.Min(width - 1, Mathf.CeilToInt(Mathf.Max(pa.x, Mathf.Max(pb.x, pc.x))));
+        var minY = Mathf.Max(0, Mathf.FloorToInt(Mathf.Min(pa.y, Mathf.Min(pb.y, pc.y))));
+        var maxY = Mathf.Min(height - 1, Mathf.CeilToInt(Mathf.Max(pa.y, Mathf.Max(pb.y, pc.y))));
+        var denominator = (pb.y - pc.y) * (pa.x - pc.x) + (pc.x - pb.x) * (pa.y - pc.y);
+        if (Mathf.Abs(denominator) < 0.00001f)
+        {
+            return;
+        }
+
+        for (var y = minY; y <= maxY; y++)
+        {
+            for (var x = minX; x <= maxX; x++)
+            {
+                var point = new Vector2(x + 0.5f, y + 0.5f);
+                var w1 = ((pb.y - pc.y) * (point.x - pc.x) + (pc.x - pb.x) * (point.y - pc.y)) / denominator;
+                var w2 = ((pc.y - pa.y) * (point.x - pc.x) + (pa.x - pc.x) * (point.y - pc.y)) / denominator;
+                var w3 = 1f - w1 - w2;
+                if (w1 >= -0.001f && w2 >= -0.001f && w3 >= -0.001f)
+                {
+                    mask[y * width + x] = true;
+                }
+            }
+        }
+    }
+
+    private int GetPartTriangleCount(SuitPart part)
+    {
+        return _partTriangleCounts.TryGetValue(part, out var count) ? count : 0;
+    }
+
+    private int GetPartMaskPixelCount(SuitPart part)
+    {
+        return _partMaskPixelCounts.TryGetValue(part, out var count) ? count : 0;
+    }
+
+    private void ClearPartIsolationData()
+    {
+        _partTrianglesBySubmesh.Clear();
+        _partUvMasks.Clear();
+        _partTriangleCounts.Clear();
+        _partMaskPixelCounts.Clear();
+        _partDataReady = false;
+        _partUvOverlapDetected = false;
+        _partDataTextureWidth = 0;
+        _partDataTextureHeight = 0;
+        _partDataSourceId = 0;
+        _partClassifierSource = "none";
+        if (_partFilteredPreviewTexture != null)
+        {
+            Destroy(_partFilteredPreviewTexture);
+            _partFilteredPreviewTexture = null;
+        }
     }
 
     private bool SetupWorldThirdPersonPreview(string context, WorldCameraState preservedCameraState = default)
@@ -4309,6 +5300,16 @@ internal sealed class SuitEditorController : MonoBehaviour
             }
 
             _worldPaintMesh.RecalculateBounds();
+            var editableTexture = DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId);
+            if (editableTexture != null
+                && (!_partDataReady
+                    || _partDataSourceId != source.GetInstanceID()
+                    || _partDataTextureWidth != editableTexture.width
+                    || _partDataTextureHeight != editableTexture.height))
+            {
+                BuildPartIsolationData(source, _worldPaintMesh, editableTexture, "world proxy");
+            }
+            ApplySelectedPartTrianglesToProxy(_worldPaintMesh);
             if (_worldPaintProxyObject.transform.parent != source.transform)
             {
                 _worldPaintProxyObject.transform.SetParent(source.transform, false);
@@ -4324,7 +5325,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             source.enabled = false;
             if (forceLog)
             {
-                DrawableSuitsDiagnostics.Info($"WorldAvatarProxy updated. renderer={DescribeRendererCandidate(source, "source")}; vertices={_worldPaintMesh.vertexCount}; subMeshes={_worldPaintMesh.subMeshCount}; bounds={_worldPaintMesh.bounds}; proxyPos={_worldPaintProxyObject.transform.position}; proxyRot={_worldPaintProxyObject.transform.rotation.eulerAngles}; proxyScale={_worldPaintProxyObject.transform.localScale}; layer={_worldPaintLayer}; rendererEnabled={_worldAvatarRenderer.enabled}; proxyMaterials=[{DescribeMaterials(_worldAvatarRenderer.sharedMaterials)}]; collider={_worldPaintCollider != null}");
+                DrawableSuitsDiagnostics.Info($"WorldAvatarProxy updated. part={_selectedPart}; partTriangles={GetPartTriangleCount(_selectedPart)}; renderer={DescribeRendererCandidate(source, "source")}; vertices={_worldPaintMesh.vertexCount}; subMeshes={_worldPaintMesh.subMeshCount}; bounds={_worldPaintMesh.bounds}; proxyPos={_worldPaintProxyObject.transform.position}; proxyRot={_worldPaintProxyObject.transform.rotation.eulerAngles}; proxyScale={_worldPaintProxyObject.transform.localScale}; layer={_worldPaintLayer}; rendererEnabled={_worldAvatarRenderer.enabled}; proxyMaterials=[{DescribeMaterials(_worldAvatarRenderer.sharedMaterials)}]; collider={_worldPaintCollider != null}");
                 LogVisibleEditorCameraRenderers(source);
             }
             return true;
@@ -4341,6 +5342,21 @@ internal sealed class SuitEditorController : MonoBehaviour
                 source.enabled = DrawableSuitsPlugin.IsEditorOpen ? false : previousEnabled;
             }
         }
+    }
+
+    private void ApplySelectedPartTrianglesToProxy(Mesh mesh)
+    {
+        if (mesh == null || !_partDataReady || !_partTrianglesBySubmesh.TryGetValue(_selectedPart, out var submeshes))
+        {
+            return;
+        }
+
+        mesh.subMeshCount = submeshes.Length;
+        for (var submesh = 0; submesh < submeshes.Length; submesh++)
+        {
+            mesh.SetTriangles(submeshes[submesh] ?? Array.Empty<int>(), submesh, false);
+        }
+        mesh.RecalculateBounds();
     }
 
     private Material[] BuildWorldProxyMaterials(SkinnedMeshRenderer source, bool forceLog = false)
@@ -4535,6 +5551,12 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
+        if (_tool == EditorTool.Decal && _loadedDecal != null)
+        {
+            _worldBrushMarker.SetActive(false);
+            return;
+        }
+
         if (!IsWorldThirdPersonMode || !_canPaint || !TryGetWorldPaintHit(out var hit, false))
         {
             _worldBrushMarker.SetActive(false);
@@ -4556,6 +5578,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void DestroyWorldThirdPersonPreview(bool restoreRenderers)
     {
+        DestroyDecalPlacementPreviewResources();
         if (_worldEditorCamera != null)
         {
             _worldEditorCamera.enabled = false;
@@ -4867,7 +5890,9 @@ internal sealed class SuitEditorController : MonoBehaviour
     private void UseTexturePreview(string context, bool forceLog)
     {
         var texture = _selectedSuitId >= 0 ? DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId) : null;
-        var assignedTexture = texture != null ? (Texture)texture : EnsureCheckerTexture();
+        var assignedTexture = texture != null
+            ? (_selectedPart == SuitPart.All ? (Texture)texture : BuildFilteredPartPreviewTexture(texture))
+            : EnsureCheckerTexture();
         _usingTexturePreview = true;
         _previewMode = texture != null ? "TextureFallback" : "TextureFallbackNoEditableTexture";
         _canPaint = texture != null;
@@ -4887,6 +5912,41 @@ internal sealed class SuitEditorController : MonoBehaviour
             DrawableSuitsDiagnostics.Info($"TexturePreview[{context}]: {assignment}; viewport={(_previewViewportRect != null ? _previewViewportRect.rect.ToString() : "null")}");
             _lastPreviewAssignmentLog = assignment;
         }
+    }
+
+    private Texture BuildFilteredPartPreviewTexture(Texture2D texture)
+    {
+        if (texture == null || _selectedPart == SuitPart.All || !_partUvMasks.TryGetValue(_selectedPart, out var mask) || mask == null)
+        {
+            return texture;
+        }
+
+        if (_partFilteredPreviewTexture == null
+            || _partFilteredPreviewTexture.width != texture.width
+            || _partFilteredPreviewTexture.height != texture.height)
+        {
+            if (_partFilteredPreviewTexture != null)
+            {
+                Destroy(_partFilteredPreviewTexture);
+            }
+            _partFilteredPreviewTexture = new Texture2D(texture.width, texture.height, TextureFormat.RGBA32, false)
+            {
+                name = "DrawableSuitsSelectedPartUvPreview",
+                filterMode = texture.filterMode,
+                wrapMode = TextureWrapMode.Clamp,
+                hideFlags = HideFlags.HideAndDontSave
+            };
+        }
+
+        var source = texture.GetPixels32();
+        var filtered = new Color32[source.Length];
+        for (var i = 0; i < source.Length && i < mask.Length; i++)
+        {
+            filtered[i] = mask[i] ? source[i] : new Color32(0, 0, 0, 0);
+        }
+        _partFilteredPreviewTexture.SetPixels32(filtered);
+        _partFilteredPreviewTexture.Apply(false, false);
+        return _partFilteredPreviewTexture;
     }
 
     private string DescribeEditableTexture()
