@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.0
+
+- Added `All`, `Helmet`, `Torso`, `Left Arm`, `Right Arm`, `Left Leg`, `Right Leg`, and conditional `Other` part selection controls.
+- Added automatic proxy classification using recognized bone influences with normalized geometry fallback for modded or unrecognized suit meshes.
+- Filtered the third-person avatar proxy and paint collider so only the selected part is shown and targetable while editing.
+- Added UV masks that clip paint, erase, decal preview, and decal stamps to the selected part, with overlap diagnostics for suits that reuse UV pixels across body parts.
+- Applied part isolation to UV fallback mode by displaying and editing only the selected part's UV islands while retaining full-texture save/load/sync compatibility.
+
+## 0.4.8
+
+- Added a translucent decal placement preview in third-person paint mode using a temporary proxy-only preview texture/material.
+- Added a non-raycastable rotated decal preview overlay for UV fallback mode.
+- Refactored decal compositing so preview and final stamping use the same placement math.
+- Changed Decal tool input to place one decal per mouse click or controller RT press instead of repeatedly stamping while held.
+- Added rate-limited `DecalPreviewUpdated`, `DecalPreviewHidden`, and `DecalStampCommitted` diagnostics.
+
 ## 0.4.7
 
 - Replaced decal and saved-design list rebuilds with stable row pools so Reset, Save, and Load cannot hit stale list row buttons during the same click.
