@@ -102,7 +102,7 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.0 behavior:
+Expected 0.5.1 behavior:
 
 - Opening the editor shows a compact side overlay and a third-person camera view of the local player.
 - The diagnostics text should show `Preview mode: WorldThirdPerson` when the default path succeeds.
@@ -123,13 +123,17 @@ Expected 0.5.0 behavior:
 - Decal placement is single-shot: holding left mouse or RT places one decal until the input is released and pressed again.
 - UV fallback mode shows a non-interactive rotated decal preview over the texture panel.
 - Part buttons default to `All`; selecting a region renders only that avatar proxy region in third person and restricts painting, erase, and decals to its UV mask.
+- Part classification uses anatomy-style geometry gates before bone hints, so helmet/top-cap geometry is selectable even if the suit bones do not expose a recognizable helmet bone.
+- Part diagnostics list raw and cleaned triangle counts, component cleanup, per-part bounds, UV pixel counts, and mapped bone names in `PartClassifierBuilt`.
 - UV fallback mode hides UV islands outside the selected part while preserving the same complete saved texture data.
 
 Troubleshooting:
 
 - If no decal preview appears, confirm a decal row is selected and Decal tool is active, then check `DecalPreviewUpdated` or `DecalPreviewHidden` diagnostics.
-- If a requested part is unavailable on a modded suit, it contained no classified geometry; use `All` or check `PartClassifierBuilt` diagnostics for triangle and mask counts.
-- If painting a selected part changes another visible surface, check for the shared-UV warning in the status/log. A suit that maps multiple body regions to the same texture pixels cannot be fully isolated at the texture level.
+- If Helmet is unavailable or a part shows pieces of another part, confirm the installed package is 0.5.1 or newer and check `PartClassifierBuilt` for raw/cleaned counts, component cleanup, and `helmetRecoveredByTopCap`.
+- If a requested part is unavailable on a modded suit, it contained no classified visible geometry; use `All` or check `PartClassifierBuilt` diagnostics for triangle and mask counts.
+- If a part is selectable but painting does nothing, it may be visible-only with no editable UV pixels. The status line will warn that the geometry has no editable UV pixels.
+- If painting a selected part changes another visible surface, check for the shared-UV warning in the status/log. A suit that maps multiple body regions to the same texture pixels cannot be fully isolated at the texture level. Tiny raster edge overlaps are ignored in 0.5.1 to avoid false warnings.
 - If decals stamp repeatedly while holding input, confirm the installed package is 0.4.8 or newer and check for `DecalStampCommitted` entries; there should be one per press/release cycle.
 - If entering a session starts on a black screen before opening DrawableSuits, check `SessionSafetyCheck` lines. They list `Camera.main`, active cameras, camera target textures, local player flags, prompt context such as grab/hover fields, local renderer materials, and any repaired DrawableSuits objects. DrawableSuits should report no active DrawableSuits cameras while `EditorOpen=False`.
 - If the black screen shows `Grab: [E]` and `SessionSafetyCheck` reports `Camera.main=null`, inspect `LogOutput.log` for repeated `JetpackWarning` `PlayerControllerB.LateUpdate` `NullReferenceException`. By default, DrawableSuits disables only `JetpackWarning.Patches.PlayerControllerB_LateUpdate_Postfix` after repeated failures and logs the unpatch result in `diagnostics.log`. Set `AutoDisableBrokenJetpackWarningLateUpdatePatch=false` to turn this compatibility guard off.
