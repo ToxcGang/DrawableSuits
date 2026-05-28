@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.1
+
+- Reworked suit part classification to use geometry gates first and bone weights only when they match plausible helmet, torso, arm, or leg regions.
+- Fixed vanilla helmet detection when suit bones do not expose a usable head/helmet bone, so the Helmet selector can be available from top-cap geometry.
+- Added connected-component cleanup for tiny stray triangle islands that previously made torso/limb selections show fragments from other parts.
+- Changed part button availability to use visible geometry instead of requiring editable UV pixels, with visible-only warnings when a part cannot paint.
+- Reduced false shared-UV warnings by ignoring tiny raster edge overlaps and expanded part classifier diagnostics with raw/cleaned counts, bounds, components, and mapped bones.
+
 ## 0.5.0
 
 - Added `All`, `Helmet`, `Torso`, `Left Arm`, `Right Arm`, `Left Leg`, `Right Leg`, and conditional `Other` part selection controls.
