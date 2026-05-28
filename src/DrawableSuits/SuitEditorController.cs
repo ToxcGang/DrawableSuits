@@ -43,6 +43,41 @@ internal sealed class SuitEditorController : MonoBehaviour
         Other
     }
 
+    private sealed class PartTriangleRecord
+    {
+        public int Submesh;
+        public int A;
+        public int B;
+        public int C;
+        public SuitPart Part;
+        public SuitPart GeometryPart;
+        public SuitPart BonePart;
+        public bool UsedBones;
+        public Vector3 Center;
+        public float Height;
+        public float Side;
+    }
+
+    private readonly struct TriangleRegion
+    {
+        public TriangleRegion(Vector3 center, float height, float minHeight, float maxHeight, float xOffset, float side)
+        {
+            Center = center;
+            Height = height;
+            MinHeight = minHeight;
+            MaxHeight = maxHeight;
+            XOffset = xOffset;
+            Side = side;
+        }
+
+        public Vector3 Center { get; }
+        public float Height { get; }
+        public float MinHeight { get; }
+        public float MaxHeight { get; }
+        public float XOffset { get; }
+        public float Side { get; }
+    }
+
     private readonly Stack<Color32[]> _undo = new();
     private readonly Stack<Color32[]> _redo = new();
     private readonly List<string> _designFiles = new();
@@ -2353,7 +2388,7 @@ internal sealed class SuitEditorController : MonoBehaviour
                 continue;
             }
 
-            var hasTriangles = part == SuitPart.All || (GetPartTriangleCount(part) > 0 && GetPartMaskPixelCount(part) > 0);
+            var hasTriangles = part == SuitPart.All || GetPartTriangleCount(part) > 0;
             if (part == SuitPart.Other)
             {
                 button.gameObject.SetActive(hasTriangles);
@@ -2366,7 +2401,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void SelectPart(SuitPart part)
     {
-        if (part != SuitPart.All && (GetPartTriangleCount(part) <= 0 || GetPartMaskPixelCount(part) <= 0))
+        if (part != SuitPart.All && GetPartTriangleCount(part) <= 0)
         {
             SetStatus($"{PartDisplayName(part)} is not available on this suit.", false);
             UpdateUiState();
@@ -2384,9 +2419,15 @@ internal sealed class SuitEditorController : MonoBehaviour
             UseTexturePreview("part changed", true);
         }
 
-        var warning = _partUvOverlapDetected && part != SuitPart.All
-            ? " Shared UV pixels may also affect another part."
-            : string.Empty;
+        var warning = string.Empty;
+        if (part != SuitPart.All && GetPartMaskPixelCount(part) <= 0)
+        {
+            warning = " Visible geometry has no editable UV pixels.";
+        }
+        else if (_partUvOverlapDetected && part != SuitPart.All)
+        {
+            warning = " Shared UV pixels may also affect another part.";
+        }
         SetStatus($"Editing: {PartDisplayName(part)}.{warning}", false);
         DrawableSuitsDiagnostics.Info($"Suit part selected. part={part}; triangles={GetPartTriangleCount(part)}; maskPixels={GetPartMaskPixelCount(part)}; classifier={_partClassifierSource}; overlap={_partUvOverlapDetected}; mode={_previewMode}");
         InvalidateDecalPreview("part changed");
@@ -4504,7 +4545,9 @@ internal sealed class SuitEditorController : MonoBehaviour
             ? sourceMesh.boneWeights
             : null;
         var bones = source.bones;
+        var records = new List<PartTriangleRecord>();
         var usedBoneClassification = false;
+        var recoveredHelmetByGeometry = 0;
         var allTriangleCount = 0;
         for (var submesh = 0; submesh < subMeshCount; submesh++)
         {
@@ -4515,14 +4558,50 @@ internal sealed class SuitEditorController : MonoBehaviour
                 var a = triangles[i];
                 var b = triangles[i + 1];
                 var c = triangles[i + 2];
-                var classified = ClassifyTriangle(source, bakedMesh.bounds, vertices, boneWeights, bones, a, b, c, out var usedBones);
+                var classified = ClassifyTriangle(
+                    source,
+                    bakedMesh.bounds,
+                    vertices,
+                    boneWeights,
+                    bones,
+                    a,
+                    b,
+                    c,
+                    out var usedBones,
+                    out var geometryPart,
+                    out var bonePart,
+                    out var region);
                 usedBoneClassification |= usedBones;
-                workingTriangles[classified][submesh].Add(a);
-                workingTriangles[classified][submesh].Add(b);
-                workingTriangles[classified][submesh].Add(c);
-                _partTriangleCounts[classified] = GetPartTriangleCount(classified) + 1;
+                if (classified == SuitPart.Helmet && geometryPart == SuitPart.Helmet && bonePart != SuitPart.Helmet)
+                {
+                    recoveredHelmetByGeometry++;
+                }
+                records.Add(new PartTriangleRecord
+                {
+                    Submesh = submesh,
+                    A = a,
+                    B = b,
+                    C = c,
+                    Part = classified,
+                    GeometryPart = geometryPart,
+                    BonePart = bonePart,
+                    UsedBones = usedBones,
+                    Center = region.Center,
+                    Height = region.Height,
+                    Side = region.Side
+                });
                 allTriangleCount++;
             }
+        }
+
+        var rawCounts = CountPartTriangleRecords(records);
+        var cleanupSummary = CleanupPartTriangleRecords(records);
+        var cleanedCounts = CountPartTriangleRecords(records);
+        foreach (var record in records)
+        {
+            workingTriangles[record.Part][record.Submesh].Add(record.A);
+            workingTriangles[record.Part][record.Submesh].Add(record.B);
+            workingTriangles[record.Part][record.Submesh].Add(record.C);
         }
 
         _partTriangleCounts[SuitPart.All] = allTriangleCount;
@@ -4534,9 +4613,13 @@ internal sealed class SuitEditorController : MonoBehaviour
             {
                 destination[submesh] = lists[submesh].ToArray();
             }
+            if (part != SuitPart.All)
+            {
+                _partTriangleCounts[part] = cleanedCounts.TryGetValue(part, out var count) ? count : 0;
+            }
         }
 
-        _partClassifierSource = usedBoneClassification ? "Bones+BoundsFallback" : "BoundsFallback";
+        _partClassifierSource = usedBoneClassification ? "Bones+GeometryGates" : "GeometryGates";
         BuildPartUvMasks(bakedMesh, texture);
         _partDataReady = true;
         _partDataSourceId = source.GetInstanceID();
@@ -4547,7 +4630,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             countParts.Add($"{part}=triangles:{GetPartTriangleCount(part)},pixels:{GetPartMaskPixelCount(part)}");
         }
-        DrawableSuitsDiagnostics.Info($"PartClassifierBuilt[{context}]: source={_partClassifierSource}; renderer={source.name}; texture={texture.width}x{texture.height}; overlap={_partUvOverlapDetected}; {string.Join("; ", countParts)}");
+        DrawableSuitsDiagnostics.Info($"PartClassifierBuilt[{context}]: source={_partClassifierSource}; renderer={source.name}; texture={texture.width}x{texture.height}; overlap={_partUvOverlapDetected}; raw={DescribePartCounts(rawCounts)}; cleaned={DescribePartCounts(cleanedCounts)}; bounds={DescribePartBounds(records)}; cleanup={cleanupSummary}; helmetRecoveredByTopCap={recoveredHelmetByGeometry}; bones={DescribeTopMappedBones(source, bones)}; {string.Join("; ", countParts)}");
         UpdatePartButtons();
     }
 
@@ -4560,55 +4643,427 @@ internal sealed class SuitEditorController : MonoBehaviour
         int a,
         int b,
         int c,
-        out bool usedBones)
+        out bool usedBones,
+        out SuitPart geometryPart,
+        out SuitPart bonePart,
+        out TriangleRegion region)
     {
         usedBones = false;
+        geometryPart = SuitPart.Other;
+        bonePart = SuitPart.Other;
+        region = default;
         if (a < 0 || b < 0 || c < 0 || a >= vertices.Length || b >= vertices.Length || c >= vertices.Length)
         {
             return SuitPart.Other;
         }
 
+        geometryPart = ClassifyTriangleByBounds(bounds, vertices, a, b, c, out region);
         if (weights != null && bones != null && bones.Length > 0)
         {
-            var scores = new float[Enum.GetValues(typeof(SuitPart)).Length];
-            AccumulateVertexBoneScores(weights[a], bones, scores);
-            AccumulateVertexBoneScores(weights[b], bones, scores);
-            AccumulateVertexBoneScores(weights[c], bones, scores);
-            var bestPart = SuitPart.Other;
-            var bestScore = 0f;
-            for (var i = 0; i < IsolatedSuitParts.Length - 1; i++)
-            {
-                var part = IsolatedSuitParts[i];
-                if (scores[(int)part] > bestScore)
-                {
-                    bestScore = scores[(int)part];
-                    bestPart = part;
-                }
-            }
-            if (bestScore > 0.08f)
+            bonePart = ClassifyTriangleByBones(weights, bones, a, b, c, out var bestBoneScore);
+            if (bonePart != SuitPart.Other && bestBoneScore >= 0.18f)
             {
                 usedBones = true;
-                return bestPart;
+                if (geometryPart == SuitPart.Helmet && bonePart != SuitPart.Helmet)
+                {
+                    return SuitPart.Helmet;
+                }
+
+                if (ArePartFamiliesCompatible(geometryPart, bonePart) && IsPartPlausibleInRegion(bonePart, region))
+                {
+                    return bonePart;
+                }
+
+                if (bonePart == SuitPart.Helmet && IsPartPlausibleInRegion(SuitPart.Helmet, region))
+                {
+                    return SuitPart.Helmet;
+                }
             }
         }
 
+        return geometryPart;
+    }
+
+    private static SuitPart ClassifyTriangleByBounds(Bounds bounds, Vector3[] vertices, int a, int b, int c, out TriangleRegion region)
+    {
         var center = (vertices[a] + vertices[b] + vertices[c]) / 3f;
+        var minHeight = Mathf.InverseLerp(bounds.min.y, bounds.max.y, Mathf.Min(vertices[a].y, Mathf.Min(vertices[b].y, vertices[c].y)));
+        var maxHeight = Mathf.InverseLerp(bounds.min.y, bounds.max.y, Mathf.Max(vertices[a].y, Mathf.Max(vertices[b].y, vertices[c].y)));
         var height = Mathf.InverseLerp(bounds.min.y, bounds.max.y, center.y);
         var xOffset = center.x - bounds.center.x;
         var side = Mathf.Abs(xOffset) / Mathf.Max(0.001f, bounds.extents.x);
-        if (height >= 0.82f)
+        region = new TriangleRegion(center, height, minHeight, maxHeight, xOffset, side);
+
+        if ((height >= 0.74f && side <= 0.88f) || maxHeight >= 0.9f)
         {
             return SuitPart.Helmet;
         }
-        if (height <= 0.45f)
+
+        if (height <= 0.43f || maxHeight <= 0.48f)
         {
             return xOffset <= 0f ? SuitPart.LeftLeg : SuitPart.RightLeg;
         }
-        if (height <= 0.8f && side >= 0.55f)
+
+        if (height <= 0.78f && height >= 0.34f && side >= 0.48f)
         {
             return xOffset <= 0f ? SuitPart.LeftArm : SuitPart.RightArm;
         }
+
+        if (height >= 0.28f && height <= 0.82f)
+        {
+            return SuitPart.Torso;
+        }
+
+        if (height < 0.28f)
+        {
+            return xOffset <= 0f ? SuitPart.LeftLeg : SuitPart.RightLeg;
+        }
+
         return SuitPart.Torso;
+    }
+
+    private static SuitPart ClassifyTriangleByBones(BoneWeight[] weights, Transform[] bones, int a, int b, int c, out float bestScore)
+    {
+        var scores = new float[Enum.GetValues(typeof(SuitPart)).Length];
+        AccumulateVertexBoneScores(weights[a], bones, scores);
+        AccumulateVertexBoneScores(weights[b], bones, scores);
+        AccumulateVertexBoneScores(weights[c], bones, scores);
+        var bestPart = SuitPart.Other;
+        bestScore = 0f;
+        for (var i = 0; i < IsolatedSuitParts.Length; i++)
+        {
+            var part = IsolatedSuitParts[i];
+            if (scores[(int)part] > bestScore)
+            {
+                bestScore = scores[(int)part];
+                bestPart = part;
+            }
+        }
+
+        bestScore /= 3f;
+        return bestPart;
+    }
+
+    private static bool ArePartFamiliesCompatible(SuitPart geometryPart, SuitPart bonePart)
+    {
+        if (geometryPart == bonePart)
+        {
+            return true;
+        }
+
+        return (IsArmPart(geometryPart) && IsArmPart(bonePart))
+            || (IsLegPart(geometryPart) && IsLegPart(bonePart));
+    }
+
+    private static bool IsArmPart(SuitPart part)
+    {
+        return part == SuitPart.LeftArm || part == SuitPart.RightArm;
+    }
+
+    private static bool IsLegPart(SuitPart part)
+    {
+        return part == SuitPart.LeftLeg || part == SuitPart.RightLeg;
+    }
+
+    private static bool IsPartPlausibleInRegion(SuitPart part, TriangleRegion region)
+    {
+        switch (part)
+        {
+            case SuitPart.Helmet:
+                return (region.Height >= 0.64f && region.Side <= 0.95f) || region.MaxHeight >= 0.86f;
+            case SuitPart.Torso:
+                return region.Height >= 0.30f && region.Height <= 0.84f && region.Side <= 0.82f;
+            case SuitPart.LeftArm:
+            case SuitPart.RightArm:
+                return region.Height >= 0.30f && region.Height <= 0.82f && region.Side >= 0.34f;
+            case SuitPart.LeftLeg:
+            case SuitPart.RightLeg:
+                return region.Height <= 0.56f;
+            default:
+                return true;
+        }
+    }
+
+    private static Dictionary<SuitPart, int> CountPartTriangleRecords(List<PartTriangleRecord> records)
+    {
+        var counts = new Dictionary<SuitPart, int>();
+        foreach (SuitPart part in Enum.GetValues(typeof(SuitPart)))
+        {
+            counts[part] = 0;
+        }
+
+        if (records == null)
+        {
+            return counts;
+        }
+
+        for (var i = 0; i < records.Count; i++)
+        {
+            var record = records[i];
+            counts[record.Part] = counts.TryGetValue(record.Part, out var count) ? count + 1 : 1;
+        }
+
+        return counts;
+    }
+
+    private static string CleanupPartTriangleRecords(List<PartTriangleRecord> records)
+    {
+        if (records == null || records.Count == 0)
+        {
+            return "none";
+        }
+
+        var summaries = new List<string>();
+        for (var partIndex = 0; partIndex < IsolatedSuitParts.Length; partIndex++)
+        {
+            var part = IsolatedSuitParts[partIndex];
+            var components = BuildPartComponents(records, part);
+            if (components.Count == 0)
+            {
+                summaries.Add($"{part}:components=0");
+                continue;
+            }
+
+            var largest = 0;
+            for (var i = 0; i < components.Count; i++)
+            {
+                largest = Mathf.Max(largest, components[i].Count);
+            }
+
+            var tinyThreshold = Mathf.Max(4, Mathf.RoundToInt(largest * 0.025f));
+            var reassigned = 0;
+            for (var i = 0; i < components.Count; i++)
+            {
+                var component = components[i];
+                if (component.Count >= tinyThreshold || component.Count > 32)
+                {
+                    continue;
+                }
+
+                var fallback = MajorityGeometryPart(records, component);
+                if (fallback == SuitPart.Other || fallback == part)
+                {
+                    continue;
+                }
+
+                for (var j = 0; j < component.Count; j++)
+                {
+                    records[component[j]].Part = fallback;
+                    reassigned++;
+                }
+            }
+
+            summaries.Add($"{part}:components={components.Count},largest={largest},tinyThreshold={tinyThreshold},reassigned={reassigned}");
+        }
+
+        return string.Join("; ", summaries);
+    }
+
+    private static List<List<int>> BuildPartComponents(List<PartTriangleRecord> records, SuitPart part)
+    {
+        var localRecordIndexes = new List<int>();
+        var vertexToLocalIndexes = new Dictionary<int, List<int>>();
+        for (var i = 0; i < records.Count; i++)
+        {
+            if (records[i].Part != part)
+            {
+                continue;
+            }
+
+            var localIndex = localRecordIndexes.Count;
+            localRecordIndexes.Add(i);
+            AddTriangleVertexIndex(vertexToLocalIndexes, records[i].A, localIndex);
+            AddTriangleVertexIndex(vertexToLocalIndexes, records[i].B, localIndex);
+            AddTriangleVertexIndex(vertexToLocalIndexes, records[i].C, localIndex);
+        }
+
+        var components = new List<List<int>>();
+        var visited = new bool[localRecordIndexes.Count];
+        var stack = new Stack<int>();
+        for (var start = 0; start < localRecordIndexes.Count; start++)
+        {
+            if (visited[start])
+            {
+                continue;
+            }
+
+            var component = new List<int>();
+            visited[start] = true;
+            stack.Push(start);
+            while (stack.Count > 0)
+            {
+                var localIndex = stack.Pop();
+                var recordIndex = localRecordIndexes[localIndex];
+                component.Add(recordIndex);
+                PushUnvisitedTriangleNeighbors(records[recordIndex].A, vertexToLocalIndexes, visited, stack);
+                PushUnvisitedTriangleNeighbors(records[recordIndex].B, vertexToLocalIndexes, visited, stack);
+                PushUnvisitedTriangleNeighbors(records[recordIndex].C, vertexToLocalIndexes, visited, stack);
+            }
+
+            components.Add(component);
+        }
+
+        return components;
+    }
+
+    private static void AddTriangleVertexIndex(Dictionary<int, List<int>> vertexToLocalIndexes, int vertexIndex, int localIndex)
+    {
+        if (!vertexToLocalIndexes.TryGetValue(vertexIndex, out var indexes))
+        {
+            indexes = new List<int>();
+            vertexToLocalIndexes[vertexIndex] = indexes;
+        }
+        indexes.Add(localIndex);
+    }
+
+    private static void PushUnvisitedTriangleNeighbors(int vertexIndex, Dictionary<int, List<int>> vertexToLocalIndexes, bool[] visited, Stack<int> stack)
+    {
+        if (!vertexToLocalIndexes.TryGetValue(vertexIndex, out var neighbors))
+        {
+            return;
+        }
+
+        for (var i = 0; i < neighbors.Count; i++)
+        {
+            var neighbor = neighbors[i];
+            if (neighbor < 0 || neighbor >= visited.Length || visited[neighbor])
+            {
+                continue;
+            }
+
+            visited[neighbor] = true;
+            stack.Push(neighbor);
+        }
+    }
+
+    private static SuitPart MajorityGeometryPart(List<PartTriangleRecord> records, List<int> component)
+    {
+        var counts = new Dictionary<SuitPart, int>();
+        for (var i = 0; i < component.Count; i++)
+        {
+            var geometryPart = records[component[i]].GeometryPart;
+            if (geometryPart == SuitPart.Other)
+            {
+                continue;
+            }
+
+            counts[geometryPart] = counts.TryGetValue(geometryPart, out var count) ? count + 1 : 1;
+        }
+
+        var bestPart = SuitPart.Other;
+        var bestCount = 0;
+        foreach (var entry in counts)
+        {
+            if (entry.Value > bestCount)
+            {
+                bestPart = entry.Key;
+                bestCount = entry.Value;
+            }
+        }
+
+        return bestPart;
+    }
+
+    private static string DescribePartCounts(Dictionary<SuitPart, int> counts)
+    {
+        var parts = new List<string>();
+        foreach (SuitPart part in Enum.GetValues(typeof(SuitPart)))
+        {
+            if (part == SuitPart.All)
+            {
+                continue;
+            }
+
+            parts.Add($"{part}:{(counts != null && counts.TryGetValue(part, out var count) ? count : 0)}");
+        }
+
+        return string.Join(",", parts);
+    }
+
+    private static string DescribePartBounds(List<PartTriangleRecord> records)
+    {
+        if (records == null || records.Count == 0)
+        {
+            return "none";
+        }
+
+        var parts = new List<string>();
+        for (var partIndex = 0; partIndex < IsolatedSuitParts.Length; partIndex++)
+        {
+            var part = IsolatedSuitParts[partIndex];
+            var count = 0;
+            var minHeight = float.MaxValue;
+            var maxHeight = float.MinValue;
+            var maxSide = 0f;
+            for (var i = 0; i < records.Count; i++)
+            {
+                if (records[i].Part != part)
+                {
+                    continue;
+                }
+
+                count++;
+                minHeight = Mathf.Min(minHeight, records[i].Height);
+                maxHeight = Mathf.Max(maxHeight, records[i].Height);
+                maxSide = Mathf.Max(maxSide, records[i].Side);
+            }
+
+            if (count == 0)
+            {
+                parts.Add($"{part}:empty");
+            }
+            else
+            {
+                parts.Add($"{part}:tri={count},h={minHeight.ToString("0.00", CultureInfo.InvariantCulture)}-{maxHeight.ToString("0.00", CultureInfo.InvariantCulture)},sideMax={maxSide.ToString("0.00", CultureInfo.InvariantCulture)}");
+            }
+        }
+
+        return string.Join("; ", parts);
+    }
+
+    private static string DescribeTopMappedBones(SkinnedMeshRenderer source, Transform[] bones)
+    {
+        if (source == null || bones == null || bones.Length == 0)
+        {
+            return "none";
+        }
+
+        var mapped = new Dictionary<SuitPart, List<string>>();
+        for (var i = 0; i < bones.Length; i++)
+        {
+            var bone = bones[i];
+            if (bone == null || !TryMapBoneToPart(bone.name, out var part))
+            {
+                continue;
+            }
+
+            if (!mapped.TryGetValue(part, out var names))
+            {
+                names = new List<string>();
+                mapped[part] = names;
+            }
+
+            if (names.Count < 4)
+            {
+                names.Add(bone.name);
+            }
+        }
+
+        if (mapped.Count == 0)
+        {
+            return "none";
+        }
+
+        var parts = new List<string>();
+        foreach (SuitPart part in Enum.GetValues(typeof(SuitPart)))
+        {
+            if (mapped.TryGetValue(part, out var names))
+            {
+                parts.Add($"{part}=[{string.Join(",", names)}]");
+            }
+        }
+
+        return string.Join("; ", parts);
     }
 
     private static void AccumulateVertexBoneScores(BoneWeight weight, Transform[] bones, float[] scores)
@@ -4636,24 +5091,64 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         part = SuitPart.Other;
         var lower = (boneName ?? string.Empty).ToLowerInvariant();
-        var left = lower.Contains("left") || lower.Contains("_l") || lower.EndsWith(".l", StringComparison.Ordinal) || lower.EndsWith(" l", StringComparison.Ordinal);
-        var right = lower.Contains("right") || lower.Contains("_r") || lower.EndsWith(".r", StringComparison.Ordinal) || lower.EndsWith(" r", StringComparison.Ordinal);
-        if (lower.Contains("head") || lower.Contains("neck") || lower.Contains("helmet"))
+        var left = lower.Contains("left")
+            || lower.Contains("_l")
+            || lower.Contains("-l")
+            || lower.Contains(" l ")
+            || lower.EndsWith(".l", StringComparison.Ordinal)
+            || lower.EndsWith("_l", StringComparison.Ordinal)
+            || lower.EndsWith(" l", StringComparison.Ordinal);
+        var right = lower.Contains("right")
+            || lower.Contains("_r")
+            || lower.Contains("-r")
+            || lower.Contains(" r ")
+            || lower.EndsWith(".r", StringComparison.Ordinal)
+            || lower.EndsWith("_r", StringComparison.Ordinal)
+            || lower.EndsWith(" r", StringComparison.Ordinal);
+        if (lower.Contains("head")
+            || lower.Contains("neck")
+            || lower.Contains("helmet")
+            || lower.Contains("skull")
+            || lower.Contains("visor")
+            || lower.Contains("mask"))
         {
             part = SuitPart.Helmet;
             return true;
         }
-        if ((lower.Contains("arm") || lower.Contains("shoulder") || lower.Contains("hand") || lower.Contains("wrist")) && (left || right))
+        if ((lower.Contains("arm")
+                || lower.Contains("shoulder")
+                || lower.Contains("clavicle")
+                || lower.Contains("elbow")
+                || lower.Contains("forearm")
+                || lower.Contains("hand")
+                || lower.Contains("wrist"))
+            && (left || right))
         {
             part = left ? SuitPart.LeftArm : SuitPart.RightArm;
             return true;
         }
-        if ((lower.Contains("leg") || lower.Contains("thigh") || lower.Contains("foot") || lower.Contains("calf")) && (left || right))
+        if ((lower.Contains("leg")
+                || lower.Contains("thigh")
+                || lower.Contains("knee")
+                || lower.Contains("shin")
+                || lower.Contains("ankle")
+                || lower.Contains("foot")
+                || lower.Contains("toe")
+                || lower.Contains("calf"))
+            && (left || right))
         {
             part = left ? SuitPart.LeftLeg : SuitPart.RightLeg;
             return true;
         }
-        if (lower.Contains("spine") || lower.Contains("chest") || lower.Contains("torso") || lower.Contains("hips") || lower.Contains("pelvis") || lower.Contains("body"))
+        if (lower.Contains("spine")
+            || lower.Contains("chest")
+            || lower.Contains("torso")
+            || lower.Contains("hips")
+            || lower.Contains("pelvis")
+            || lower.Contains("abdomen")
+            || lower.Contains("waist")
+            || lower.Contains("body")
+            || lower.Contains("root"))
         {
             part = SuitPart.Torso;
             return true;
@@ -4712,10 +5207,15 @@ internal sealed class SuitEditorController : MonoBehaviour
             }
             if (owners > 1) overlapPixels++;
         }
-        _partUvOverlapDetected = overlapPixels > 0;
+        var overlapWarningThreshold = Mathf.Max(16, pixelCount / 4096);
+        _partUvOverlapDetected = overlapPixels > overlapWarningThreshold;
         if (_partUvOverlapDetected)
         {
             DrawableSuitsDiagnostics.Warn($"Part UV masks share {overlapPixels} texture pixels across body parts. Isolation cannot prevent shared-UV surfaces from displaying the same edited pixel.");
+        }
+        else if (overlapPixels > 0)
+        {
+            DrawableSuitsDiagnostics.Info($"Part UV masks had {overlapPixels} edge-overlap pixels below warning threshold {overlapWarningThreshold}; treating isolation as clean.");
         }
     }
 
