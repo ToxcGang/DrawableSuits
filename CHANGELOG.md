@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.9
+
+- Added a UI-only `Text` tool that previews and stamps single-line text onto the suit in third-person mode and UV fallback.
+- Text stamps use the built-in Arial font, current brush color, brush opacity, size/rotation placement controls, and one undo entry per stamp.
+- Added Mirror support for text stamps plus `TextPreviewUpdated`, `TextPreviewHidden`, `TextStampCommitted`, and `TextStampSkipped` diagnostics.
+
 ## 0.5.8
 
 - Added a UI-only one-shot `Eyedropper` tool for sampling colors from the third-person suit surface or UV fallback preview.

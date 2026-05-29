@@ -29,7 +29,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         Paint,
         Erase,
         Decal,
-        Eyedropper
+        Eyedropper,
+        Text
     }
 
     private readonly Stack<Color32[]> _undo = new();
@@ -50,6 +51,9 @@ internal sealed class SuitEditorController : MonoBehaviour
     private float _brushOpacity = 1f;
     private float _decalSize = 128f;
     private float _decalRotation;
+    private string _textStampValue = "TEXT";
+    private float _textSize = 96f;
+    private float _textRotation;
     private bool _mirrorEnabled;
     private bool _strokeActive;
     private bool _decalStampArmed = true;
@@ -168,13 +172,19 @@ internal sealed class SuitEditorController : MonoBehaviour
     private bool _decalPreviewVisible;
     private bool _suppressDecalPreviewUntilRelease;
     private int _decalPreviewSerial;
+    private EditorTool _placementPreviewTool = EditorTool.Decal;
     private string _lastDecalPreviewKey = string.Empty;
     private string _lastDecalPreviewLogKey = string.Empty;
     private float _lastDecalPreviewLogTime;
+    private string _lastTextPreviewLogKey = string.Empty;
+    private float _lastTextPreviewLogTime;
     private int _designListPage;
     private int _decalListPage;
     private readonly List<RendererRestoreState> _rendererRestoreStates = new();
     private Texture2D _loadedDecal;
+    private TextStampRenderer _textStampRenderer;
+    private Texture2D _textStampTexture;
+    private string _textStampTextureKey = string.Empty;
     private string _lastWorldProxyMeshSummary = "none";
     private MirrorSurfaceMap _mirrorSurfaceMap;
     private string _mirrorSurfaceMapKey = string.Empty;
@@ -207,7 +217,9 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Text _brushOpacityLabel;
     private Text _decalSizeLabel;
     private Text _decalRotationLabel;
+    private Text _placementHeaderLabel;
     private InputField _designNameInput;
+    private InputField _textStampInput;
     private DrawableSliderControl _brushSizeSlider;
     private DrawableSliderControl _brushOpacitySlider;
     private DrawableColorPickerControl _colorPicker;
@@ -219,6 +231,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Button _eraseButton;
     private Button _decalButton;
     private Button _eyedropperButton;
+    private Button _textButton;
     private Button _mirrorButton;
     private Button _applyButton;
     private Button _saveButton;
@@ -968,6 +981,260 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
     }
 
+    private sealed class TextStampRenderer
+    {
+        private GameObject _root;
+        private Camera _camera;
+        private Canvas _canvas;
+        private RectTransform _canvasRect;
+        private Text _text;
+        private RectTransform _textRect;
+        private RenderTexture _renderTexture;
+        private Texture2D _texture;
+        private string _cachedKey = string.Empty;
+
+        internal Texture2D GetOrRender(string text, Color color, out string key, out string failureReason)
+        {
+            failureReason = string.Empty;
+            var normalized = NormalizeTextStampValue(text);
+            key = $"{normalized}|{ColorToHex(color)}";
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                failureReason = "empty text";
+                return null;
+            }
+
+            if (_texture != null && string.Equals(key, _cachedKey, StringComparison.Ordinal))
+            {
+                return _texture;
+            }
+
+            try
+            {
+                var font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+                if (font == null)
+                {
+                    failureReason = "built-in Arial font unavailable";
+                    return null;
+                }
+
+                const int fontSize = 96;
+                var width = CalculateTextureWidth(font, normalized, fontSize);
+                const int height = 128;
+                EnsureObjects(width, height);
+
+                _text.font = font;
+                _text.text = normalized;
+                _text.fontSize = fontSize;
+                _text.fontStyle = FontStyle.Normal;
+                _text.alignment = TextAnchor.MiddleCenter;
+                _text.horizontalOverflow = HorizontalWrapMode.Overflow;
+                _text.verticalOverflow = VerticalWrapMode.Overflow;
+                _text.supportRichText = false;
+                _text.color = new Color(color.r, color.g, color.b, 1f);
+
+                _canvasRect.sizeDelta = new Vector2(width, height);
+                _textRect.sizeDelta = new Vector2(width, height);
+                _camera.orthographicSize = height * 0.5f;
+                _camera.aspect = width / (float)height;
+                _camera.targetTexture = _renderTexture;
+
+                var previousActive = RenderTexture.active;
+                var previousRootActive = _root.activeSelf;
+                try
+                {
+                    _root.SetActive(true);
+                    Canvas.ForceUpdateCanvases();
+                    RenderTexture.active = _renderTexture;
+                    GL.Clear(true, true, new Color(0f, 0f, 0f, 0f));
+                    _camera.Render();
+                    _texture.ReadPixels(new Rect(0f, 0f, width, height), 0, 0, false);
+                    _texture.Apply(false, false);
+                }
+                finally
+                {
+                    RenderTexture.active = previousActive;
+                    _root.SetActive(previousRootActive);
+                }
+
+                if (!HasVisibleAlpha(_texture))
+                {
+                    failureReason = "rendered text texture was empty";
+                    DrawableSuitsDiagnostics.Warn($"TextStampSkipped: reason={failureReason}; textLength={normalized.Length}; texture={width}x{height}; color={ColorToHex(color)}");
+                    return null;
+                }
+
+                _cachedKey = key;
+                DrawableSuitsDiagnostics.Info($"TextStampRendered: textLength={normalized.Length}; texture={width}x{height}; color={ColorToHex(color)}");
+                return _texture;
+            }
+            catch (Exception ex)
+            {
+                failureReason = ex.Message;
+                DrawableSuitsDiagnostics.Exception($"TextStampSkipped: render exception. textLength={normalized.Length}; color={ColorToHex(color)}", ex);
+                return null;
+            }
+        }
+
+        internal void Destroy()
+        {
+            if (_texture != null)
+            {
+                UnityEngine.Object.Destroy(_texture);
+                _texture = null;
+            }
+            if (_renderTexture != null)
+            {
+                _renderTexture.Release();
+                UnityEngine.Object.Destroy(_renderTexture);
+                _renderTexture = null;
+            }
+            if (_root != null)
+            {
+                UnityEngine.Object.Destroy(_root);
+                _root = null;
+            }
+            _cachedKey = string.Empty;
+        }
+
+        private void EnsureObjects(int width, int height)
+        {
+            if (_root == null)
+            {
+                _root = new GameObject("DrawableSuitsTextStampRenderer");
+                _root.hideFlags = HideFlags.HideAndDontSave;
+                _root.transform.position = new Vector3(10000f, 10000f, 10000f);
+
+                var cameraObject = new GameObject("DrawableSuitsTextStampCamera", typeof(Camera));
+                cameraObject.hideFlags = HideFlags.HideAndDontSave;
+                cameraObject.transform.SetParent(_root.transform, false);
+                cameraObject.transform.localPosition = new Vector3(0f, 0f, -10f);
+                cameraObject.transform.localRotation = Quaternion.identity;
+                _camera = cameraObject.GetComponent<Camera>();
+                _camera.enabled = false;
+                _camera.clearFlags = CameraClearFlags.SolidColor;
+                _camera.backgroundColor = new Color(0f, 0f, 0f, 0f);
+                _camera.orthographic = true;
+                _camera.nearClipPlane = 0.01f;
+                _camera.farClipPlane = 50f;
+                _camera.cullingMask = 1 << 2;
+
+                var canvasObject = new GameObject("DrawableSuitsTextStampCanvas", typeof(RectTransform), typeof(Canvas));
+                canvasObject.hideFlags = HideFlags.HideAndDontSave;
+                canvasObject.transform.SetParent(_root.transform, false);
+                canvasObject.transform.localPosition = Vector3.zero;
+                canvasObject.transform.localRotation = Quaternion.identity;
+                canvasObject.transform.localScale = Vector3.one;
+                _canvasRect = canvasObject.GetComponent<RectTransform>();
+                _canvasRect.pivot = new Vector2(0.5f, 0.5f);
+                _canvas = canvasObject.GetComponent<Canvas>();
+                _canvas.renderMode = RenderMode.WorldSpace;
+                _canvas.worldCamera = _camera;
+                _canvas.pixelPerfect = true;
+
+                var textObject = new GameObject("DrawableSuitsTextStampText", typeof(RectTransform), typeof(Text));
+                textObject.hideFlags = HideFlags.HideAndDontSave;
+                textObject.transform.SetParent(canvasObject.transform, false);
+                _textRect = textObject.GetComponent<RectTransform>();
+                _textRect.anchorMin = new Vector2(0.5f, 0.5f);
+                _textRect.anchorMax = new Vector2(0.5f, 0.5f);
+                _textRect.pivot = new Vector2(0.5f, 0.5f);
+                _textRect.anchoredPosition = Vector2.zero;
+                _text = textObject.GetComponent<Text>();
+                _text.raycastTarget = false;
+
+                SetLayerRecursively(_root, 2);
+                _root.SetActive(false);
+            }
+
+            if (_renderTexture == null || _renderTexture.width != width || _renderTexture.height != height)
+            {
+                if (_renderTexture != null)
+                {
+                    _renderTexture.Release();
+                    UnityEngine.Object.Destroy(_renderTexture);
+                }
+
+                _renderTexture = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32)
+                {
+                    name = "DrawableSuitsTextStampRenderTexture",
+                    hideFlags = HideFlags.HideAndDontSave,
+                    filterMode = FilterMode.Bilinear,
+                    wrapMode = TextureWrapMode.Clamp
+                };
+                _renderTexture.Create();
+            }
+
+            if (_texture == null || _texture.width != width || _texture.height != height)
+            {
+                if (_texture != null)
+                {
+                    UnityEngine.Object.Destroy(_texture);
+                }
+
+                _texture = new Texture2D(width, height, TextureFormat.RGBA32, false)
+                {
+                    name = "DrawableSuitsTextStampTexture",
+                    hideFlags = HideFlags.HideAndDontSave,
+                    filterMode = FilterMode.Bilinear,
+                    wrapMode = TextureWrapMode.Clamp
+                };
+                _cachedKey = string.Empty;
+            }
+        }
+
+        private static int CalculateTextureWidth(Font font, string text, int fontSize)
+        {
+            var settings = new TextGenerationSettings
+            {
+                font = font,
+                fontSize = fontSize,
+                fontStyle = FontStyle.Normal,
+                color = Color.white,
+                textAnchor = TextAnchor.MiddleCenter,
+                horizontalOverflow = HorizontalWrapMode.Overflow,
+                verticalOverflow = VerticalWrapMode.Overflow,
+                richText = false,
+                lineSpacing = 1f,
+                scaleFactor = 1f,
+                generationExtents = new Vector2(2048f, 256f),
+                pivot = new Vector2(0.5f, 0.5f),
+                updateBounds = true
+            };
+            var generator = new TextGenerator();
+            var preferred = generator.GetPreferredWidth(text, settings);
+            return Mathf.Clamp(Mathf.CeilToInt(preferred) + 32, 32, 2048);
+        }
+
+        private static bool HasVisibleAlpha(Texture2D texture)
+        {
+            var pixels = texture.GetPixels32();
+            for (var i = 0; i < pixels.Length; i++)
+            {
+                if (pixels[i].a > 4)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static void SetLayerRecursively(GameObject gameObject, int layer)
+        {
+            if (gameObject == null)
+            {
+                return;
+            }
+
+            gameObject.layer = layer;
+            for (var i = 0; i < gameObject.transform.childCount; i++)
+            {
+                SetLayerRecursively(gameObject.transform.GetChild(i).gameObject, layer);
+            }
+        }
+    }
+
     private void Start()
     {
         _cursor = new Vector2(Screen.width * 0.5f, Screen.height * 0.5f);
@@ -997,6 +1264,12 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             Destroy(_checkerTexture);
             _checkerTexture = null;
+        }
+        if (_textStampRenderer != null)
+        {
+            _textStampRenderer.Destroy();
+            _textStampRenderer = null;
+            _textStampTexture = null;
         }
 
         if (_editorCanvasObject != null)
@@ -1406,6 +1679,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         CreateAnchoredButton(panel.transform, "Next", new Rect(leftX + 210f, 282f, 72f, 34f), () => SelectAdjacentSuit(1));
 
         CreateAnchoredText(panel.transform, "ToolHeader", "Tool", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 326f, leftW, 24f), Color.white);
+        _textButton = CreateAnchoredButton(panel.transform, "Text", new Rect(leftX + 98f, 322f, 50f, 28f), () => SetTool(EditorTool.Text));
         _eyedropperButton = CreateAnchoredButton(panel.transform, "Eyedropper", new Rect(leftX + 154f, 322f, 120f, 28f), () => SetTool(EditorTool.Eyedropper));
         _paintButton = CreateAnchoredButton(panel.transform, "Paint", new Rect(leftX, 354f, 64f, 34f), () => SetTool(EditorTool.Paint));
         _eraseButton = CreateAnchoredButton(panel.transform, "Erase", new Rect(leftX + 70f, 354f, 64f, 34f), () => SetTool(EditorTool.Erase));
@@ -1430,12 +1704,43 @@ internal sealed class SuitEditorController : MonoBehaviour
         _uvFallbackButton = CreateAnchoredButton(panel.transform, "Use UV Fallback", new Rect(rightX, 54f, 150f, 34f), ToggleUvFallback);
         CreateAnchoredText(panel.transform, "WorldHelp", "Third-person mode: aim at the visible suit and hold left mouse or right trigger to paint. Eyedropper samples once, then returns to the previous tool. Right mouse/right stick or bumpers orbit. Wheel or D-pad up/down zooms.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(rightX, 96f, rightW, 76f), new Color(0.86f, 0.9f, 0.94f, 1f));
 
-        CreateAnchoredText(panel.transform, "DecalHeader", "Decal", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 188f, rightW, 24f), Color.white);
+        _placementHeaderLabel = CreateAnchoredText(panel.transform, "PlacementHeader", "Decal", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 188f, rightW, 24f), Color.white);
         _decalSizeLabel = CreateAnchoredText(panel.transform, "DecalSizeLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(rightX, 218f, 112f, 24f), Color.white);
-        _decalSizeSlider = CreateAnchoredSlider(panel.transform, "DecalSize", 16f, 512f, _decalSize, new Rect(rightX + 120f, 220f, 160f, 24f), value => _decalSize = value);
+        _decalSizeSlider = CreateAnchoredSlider(panel.transform, "DecalSize", 16f, 512f, _decalSize, new Rect(rightX + 120f, 220f, 160f, 24f), value =>
+        {
+            if (_tool == EditorTool.Text)
+            {
+                _textSize = value;
+            }
+            else
+            {
+                _decalSize = value;
+            }
+            InvalidateDecalPreview("placement size changed");
+        });
         _decalRotationLabel = CreateAnchoredText(panel.transform, "DecalRotationLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(rightX, 252f, 112f, 24f), Color.white);
-        _decalRotationSlider = CreateAnchoredSlider(panel.transform, "DecalRotation", -180f, 180f, _decalRotation, new Rect(rightX + 120f, 254f, 160f, 24f), value => _decalRotation = value);
-        CreateAnchoredButton(panel.transform, "Refresh Decals", new Rect(rightX, 290f, 160f, 34f), ImportDecalFromDialog);
+        _decalRotationSlider = CreateAnchoredSlider(panel.transform, "DecalRotation", -180f, 180f, _decalRotation, new Rect(rightX + 120f, 254f, 160f, 24f), value =>
+        {
+            if (_tool == EditorTool.Text)
+            {
+                _textRotation = value;
+            }
+            else
+            {
+                _decalRotation = value;
+            }
+            InvalidateDecalPreview("placement rotation changed");
+        });
+        _textStampInput = CreateAnchoredInputField(panel.transform, "TextStampInput", _textStampValue, new Rect(rightX, 290f, 142f, 34f));
+        _textStampInput.characterLimit = 64;
+        _textStampInput.lineType = InputField.LineType.SingleLine;
+        _textStampInput.onValueChanged.AddListener(value =>
+        {
+            _textStampValue = NormalizeTextStampValue(value);
+            InvalidateTextStampTexture("text input changed");
+            InvalidateDecalPreview("text input changed");
+        });
+        CreateAnchoredButton(panel.transform, "Refresh Decals", new Rect(rightX + 150f, 290f, 136f, 34f), ImportDecalFromDialog);
         _decalListContent = CreateAnchoredScrollList(panel.transform, "DecalList", new Rect(rightX, 334f, rightW, 132f));
 
         CreateAnchoredText(panel.transform, "DesignHeader", "Design Name", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 486f, rightW, 24f), Color.white);
@@ -2366,12 +2671,16 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             _designNameInput.text = _designName;
         }
+        if (_textStampInput != null && _textStampInput.text != _textStampValue)
+        {
+            _textStampInput.SetTextWithoutNotify(_textStampValue);
+        }
 
         if (_brushSizeSlider != null) _brushSizeSlider.SetValue(_brushSize, false);
         if (_brushOpacitySlider != null) _brushOpacitySlider.SetValue(_brushOpacity, false);
         if (_colorPicker != null) _colorPicker.SetColor(_brushColor, false);
-        if (_decalSizeSlider != null) _decalSizeSlider.SetValue(_decalSize, false);
-        if (_decalRotationSlider != null) _decalRotationSlider.SetValue(_decalRotation, false);
+        if (_decalSizeSlider != null) _decalSizeSlider.SetValue(CurrentPlacementSize(), false);
+        if (_decalRotationSlider != null) _decalRotationSlider.SetValue(CurrentPlacementRotation(), false);
 
         if (_diagnosticsLabel != null)
         {
@@ -2392,6 +2701,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         SetInteractable(_eraseButton, _canPaint);
         SetInteractable(_decalButton, _canPaint);
         SetInteractable(_eyedropperButton, _canPaint && hasEditableTexture);
+        SetInteractable(_textButton, _canPaint && hasEditableTexture);
         SetInteractable(_mirrorButton, _canPaint && hasEditableTexture);
         SetInteractable(_applyButton, _canPaint && hasEditableTexture);
         SetInteractable(_saveButton, hasEditableTexture);
@@ -2460,8 +2770,19 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         if (_brushSizeLabel != null) _brushSizeLabel.text = $"Size: {Mathf.RoundToInt(_brushSize)} px";
         if (_brushOpacityLabel != null) _brushOpacityLabel.text = $"Opacity: {Mathf.RoundToInt(_brushOpacity * 100f)}%";
-        if (_decalSizeLabel != null) _decalSizeLabel.text = $"Size: {Mathf.RoundToInt(_decalSize)} px";
-        if (_decalRotationLabel != null) _decalRotationLabel.text = $"Rotation: {Mathf.RoundToInt(_decalRotation)} deg";
+        if (_placementHeaderLabel != null) _placementHeaderLabel.text = _tool == EditorTool.Text ? "Text" : "Decal";
+        if (_decalSizeLabel != null) _decalSizeLabel.text = _tool == EditorTool.Text ? $"Height: {Mathf.RoundToInt(_textSize)} px" : $"Size: {Mathf.RoundToInt(_decalSize)} px";
+        if (_decalRotationLabel != null) _decalRotationLabel.text = $"Rotation: {Mathf.RoundToInt(CurrentPlacementRotation())} deg";
+    }
+
+    private float CurrentPlacementSize()
+    {
+        return _tool == EditorTool.Text ? _textSize : _decalSize;
+    }
+
+    private float CurrentPlacementRotation()
+    {
+        return _tool == EditorTool.Text ? _textRotation : _decalRotation;
     }
 
     private void UpdateColorUi()
@@ -2560,6 +2881,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         SetToolButtonColor(_eraseButton, _tool == EditorTool.Erase);
         SetToolButtonColor(_decalButton, _tool == EditorTool.Decal);
         SetToolButtonColor(_eyedropperButton, _tool == EditorTool.Eyedropper);
+        SetToolButtonColor(_textButton, _tool == EditorTool.Text);
         SetToolButtonColor(_mirrorButton, _mirrorEnabled);
     }
 
@@ -2606,6 +2928,10 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             HideDecalPlacementPreview("tool changed", false);
         }
+        if (tool == EditorTool.Text && string.IsNullOrWhiteSpace(_textStampValue))
+        {
+            SetStatus("Enter text before stamping.", false);
+        }
         if (tool != EditorTool.Decal && _statusMessage.StartsWith("Select a decal", StringComparison.OrdinalIgnoreCase))
         {
             SetStatus(BuildReadinessStatus(), false);
@@ -2616,12 +2942,26 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         UpdateToolButtons();
+        UpdatePlacementControlsForTool();
         UpdateBrushIndicator();
     }
 
     private static bool IsReturnableEyedropperTool(EditorTool tool)
     {
-        return tool == EditorTool.Paint || tool == EditorTool.Erase || tool == EditorTool.Decal;
+        return tool == EditorTool.Paint || tool == EditorTool.Erase || tool == EditorTool.Decal || tool == EditorTool.Text;
+    }
+
+    private void UpdatePlacementControlsForTool()
+    {
+        if (_decalSizeSlider != null)
+        {
+            _decalSizeSlider.SetValue(CurrentPlacementSize(), false);
+        }
+        if (_decalRotationSlider != null)
+        {
+            _decalRotationSlider.SetValue(CurrentPlacementRotation(), false);
+        }
+        UpdateLabels();
     }
 
     private void ToggleMirror()
@@ -2636,7 +2976,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         SetStatus(_mirrorEnabled
-            ? "Mirror enabled. Edits duplicate across UV left-right."
+            ? "Mirror enabled. Edits duplicate on the opposite suit surface."
             : "Mirror disabled.", false);
         UpdateToolButtons();
         DrawableSuitsDiagnostics.Info($"Mirror painting toggled. enabled={_mirrorEnabled}; tool={_tool}; suit={_selectedSuitId}; previewMode={_previewMode}");
@@ -3084,9 +3424,19 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void UpdateDecalPlacementPreview()
     {
-        if (!_isOpen || _tool != EditorTool.Decal || _loadedDecal == null || !_canPaint || _suppressDecalPreviewUntilRelease)
+        if (!_isOpen || !IsPlacementTool(_tool) || !_canPaint || _suppressDecalPreviewUntilRelease)
         {
             HideDecalPlacementPreview("not eligible", false);
+            return;
+        }
+
+        if (!TryGetActivePlacementStamp(out var stampTexture, out var stampFailure))
+        {
+            if (_tool == EditorTool.Text && string.Equals(stampFailure, "empty text", StringComparison.OrdinalIgnoreCase))
+            {
+                SetStatus("Enter text before stamping.", false);
+            }
+            HideDecalPlacementPreview(stampFailure, false);
             return;
         }
 
@@ -3106,7 +3456,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             }
 
             var mirrorTarget = ResolveWorldMirrorTarget(texture, hit, false);
-            ShowWorldDecalPlacementPreview(texture, hit.textureCoord, mirrorTarget);
+            ShowWorldPlacementPreview(texture, hit.textureCoord, mirrorTarget, stampTexture);
             return;
         }
 
@@ -3117,12 +3467,42 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         var uvMirrorTarget = ResolveUvMirrorTarget(texture, uv, false);
-        ShowUvDecalPlacementPreview(texture, uv, uvMirrorTarget);
+        ShowUvPlacementPreview(texture, uv, uvMirrorTarget, stampTexture);
     }
 
-    private void ShowWorldDecalPlacementPreview(Texture2D sourceTexture, Vector2 uv, MirrorPaintTarget mirrorTarget)
+    private bool IsPlacementTool(EditorTool tool)
     {
-        if (_worldAvatarRenderer == null || _worldSourceRenderer == null || sourceTexture == null || _loadedDecal == null)
+        return tool == EditorTool.Decal || tool == EditorTool.Text;
+    }
+
+    private bool TryGetActivePlacementStamp(out Texture2D stampTexture, out string failureReason)
+    {
+        stampTexture = null;
+        failureReason = string.Empty;
+        if (_tool == EditorTool.Decal)
+        {
+            if (_loadedDecal == null)
+            {
+                failureReason = "no selected decal";
+                return false;
+            }
+
+            stampTexture = _loadedDecal;
+            return true;
+        }
+
+        if (_tool == EditorTool.Text)
+        {
+            return TryGetTextStampTexture(out stampTexture, out failureReason);
+        }
+
+        failureReason = "not a placement tool";
+        return false;
+    }
+
+    private void ShowWorldPlacementPreview(Texture2D sourceTexture, Vector2 uv, MirrorPaintTarget mirrorTarget, Texture2D stampTexture)
+    {
+        if (_worldAvatarRenderer == null || _worldSourceRenderer == null || sourceTexture == null || stampTexture == null)
         {
             HideDecalPlacementPreview("world dependencies missing", false);
             return;
@@ -3139,10 +3519,10 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             _decalPreviewTexture.SetPixels32(sourceTexture.GetPixels32());
             var touchedPixels = mirrorTarget.Enabled && mirrorTarget.Available ? new HashSet<int>() : null;
-            CompositeDecal(_decalPreviewTexture, _loadedDecal, uv, _decalSize, _decalRotation, Mathf.Clamp01(_brushOpacity * 0.62f), false, touchedPixels);
+            CompositePlacementStamp(_decalPreviewTexture, stampTexture, uv, CurrentPlacementSize(), CurrentPlacementRotation(), Mathf.Clamp01(_brushOpacity * 0.62f), false, touchedPixels);
             if (ShouldApplyMirror(sourceTexture, uv, mirrorTarget))
             {
-                CompositeDecal(_decalPreviewTexture, _loadedDecal, mirrorTarget.Uv, _decalSize, -_decalRotation, Mathf.Clamp01(_brushOpacity * 0.62f), true, touchedPixels);
+                CompositePlacementStamp(_decalPreviewTexture, stampTexture, mirrorTarget.Uv, CurrentPlacementSize(), -CurrentPlacementRotation(), Mathf.Clamp01(_brushOpacity * 0.62f), true, touchedPixels);
             }
             _decalPreviewTexture.Apply(false, false);
             _lastDecalPreviewKey = key;
@@ -3166,6 +3546,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         _worldAvatarRenderer.sharedMaterials = previewMaterials;
         _worldDecalPreviewApplied = true;
         _decalPreviewVisible = true;
+        _placementPreviewTool = _tool;
         if (_uvDecalPreviewRect != null)
         {
             _uvDecalPreviewRect.gameObject.SetActive(false);
@@ -3175,13 +3556,13 @@ internal sealed class SuitEditorController : MonoBehaviour
             _uvMirrorDecalPreviewRect.gameObject.SetActive(false);
         }
 
-        SetDecalPreviewStatus(mirrorTarget);
-        LogDecalPreviewUpdated("WorldThirdPerson", sourceTexture, uv, mirrorTarget, false);
+        SetPlacementPreviewStatus(mirrorTarget);
+        LogPlacementPreviewUpdated("WorldThirdPerson", sourceTexture, uv, mirrorTarget, stampTexture, false);
     }
 
-    private void ShowUvDecalPlacementPreview(Texture2D sourceTexture, Vector2 uv, MirrorPaintTarget mirrorTarget)
+    private void ShowUvPlacementPreview(Texture2D sourceTexture, Vector2 uv, MirrorPaintTarget mirrorTarget, Texture2D stampTexture)
     {
-        if (_uvDecalPreviewRect == null || _uvDecalPreviewImage == null || _previewViewportRect == null || sourceTexture == null || _loadedDecal == null)
+        if (_uvDecalPreviewRect == null || _uvDecalPreviewImage == null || _previewViewportRect == null || sourceTexture == null || stampTexture == null)
         {
             HideDecalPlacementPreview("uv dependencies missing", false);
             return;
@@ -3189,11 +3570,11 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         RestoreWorldDecalPreviewMaterial();
 
-        ConfigureUvDecalPreview(_uvDecalPreviewRect, _uvDecalPreviewImage, sourceTexture, uv, false);
+        ConfigureUvPlacementPreview(_uvDecalPreviewRect, _uvDecalPreviewImage, sourceTexture, stampTexture, uv, false);
 
         if (ShouldApplyMirror(sourceTexture, uv, mirrorTarget))
         {
-            ConfigureUvDecalPreview(_uvMirrorDecalPreviewRect, _uvMirrorDecalPreviewImage, sourceTexture, mirrorTarget.Uv, true);
+            ConfigureUvPlacementPreview(_uvMirrorDecalPreviewRect, _uvMirrorDecalPreviewImage, sourceTexture, stampTexture, mirrorTarget.Uv, true);
         }
         else if (_uvMirrorDecalPreviewRect != null)
         {
@@ -3201,14 +3582,15 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         _decalPreviewVisible = true;
+        _placementPreviewTool = _tool;
         _lastDecalPreviewKey = BuildDecalPreviewKey("TextureFallback", sourceTexture, uv, mirrorTarget);
-        SetDecalPreviewStatus(mirrorTarget);
-        LogDecalPreviewUpdated("TextureFallback", sourceTexture, uv, mirrorTarget, false);
+        SetPlacementPreviewStatus(mirrorTarget);
+        LogPlacementPreviewUpdated("TextureFallback", sourceTexture, uv, mirrorTarget, stampTexture, false);
     }
 
-    private void ConfigureUvDecalPreview(RectTransform previewRect, RawImage previewImage, Texture2D sourceTexture, Vector2 uv, bool mirrored)
+    private void ConfigureUvPlacementPreview(RectTransform previewRect, RawImage previewImage, Texture2D sourceTexture, Texture2D stampTexture, Vector2 uv, bool mirrored)
     {
-        if (previewRect == null || previewImage == null || _previewViewportRect == null || sourceTexture == null || _loadedDecal == null)
+        if (previewRect == null || previewImage == null || _previewViewportRect == null || sourceTexture == null || stampTexture == null)
         {
             return;
         }
@@ -3216,16 +3598,17 @@ internal sealed class SuitEditorController : MonoBehaviour
         var rect = _previewViewportRect.rect;
         var localX = Mathf.Lerp(rect.xMin, rect.xMax, uv.x);
         var localY = Mathf.Lerp(rect.yMin, rect.yMax, uv.y);
-        var displayWidth = Mathf.Clamp(_decalSize / Mathf.Max(1f, sourceTexture.width) * rect.width, 4f, rect.width * 1.5f);
-        var displayHeight = Mathf.Clamp(_decalSize / Mathf.Max(1f, sourceTexture.height) * rect.height, 4f, rect.height * 1.5f);
+        var stampSize = GetPlacementStampPixelSize(stampTexture);
+        var displayWidth = Mathf.Clamp(stampSize.x / Mathf.Max(1f, sourceTexture.width) * rect.width, 4f, rect.width * 1.5f);
+        var displayHeight = Mathf.Clamp(stampSize.y / Mathf.Max(1f, sourceTexture.height) * rect.height, 4f, rect.height * 1.5f);
 
-        previewImage.texture = _loadedDecal;
+        previewImage.texture = stampTexture;
         previewImage.color = mirrored ? new Color(1f, 1f, 1f, 0.5f) : new Color(1f, 1f, 1f, 0.62f);
         previewImage.raycastTarget = false;
         previewImage.uvRect = mirrored ? new Rect(1f, 0f, -1f, 1f) : new Rect(0f, 0f, 1f, 1f);
         previewRect.anchoredPosition = new Vector2(localX, localY);
         previewRect.sizeDelta = new Vector2(displayWidth, displayHeight);
-        previewRect.localRotation = Quaternion.Euler(0f, 0f, mirrored ? -_decalRotation : _decalRotation);
+        previewRect.localRotation = Quaternion.Euler(0f, 0f, mirrored ? -CurrentPlacementRotation() : CurrentPlacementRotation());
         previewRect.gameObject.SetActive(true);
     }
 
@@ -3314,14 +3697,15 @@ internal sealed class SuitEditorController : MonoBehaviour
             UseTexturePreview("decal preview hidden", false);
         }
         _decalPreviewVisible = false;
-        if (_statusMessage.StartsWith("Previewing decal", StringComparison.OrdinalIgnoreCase))
+        if (_statusMessage.StartsWith("Previewing decal", StringComparison.OrdinalIgnoreCase)
+            || _statusMessage.StartsWith("Previewing text", StringComparison.OrdinalIgnoreCase))
         {
             SetStatus(BuildReadinessStatus(), false);
         }
 
         if (wasVisible || forceLog)
         {
-            LogDecalPreviewHidden(reason, forceLog);
+            LogPlacementPreviewHidden(reason, forceLog);
         }
     }
 
@@ -3370,24 +3754,89 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         var px = sourceTexture != null ? Mathf.RoundToInt(uv.x * (sourceTexture.width - 1)) : -1;
         var py = sourceTexture != null ? Mathf.RoundToInt(uv.y * (sourceTexture.height - 1)) : -1;
-        return $"{_decalPreviewSerial}|{mode}|suit={_selectedSuitId}|pixel={px},{py}|mirror={DescribeMirrorTarget(sourceTexture, mirrorTarget)}|size={Mathf.RoundToInt(_decalSize)}|rot={Mathf.RoundToInt(_decalRotation * 10f)}|opacity={Mathf.RoundToInt(_brushOpacity * 1000f)}|decal={CurrentDecalName()}|texture={sourceTexture?.width ?? 0}x{sourceTexture?.height ?? 0}";
+        return $"{_decalPreviewSerial}|{mode}|tool={_tool}|suit={_selectedSuitId}|pixel={px},{py}|mirror={DescribeMirrorTarget(sourceTexture, mirrorTarget)}|size={Mathf.RoundToInt(CurrentPlacementSize())}|rot={Mathf.RoundToInt(CurrentPlacementRotation() * 10f)}|opacity={Mathf.RoundToInt(_brushOpacity * 1000f)}|stamp={CurrentPlacementName()}|stampKey={_textStampTextureKey}|color={ColorToHex(_brushColor)}|texture={sourceTexture?.width ?? 0}x{sourceTexture?.height ?? 0}";
     }
 
-    private void SetDecalPreviewStatus(MirrorPaintTarget mirrorTarget)
+    private void SetPlacementPreviewStatus(MirrorPaintTarget mirrorTarget)
     {
+        var noun = _tool == EditorTool.Text ? "text" : "decal";
         if (mirrorTarget.Enabled && !mirrorTarget.Available)
         {
-            if (!_statusMessage.StartsWith("Previewing decal. Mirror target not found", StringComparison.OrdinalIgnoreCase))
+            if (!_statusMessage.StartsWith($"Previewing {noun}. Mirror target not found", StringComparison.OrdinalIgnoreCase))
             {
-                SetStatus("Previewing decal. Mirror target not found; stamp affects primary only.", false);
+                SetStatus($"Previewing {noun}. Mirror target not found; stamp affects primary only.", false);
             }
             return;
         }
 
-        if (!_statusMessage.StartsWith("Previewing decal", StringComparison.OrdinalIgnoreCase))
+        if (!_statusMessage.StartsWith($"Previewing {noun}", StringComparison.OrdinalIgnoreCase))
         {
-            SetStatus("Previewing decal. Click/RT to stamp.", false);
+            SetStatus($"Previewing {noun}. Click/RT to stamp.", false);
         }
+    }
+
+    private Vector2 GetPlacementStampPixelSize(Texture2D stampTexture)
+    {
+        if (_tool == EditorTool.Text && stampTexture != null)
+        {
+            var height = Mathf.Max(1f, _textSize);
+            var aspect = stampTexture.width / Mathf.Max(1f, (float)stampTexture.height);
+            return new Vector2(Mathf.Max(1f, height * aspect), height);
+        }
+
+        return new Vector2(Mathf.Max(1f, _decalSize), Mathf.Max(1f, _decalSize));
+    }
+
+    private string CurrentPlacementName()
+    {
+        return _tool == EditorTool.Text
+            ? $"text:{NormalizeTextStampValue(_textStampValue).Length}"
+            : CurrentDecalName();
+    }
+
+    private bool TryGetTextStampTexture(out Texture2D texture, out string failureReason)
+    {
+        texture = null;
+        var text = NormalizeTextStampValue(_textStampValue);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            failureReason = "empty text";
+            return false;
+        }
+
+        _textStampRenderer ??= new TextStampRenderer();
+        texture = _textStampRenderer.GetOrRender(text, _brushColor, out _textStampTextureKey, out failureReason);
+        _textStampTexture = texture;
+        return texture != null;
+    }
+
+    private void InvalidateTextStampTexture(string reason)
+    {
+        _textStampTextureKey = string.Empty;
+        _textStampTexture = null;
+        DrawableSuitsDiagnostics.Info($"TextStampTexture invalidated. reason={reason}; textLength={NormalizeTextStampValue(_textStampValue).Length}; color={ColorToHex(_brushColor)}");
+    }
+
+    private static string NormalizeTextStampValue(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return string.Empty;
+        }
+
+        var normalized = value.Replace('\r', ' ').Replace('\n', ' ');
+        return normalized.Length <= 64 ? normalized : normalized.Substring(0, 64);
+    }
+
+    private void LogPlacementPreviewUpdated(string mode, Texture2D texture, Vector2 uv, MirrorPaintTarget mirrorTarget, Texture2D stampTexture, bool force)
+    {
+        if (_tool == EditorTool.Text)
+        {
+            LogTextPreviewUpdated(mode, texture, uv, mirrorTarget, stampTexture, force);
+            return;
+        }
+
+        LogDecalPreviewUpdated(mode, texture, uv, mirrorTarget, force);
     }
 
     private void LogDecalPreviewUpdated(string mode, Texture2D texture, Vector2 uv, MirrorPaintTarget mirrorTarget, bool force)
@@ -3410,6 +3859,38 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawableSuitsDiagnostics.Info($"DecalPreviewUpdated: {key}; uv={uv}; pointerSource={_pointerSource}; cursor={_cursor}");
     }
 
+    private void LogTextPreviewUpdated(string mode, Texture2D texture, Vector2 uv, MirrorPaintTarget mirrorTarget, Texture2D stampTexture, bool force)
+    {
+        if (texture == null || stampTexture == null)
+        {
+            return;
+        }
+
+        var px = Mathf.RoundToInt(uv.x * (texture.width - 1));
+        var py = Mathf.RoundToInt(uv.y * (texture.height - 1));
+        var stampSize = GetPlacementStampPixelSize(stampTexture);
+        var key = $"updated|mode={mode}|pixel={px},{py}|mirror={DescribeMirrorTarget(texture, mirrorTarget)}|textLength={NormalizeTextStampValue(_textStampValue).Length}|fontSize={Mathf.RoundToInt(_textSize)}|rotation={Mathf.RoundToInt(_textRotation)}|color={ColorToHex(_brushColor)}|opacity={_brushOpacity:0.##}|stampTexture={stampTexture.width}x{stampTexture.height}|stampSize={Mathf.RoundToInt(stampSize.x)}x{Mathf.RoundToInt(stampSize.y)}";
+        if (!force && Time.unscaledTime - _lastTextPreviewLogTime < 0.5f && string.Equals(key, _lastTextPreviewLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastTextPreviewLogTime = Time.unscaledTime;
+        _lastTextPreviewLogKey = key;
+        DrawableSuitsDiagnostics.Info($"TextPreviewUpdated: {key}; uv={uv}; pointerSource={_pointerSource}; cursor={_cursor}");
+    }
+
+    private void LogPlacementPreviewHidden(string reason, bool force)
+    {
+        if (_placementPreviewTool == EditorTool.Text || _tool == EditorTool.Text)
+        {
+            LogTextPreviewHidden(reason, force);
+            return;
+        }
+
+        LogDecalPreviewHidden(reason, force);
+    }
+
     private void LogDecalPreviewHidden(string reason, bool force)
     {
         var key = $"hidden|reason={reason}|mode={_previewMode}|decal={CurrentDecalName()}";
@@ -3423,6 +3904,19 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawableSuitsDiagnostics.Info($"DecalPreviewHidden: {key}; pointerSource={_pointerSource}; cursor={_cursor}");
     }
 
+    private void LogTextPreviewHidden(string reason, bool force)
+    {
+        var key = $"hidden|reason={reason}|mode={_previewMode}|textLength={NormalizeTextStampValue(_textStampValue).Length}";
+        if (!force && Time.unscaledTime - _lastTextPreviewLogTime < 0.75f && string.Equals(key, _lastTextPreviewLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastTextPreviewLogTime = Time.unscaledTime;
+        _lastTextPreviewLogKey = key;
+        DrawableSuitsDiagnostics.Info($"TextPreviewHidden: {key}; pointerSource={_pointerSource}; cursor={_cursor}");
+    }
+
     private void LogDecalStampCommitted(string mode, Texture2D texture, Vector2 uv, MirrorPaintTarget mirrorTarget)
     {
         if (texture == null)
@@ -3433,6 +3927,32 @@ internal sealed class SuitEditorController : MonoBehaviour
         var px = Mathf.RoundToInt(uv.x * (texture.width - 1));
         var py = Mathf.RoundToInt(uv.y * (texture.height - 1));
         DrawableSuitsDiagnostics.Info($"DecalStampCommitted: mode={mode}; pointerSource={_pointerSource}; uv={uv}; pixel={px},{py}; {DescribeMirrorTarget(texture, mirrorTarget)}; decal={CurrentDecalName()}; size={Mathf.RoundToInt(_decalSize)}; rotation={Mathf.RoundToInt(_decalRotation)}; opacity={_brushOpacity:0.##}; previewTexture={_decalPreviewTexture?.width ?? 0}x{_decalPreviewTexture?.height ?? 0}");
+    }
+
+    private void LogTextStampCommitted(string mode, Texture2D texture, Vector2 uv, MirrorPaintTarget mirrorTarget, Texture2D stampTexture)
+    {
+        if (texture == null)
+        {
+            return;
+        }
+
+        var px = Mathf.RoundToInt(uv.x * (texture.width - 1));
+        var py = Mathf.RoundToInt(uv.y * (texture.height - 1));
+        var stampSize = stampTexture != null ? GetPlacementStampPixelSize(stampTexture) : Vector2.zero;
+        DrawableSuitsDiagnostics.Info($"TextStampCommitted: mode={mode}; pointerSource={_pointerSource}; uv={uv}; pixel={px},{py}; {DescribeMirrorTarget(texture, mirrorTarget)}; textLength={NormalizeTextStampValue(_textStampValue).Length}; fontSize={Mathf.RoundToInt(_textSize)}; rotation={Mathf.RoundToInt(_textRotation)}; color={ColorToHex(_brushColor)}; opacity={_brushOpacity:0.##}; generatedTexture={stampTexture?.width ?? 0}x{stampTexture?.height ?? 0}; stampSize={Mathf.RoundToInt(stampSize.x)}x{Mathf.RoundToInt(stampSize.y)}");
+    }
+
+    private void LogTextStampSkipped(string mode, string reason)
+    {
+        var key = $"skipped|mode={mode}|reason={reason}|textLength={NormalizeTextStampValue(_textStampValue).Length}|color={ColorToHex(_brushColor)}";
+        if (Time.unscaledTime - _lastTextPreviewLogTime < 0.75f && string.Equals(key, _lastTextPreviewLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastTextPreviewLogTime = Time.unscaledTime;
+        _lastTextPreviewLogKey = key;
+        DrawableSuitsDiagnostics.Info($"TextStampSkipped: {key}; pointerSource={_pointerSource}; cursor={_cursor}");
     }
 
     private string CurrentDecalName()
@@ -4154,9 +4674,9 @@ internal sealed class SuitEditorController : MonoBehaviour
         var mirrorTarget = overPreview && texture != null ? ResolveUvMirrorTarget(texture, uv, false) : CreateMirrorTargetShell("TextureFallback");
         LogPaintAttemptIfNeeded("paint input", overPreview, uvAvailable, uv, texture, mirrorTarget, !_strokeActive);
 
-        if (_tool == EditorTool.Decal)
+        if (IsPlacementTool(_tool))
         {
-            HandleSingleDecalStampInput(texture, overPreview, uv, mirrorTarget, "TextureFallback");
+            HandleSinglePlacementStampInput(texture, overPreview, uv, mirrorTarget, "TextureFallback");
             return;
         }
 
@@ -4220,9 +4740,9 @@ internal sealed class SuitEditorController : MonoBehaviour
         var mirrorTarget = hitAvailable && texture != null ? ResolveWorldMirrorTarget(texture, hit, false) : CreateMirrorTargetShell("WorldThirdPerson");
         LogPaintAttemptIfNeeded("world paint input", hitAvailable, hitAvailable, uv, texture, mirrorTarget, !_strokeActive);
 
-        if (_tool == EditorTool.Decal)
+        if (IsPlacementTool(_tool))
         {
-            HandleSingleDecalStampInput(texture, hitAvailable, uv, mirrorTarget, "WorldThirdPerson");
+            HandleSinglePlacementStampInput(texture, hitAvailable, uv, mirrorTarget, "WorldThirdPerson");
             return;
         }
 
@@ -4342,7 +4862,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawableSuitsDiagnostics.Info($"EyedropperMiss: mode={mode}; pointerSource={_pointerSource}; reason={reason}; cursor={_cursor}");
     }
 
-    private void HandleSingleDecalStampInput(Texture2D texture, bool targetAvailable, Vector2 uv, MirrorPaintTarget mirrorTarget, string mode)
+    private void HandleSinglePlacementStampInput(Texture2D texture, bool targetAvailable, Vector2 uv, MirrorPaintTarget mirrorTarget, string mode)
     {
         _strokeActive = false;
         if (!_decalStampArmed)
@@ -4358,16 +4878,24 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             if (string.Equals(mode, "WorldThirdPerson", StringComparison.OrdinalIgnoreCase))
             {
-                SetStatus("Aim at your visible suit to stamp the decal.", false);
+                SetStatus(_tool == EditorTool.Text ? "Aim at your visible suit to stamp text." : "Aim at your visible suit to stamp the decal.", false);
             }
             return;
         }
 
-        if (_loadedDecal == null)
+        if (!TryGetActivePlacementStamp(out var stampTexture, out var failureReason))
         {
-            WarnMissingDecal($"{mode} stamp");
-            _tool = EditorTool.Paint;
-            UpdateToolButtons();
+            if (_tool == EditorTool.Decal)
+            {
+                WarnMissingDecal($"{mode} stamp");
+                _tool = EditorTool.Paint;
+                UpdateToolButtons();
+            }
+            else
+            {
+                SetStatus("Enter text before stamping.", false);
+                LogTextStampSkipped(mode, failureReason);
+            }
             return;
         }
 
@@ -4375,7 +4903,14 @@ internal sealed class SuitEditorController : MonoBehaviour
         _redo.Clear();
         if (PaintAtCursor(texture, uv, mirrorTarget))
         {
-            LogDecalStampCommitted(mode, texture, uv, mirrorTarget);
+            if (_tool == EditorTool.Text)
+            {
+                LogTextStampCommitted(mode, texture, uv, mirrorTarget, stampTexture);
+            }
+            else
+            {
+                LogDecalStampCommitted(mode, texture, uv, mirrorTarget);
+            }
         }
     }
     private void LogPaintAttemptIfNeeded(string reason, bool overPreview, bool uvAvailable, Vector2 uv, Texture2D texture, MirrorPaintTarget mirrorTarget, bool force)
@@ -4495,6 +5030,14 @@ internal sealed class SuitEditorController : MonoBehaviour
                 }
                 _strokeActive = false;
                 break;
+            case EditorTool.Text:
+                changed = ApplyTextStamp(texture, uv, false, touchedPixels);
+                if (applyMirror)
+                {
+                    changed |= ApplyTextStamp(texture, mirrorTarget.Uv, true, touchedPixels);
+                }
+                _strokeActive = false;
+                break;
             default:
                 changed = false;
                 break;
@@ -4611,31 +5154,45 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
-        return CompositeDecal(target, _loadedDecal, uv, _decalSize, mirrored ? -_decalRotation : _decalRotation, _brushOpacity, mirrored, touchedPixels);
+        return CompositePlacementStamp(target, _loadedDecal, uv, _decalSize, mirrored ? -_decalRotation : _decalRotation, _brushOpacity, mirrored, touchedPixels);
     }
 
-    private bool CompositeDecal(Texture2D target, Texture2D decal, Vector2 uv, float decalSize, float decalRotation, float opacity, bool flipHorizontal = false, HashSet<int> touchedPixels = null)
+    private bool ApplyTextStamp(Texture2D target, Vector2 uv, bool mirrored = false, HashSet<int> touchedPixels = null)
     {
-        if (target == null || decal == null)
+        if (!TryGetTextStampTexture(out var stampTexture, out var failureReason))
+        {
+            LogTextStampSkipped("ApplyTextStamp", failureReason);
+            return false;
+        }
+
+        return CompositePlacementStamp(target, stampTexture, uv, _textSize, mirrored ? -_textRotation : _textRotation, _brushOpacity, mirrored, touchedPixels);
+    }
+
+    private bool CompositePlacementStamp(Texture2D target, Texture2D stamp, Vector2 uv, float stampHeight, float stampRotation, float opacity, bool flipHorizontal = false, HashSet<int> touchedPixels = null)
+    {
+        if (target == null || stamp == null)
         {
             return false;
         }
 
         var centerX = Mathf.RoundToInt(uv.x * (target.width - 1));
         var centerY = Mathf.RoundToInt(uv.y * (target.height - 1));
-        var size = Mathf.RoundToInt(decalSize);
-        var half = Mathf.Max(1, size / 2);
-        var radians = decalRotation * Mathf.Deg2Rad;
+        var stampSize = GetPlacementStampPixelSize(stamp);
+        var width = Mathf.Max(1f, stampSize.x);
+        var height = Mathf.Max(1f, _tool == EditorTool.Text ? stampSize.y : stampHeight);
+        var halfWidth = Mathf.Max(1, Mathf.CeilToInt(width * 0.5f));
+        var halfHeight = Mathf.Max(1, Mathf.CeilToInt(height * 0.5f));
+        var radians = stampRotation * Mathf.Deg2Rad;
         var cos = Mathf.Cos(radians);
         var sin = Mathf.Sin(radians);
         var changed = false;
 
-        for (var y = -half; y <= half; y++)
+        for (var y = -halfHeight; y <= halfHeight; y++)
         {
-            for (var x = -half; x <= half; x++)
+            for (var x = -halfWidth; x <= halfWidth; x++)
             {
-                var u = (x * cos - y * sin) / size + 0.5f;
-                var v = (x * sin + y * cos) / size + 0.5f;
+                var u = (x * cos - y * sin) / width + 0.5f;
+                var v = (x * sin + y * cos) / height + 0.5f;
                 if (u < 0f || u > 1f || v < 0f || v > 1f)
                 {
                     continue;
@@ -4652,8 +5209,8 @@ internal sealed class SuitEditorController : MonoBehaviour
                     u = 1f - u;
                 }
 
-                var decalColor = decal.GetPixelBilinear(u, v);
-                if (decalColor.a <= 0.01f)
+                var stampColor = stamp.GetPixelBilinear(u, v);
+                if (stampColor.a <= 0.01f)
                 {
                     continue;
                 }
@@ -4664,7 +5221,7 @@ internal sealed class SuitEditorController : MonoBehaviour
                 }
 
                 var existing = target.GetPixel(tx, ty);
-                target.SetPixel(tx, ty, Color.Lerp(existing, decalColor, decalColor.a * Mathf.Clamp01(opacity)));
+                target.SetPixel(tx, ty, Color.Lerp(existing, stampColor, stampColor.a * Mathf.Clamp01(opacity)));
                 changed = true;
             }
         }

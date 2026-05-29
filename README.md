@@ -5,9 +5,10 @@ DrawableSuits is a Lethal Company v81 BepInEx mod that lets players draw on suit
 ## Features
 
 - Default third-person paint editor: opening DrawableSuits switches to an editor camera around the local player so you can paint directly on the visible suit.
-- Compact side overlay with Paint, Erase, Decal, Eyedropper, a UI-only Mirror toggle, brush sliders, a hue/SV color picker, decal controls, design name, visible decal rows, visible saved-design rows, Undo, Redo, Reset, Apply, Save, Load, and Close.
-- Mirror painting duplicates Paint, Erase, and Decal edits onto the opposite suit surface using the editor's baked avatar mesh, without adding keyboard or controller shortcuts.
+- Compact side overlay with Paint, Erase, Decal, Text, Eyedropper, a UI-only Mirror toggle, brush sliders, a hue/SV color picker, decal/text controls, design name, visible decal rows, visible saved-design rows, Undo, Redo, Reset, Apply, Save, Load, and Close.
+- Mirror painting duplicates Paint, Erase, Decal, and Text edits onto the opposite suit surface using the editor's baked avatar mesh, without adding keyboard or controller shortcuts.
 - Decal placement preview: Decal mode shows a translucent live preview before stamping, then places one decal per click or right-trigger press.
+- Text stamping: Text mode previews typed single-line text on the suit, then bakes it into the texture once per click or right-trigger press.
 - Pause-menu entry point: use the `DrawableSuits` button below Resume.
 - Fallback shortcuts: `F8` on keyboard or `View/Back + Y` on controller.
 - Emergency open shortcut: `F10`, which opens the editor and does not toggle it closed.
@@ -32,9 +33,10 @@ Keyboard and mouse:
 - Pause menu `DrawableSuits`: primary open path.
 - `F8`: toggle editor.
 - `F10`: emergency open.
-- Left mouse: paint/erase continuously; in Decal mode, stamp one decal at the preview location.
+- Left mouse: paint/erase continuously; in Decal or Text mode, stamp one preview at the cursor location.
+- Text: click the `Text` UI button, type up to 64 characters, then left-click the suit to stamp it. Text uses the current brush color and opacity.
 - Eyedropper: click the `Eyedropper` UI button, then left-click the suit to sample that texture color. It returns to the previous tool after one successful sample.
-- Mirror: click the `Mirror` UI button to duplicate paint, erase, and decal stamps onto the opposite suit surface.
+- Mirror: click the `Mirror` UI button to duplicate paint, erase, decal stamps, and text stamps onto the opposite suit surface.
 - Right mouse: orbit the third-person editor camera.
 - Mouse wheel: zoom the third-person camera.
 - Ctrl + mouse wheel: change brush size.
@@ -45,9 +47,10 @@ Controller:
 - `View/Back + Y`: open or close.
 - Left stick: move the editor cursor.
 - `A`: click the button, field, slider, or color picker region directly under the cursor.
+- Text: move the virtual cursor over the `Text` UI button and press `A`, type text with the UI field, then aim at the suit and press right trigger once to stamp it.
 - Eyedropper: move the virtual cursor over the `Eyedropper` UI button, press `A`, then aim at the suit and press right trigger once to sample a color. It returns to the previous tool after one successful sample.
 - Mirror: move the virtual cursor over the `Mirror` UI button and press `A`; there is no controller shortcut for this modifier.
-- Right trigger: paint/erase continuously; in Decal mode, stamp one decal at the preview location.
+- Right trigger: paint/erase continuously; in Decal or Text mode, stamp one preview at the cursor location.
 - Right stick or bumpers: orbit the third-person editor camera.
 - D-pad up/down: zoom the third-person editor camera.
 - `Y`: cycle Paint/Erase/Decal. Decal is skipped until a decal is selected.
@@ -103,7 +106,7 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.8 behavior:
+Expected 0.5.9 behavior:
 
 - Opening the editor shows a compact side overlay and a third-person camera view of the local player.
 - The diagnostics text should show `Preview mode: WorldThirdPerson` when the default path succeeds.
@@ -122,8 +125,10 @@ Expected 0.5.8 behavior:
 - The decal section has one `Refresh Decals` button. It refreshes decal and save rows and shows only a short status line.
 - In Decal mode with a selected decal, hovering over the suit shows a translucent preview and status `Previewing decal. Click/RT to stamp.`
 - Decal placement is single-shot: holding left mouse or RT places one decal until the input is released and pressed again.
+- In Text mode, the text input uses Unity's built-in Arial font, accepts one line up to 64 characters, and shows `Previewing text. Click/RT to stamp.` when the cursor is over a valid suit target.
+- Text is baked into the suit texture after stamping. It is not an editable layer after placement.
 - UV fallback mode shows a non-interactive rotated decal preview over the texture panel.
-- The `Mirror` button is a UI-only modifier. When it is orange, paint, erase, and decal stamps use a surface-map mirror target on the opposite side of the baked suit mesh in one undo action.
+- The `Mirror` button is a UI-only modifier. When it is orange, paint, erase, decal stamps, and text stamps use a surface-map mirror target on the opposite side of the baked suit mesh in one undo action.
 - Mirrored decal previews show both the primary and mirrored decal. The mirrored decal is horizontally flipped and uses inverse rotation.
 - UV fallback also uses the mesh mirror map when the clicked UV maps back to a suit triangle. If no mirror target is available, DrawableSuits applies the primary edit only and shows a short status.
 - The `Eyedropper` button is a UI-only one-shot tool. It samples the editable suit texture at the cursor hit point, updates the swatch, color picker, hex field, and brush color, then returns to the previous Paint, Erase, or Decal tool.
@@ -152,6 +157,7 @@ Troubleshooting:
 - If you cannot see the local suit in third person, check `diagnostics.log` for `WorldThirdPerson setup`, `WorldAvatarProxy updated`, and `WorldEditorCamera updated`.
 - If painting misses the suit, check `PaintAttempt` entries for `world paint input`, UV coordinates, and whether the cursor is over the editor panel.
 - If Eyedropper does not sample a color, check `EyedropperMiss` entries for whether the cursor was over the visible suit or UV preview. A successful sample logs `EyedropperSampled` with UV, pixel, sampled hex color, and return tool.
+- If Text does not preview or stamp, check that the text field is not empty, then search `diagnostics.log` for `TextPreviewUpdated`, `TextPreviewHidden`, `TextStampCommitted`, or `TextStampSkipped`.
 - If decals or saved designs do not appear, check `RefreshFileLists complete` and `ListRowsUpdated` entries.
 - If scan, inventory scroll, or item use still happen while the editor is open, check for `Global gameplay actions locked` and `Blocked PlayerControllerB` entries.
 - If keyboard or controller shortcuts do not open the editor, use the pause-menu `DrawableSuits` button.
@@ -164,6 +170,7 @@ Troubleshooting:
 
 - Third-person painting uses the suit mesh UVs from `RaycastHit.textureCoord`; unusual modded suit UV layouts may still make strokes appear somewhere unexpected.
 - Mirror mode uses a mesh surface map, so unusual or asymmetric meshes may skip the mirrored edit when no reliable opposite surface can be found.
+- Text stamps use Unity's built-in Arial font only in this version.
 - Cross-suit loading depends on UV compatibility.
 - Very large decal images are resized to the configured maximum texture size.
 - Multiplayer sync is designed for applied designs, not every brush stroke.
