@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.7
+
+- Replaced UV-axis mirror painting with anatomical surface-map mirroring in third-person mode.
+- Added mesh-based mirror lookup for UV fallback when the clicked UV maps to the suit mesh.
+- Updated mirrored decal previews and stamps to use the resolved opposite suit surface instead of `uv.x = 1 - uv.x`.
+- Added mirror diagnostics for source local point, reflected local point, selected mirror triangle, distance, and skipped mirror targets.
+
 ## 0.5.6
 
 - Added a UI-only `Mirror` toggle that duplicates Paint, Erase, and Decal edits across the suit texture's left-right UV axis.

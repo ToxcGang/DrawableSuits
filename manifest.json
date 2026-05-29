@@ -1,6 +1,6 @@
 {
   "name": "DrawableSuits",
-  "version_number": "0.5.6",
+  "version_number": "0.5.7",
   "website_url": "https://github.com/ToxcGang/DrawableSuits",
   "description": "Draw directly on your Lethal Company suit in a third-person in-game editor with decals, save/load, modded suit support, and multiplayer apply/save sync.",
   "dependencies": [

@@ -74,6 +74,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private string _lastPaintDiagnosticsKey = string.Empty;
     private float _lastMissingDecalWarningTime;
     private float _lastGameplayActionRelockLogTime;
+    private float _lastMirrorDiagnosticsTime;
+    private string _lastMirrorDiagnosticsKey = string.Empty;
 
     private static readonly string[] GameplayInputActionNames =
     {
@@ -169,6 +171,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private readonly List<RendererRestoreState> _rendererRestoreStates = new();
     private Texture2D _loadedDecal;
     private string _lastWorldProxyMeshSummary = "none";
+    private MirrorSurfaceMap _mirrorSurfaceMap;
+    private string _mirrorSurfaceMapKey = string.Empty;
 
     private GameObject _editorCanvasObject;
     private RectTransform _canvasRect;
@@ -262,6 +266,253 @@ internal sealed class SuitEditorController : MonoBehaviour
         internal Text Label;
         internal Image Image;
         internal int Index = -1;
+    }
+
+    private struct MirrorPaintTarget
+    {
+        internal bool Enabled;
+        internal bool Available;
+        internal Vector2 Uv;
+        internal Vector3 PrimaryLocalPoint;
+        internal Vector3 ReflectedLocalPoint;
+        internal Vector3 MirroredLocalPoint;
+        internal float Distance;
+        internal int TriangleIndex;
+        internal string Mode;
+        internal string Reason;
+    }
+
+    private struct MirrorLookupResult
+    {
+        internal Vector2 Uv;
+        internal Vector3 LocalPoint;
+        internal Vector3 ReflectedLocalPoint;
+        internal float Distance;
+        internal int TriangleIndex;
+        internal string Reason;
+    }
+
+    private sealed class MirrorSurfaceMap
+    {
+        private readonly MirrorTriangle[] _triangles;
+        private readonly Bounds _bounds;
+        private readonly float _mirrorPlaneX;
+        private readonly float _maxMirrorDistance;
+
+        internal string Key { get; }
+        internal int TriangleCount => _triangles.Length;
+        internal Bounds Bounds => _bounds;
+        internal float MirrorPlaneX => _mirrorPlaneX;
+
+        private MirrorSurfaceMap(string key, MirrorTriangle[] triangles, Bounds bounds)
+        {
+            Key = key;
+            _triangles = triangles;
+            _bounds = bounds;
+            _mirrorPlaneX = bounds.center.x;
+            _maxMirrorDistance = Mathf.Max(0.35f, bounds.size.magnitude * 0.28f);
+        }
+
+        internal static MirrorSurfaceMap Build(Mesh mesh, string key)
+        {
+            if (mesh == null || mesh.vertexCount == 0)
+            {
+                return null;
+            }
+
+            var vertices = mesh.vertices;
+            var uvs = mesh.uv;
+            if (uvs == null || uvs.Length < vertices.Length)
+            {
+                return null;
+            }
+
+            var triangles = new List<MirrorTriangle>();
+            var triangleOrdinal = 0;
+            var subMeshCount = Mathf.Max(1, mesh.subMeshCount);
+            for (var subMesh = 0; subMesh < subMeshCount; subMesh++)
+            {
+                var indices = mesh.GetTriangles(subMesh);
+                for (var i = 0; i + 2 < indices.Length; i += 3)
+                {
+                    var i0 = indices[i];
+                    var i1 = indices[i + 1];
+                    var i2 = indices[i + 2];
+                    if (i0 < 0 || i1 < 0 || i2 < 0 || i0 >= vertices.Length || i1 >= vertices.Length || i2 >= vertices.Length)
+                    {
+                        continue;
+                    }
+
+                    var a = vertices[i0];
+                    var b = vertices[i1];
+                    var c = vertices[i2];
+                    if (Vector3.Cross(b - a, c - a).sqrMagnitude < 0.0000001f)
+                    {
+                        continue;
+                    }
+
+                    var uv0 = uvs[i0];
+                    var uv1 = uvs[i1];
+                    var uv2 = uvs[i2];
+                    if (Mathf.Abs(Cross2D(uv1 - uv0, uv2 - uv0)) < 0.0000001f)
+                    {
+                        continue;
+                    }
+
+                    triangles.Add(new MirrorTriangle
+                    {
+                        A = a,
+                        B = b,
+                        C = c,
+                        UvA = uv0,
+                        UvB = uv1,
+                        UvC = uv2,
+                        Centroid = (a + b + c) / 3f,
+                        SubMesh = subMesh,
+                        TriangleIndex = triangleOrdinal
+                    });
+                    triangleOrdinal++;
+                }
+            }
+
+            return triangles.Count > 0 ? new MirrorSurfaceMap(key, triangles.ToArray(), mesh.bounds) : null;
+        }
+
+        internal bool TryMirrorFromLocalPoint(Vector3 primaryLocalPoint, out MirrorLookupResult result)
+        {
+            result = default;
+            if (_triangles.Length == 0)
+            {
+                result.Reason = "surface map empty";
+                return false;
+            }
+
+            var reflected = primaryLocalPoint;
+            reflected.x = (_mirrorPlaneX * 2f) - primaryLocalPoint.x;
+            var sourceSide = primaryLocalPoint.x - _mirrorPlaneX;
+            var targetSign = sourceSide > 0.001f ? -1 : sourceSide < -0.001f ? 1 : 0;
+            if (TryFindClosestTriangle(reflected, targetSign, true, out result))
+            {
+                result.ReflectedLocalPoint = reflected;
+                return true;
+            }
+
+            result.ReflectedLocalPoint = reflected;
+            if (string.IsNullOrWhiteSpace(result.Reason))
+            {
+                result.Reason = "no reliable opposite mirror target triangle";
+            }
+            return false;
+        }
+
+        internal bool TryLocalPointFromUv(Vector2 uv, out Vector3 localPoint, out int triangleIndex, out string reason)
+        {
+            localPoint = default;
+            triangleIndex = -1;
+            reason = string.Empty;
+            var bestArea = float.MaxValue;
+            var found = false;
+            for (var i = 0; i < _triangles.Length; i++)
+            {
+                var triangle = _triangles[i];
+                if (!TryBarycentric2D(uv, triangle.UvA, triangle.UvB, triangle.UvC, out var bary, 0.0015f))
+                {
+                    continue;
+                }
+
+                var area = Mathf.Abs(Cross2D(triangle.UvB - triangle.UvA, triangle.UvC - triangle.UvA));
+                if (area >= bestArea)
+                {
+                    continue;
+                }
+
+                bestArea = area;
+                localPoint = (triangle.A * bary.x) + (triangle.B * bary.y) + (triangle.C * bary.z);
+                triangleIndex = triangle.TriangleIndex;
+                found = true;
+            }
+
+            reason = found ? "uv mapped to source triangle" : "uv did not map to any mesh triangle";
+            return found;
+        }
+
+        private bool TryFindClosestTriangle(Vector3 reflectedLocalPoint, int targetSign, bool enforceDistance, out MirrorLookupResult result)
+        {
+            result = default;
+            var bestDistanceSqr = float.MaxValue;
+            var bestTriangle = default(MirrorTriangle);
+            var bestPoint = Vector3.zero;
+            var found = false;
+            for (var i = 0; i < _triangles.Length; i++)
+            {
+                var triangle = _triangles[i];
+                if (targetSign != 0)
+                {
+                    var side = triangle.Centroid.x - _mirrorPlaneX;
+                    if (side * targetSign < -0.01f)
+                    {
+                        continue;
+                    }
+                }
+
+                var closest = ClosestPointOnTriangle(reflectedLocalPoint, triangle.A, triangle.B, triangle.C);
+                var distanceSqr = (closest - reflectedLocalPoint).sqrMagnitude;
+                if (distanceSqr >= bestDistanceSqr)
+                {
+                    continue;
+                }
+
+                bestDistanceSqr = distanceSqr;
+                bestTriangle = triangle;
+                bestPoint = closest;
+                found = true;
+            }
+
+            if (!found)
+            {
+                result.Reason = targetSign == 0 ? "no triangle candidates" : "no opposite-side triangle candidates";
+                return false;
+            }
+
+            var distance = Mathf.Sqrt(bestDistanceSqr);
+            if (enforceDistance && distance > _maxMirrorDistance)
+            {
+                result.Distance = distance;
+                result.TriangleIndex = bestTriangle.TriangleIndex;
+                result.LocalPoint = bestPoint;
+                result.Reason = $"nearest candidate too far {distance:0.###}>{_maxMirrorDistance:0.###}";
+                return false;
+            }
+
+            if (!TryBarycentric3D(bestPoint, bestTriangle.A, bestTriangle.B, bestTriangle.C, out var bary))
+            {
+                result.Distance = distance;
+                result.TriangleIndex = bestTriangle.TriangleIndex;
+                result.LocalPoint = bestPoint;
+                result.Reason = "mirror triangle barycentric failed";
+                return false;
+            }
+
+            result.Uv = ClampUv((bestTriangle.UvA * bary.x) + (bestTriangle.UvB * bary.y) + (bestTriangle.UvC * bary.z));
+            result.LocalPoint = bestPoint;
+            result.Distance = distance;
+            result.TriangleIndex = bestTriangle.TriangleIndex;
+            result.Reason = "surface map";
+            return true;
+        }
+    }
+
+    private struct MirrorTriangle
+    {
+        internal Vector3 A;
+        internal Vector3 B;
+        internal Vector3 C;
+        internal Vector2 UvA;
+        internal Vector2 UvB;
+        internal Vector2 UvC;
+        internal Vector3 Centroid;
+        internal int SubMesh;
+        internal int TriangleIndex;
     }
 
     private struct WorldCameraState
@@ -2159,6 +2410,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             $"Editable texture: {DescribeEditableTexture()}",
             $"Preview UI texture: {DescribePreviewImageTexture()}",
             $"Mirror enabled: {_mirrorEnabled}",
+            $"Mirror map: {(_mirrorSurfaceMap != null ? $"{_mirrorSurfaceMap.TriangleCount} tris" : "none")}",
             $"UV fallback mode: {_uvFallbackMode}",
             $"World camera found: {_worldEditorCamera != null}",
             $"World avatar proxy found: {_worldAvatarRenderer != null}",
@@ -2828,7 +3080,8 @@ internal sealed class SuitEditorController : MonoBehaviour
                 return;
             }
 
-            ShowWorldDecalPlacementPreview(texture, hit.textureCoord);
+            var mirrorTarget = ResolveWorldMirrorTarget(texture, hit, false);
+            ShowWorldDecalPlacementPreview(texture, hit.textureCoord, mirrorTarget);
             return;
         }
 
@@ -2838,10 +3091,11 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        ShowUvDecalPlacementPreview(texture, uv);
+        var uvMirrorTarget = ResolveUvMirrorTarget(texture, uv, false);
+        ShowUvDecalPlacementPreview(texture, uv, uvMirrorTarget);
     }
 
-    private void ShowWorldDecalPlacementPreview(Texture2D sourceTexture, Vector2 uv)
+    private void ShowWorldDecalPlacementPreview(Texture2D sourceTexture, Vector2 uv, MirrorPaintTarget mirrorTarget)
     {
         if (_worldAvatarRenderer == null || _worldSourceRenderer == null || sourceTexture == null || _loadedDecal == null)
         {
@@ -2855,15 +3109,15 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        var key = BuildDecalPreviewKey("WorldThirdPerson", sourceTexture, uv);
+        var key = BuildDecalPreviewKey("WorldThirdPerson", sourceTexture, uv, mirrorTarget);
         if (!string.Equals(key, _lastDecalPreviewKey, StringComparison.Ordinal))
         {
             _decalPreviewTexture.SetPixels32(sourceTexture.GetPixels32());
-            var touchedPixels = _mirrorEnabled ? new HashSet<int>() : null;
+            var touchedPixels = mirrorTarget.Enabled && mirrorTarget.Available ? new HashSet<int>() : null;
             CompositeDecal(_decalPreviewTexture, _loadedDecal, uv, _decalSize, _decalRotation, Mathf.Clamp01(_brushOpacity * 0.62f), false, touchedPixels);
-            if (ShouldApplyMirror(sourceTexture, uv))
+            if (ShouldApplyMirror(sourceTexture, uv, mirrorTarget))
             {
-                CompositeDecal(_decalPreviewTexture, _loadedDecal, MirrorUv(uv), _decalSize, -_decalRotation, Mathf.Clamp01(_brushOpacity * 0.62f), true, touchedPixels);
+                CompositeDecal(_decalPreviewTexture, _loadedDecal, mirrorTarget.Uv, _decalSize, -_decalRotation, Mathf.Clamp01(_brushOpacity * 0.62f), true, touchedPixels);
             }
             _decalPreviewTexture.Apply(false, false);
             _lastDecalPreviewKey = key;
@@ -2896,11 +3150,11 @@ internal sealed class SuitEditorController : MonoBehaviour
             _uvMirrorDecalPreviewRect.gameObject.SetActive(false);
         }
 
-        SetDecalPreviewStatus();
-        LogDecalPreviewUpdated("WorldThirdPerson", sourceTexture, uv, false);
+        SetDecalPreviewStatus(mirrorTarget);
+        LogDecalPreviewUpdated("WorldThirdPerson", sourceTexture, uv, mirrorTarget, false);
     }
 
-    private void ShowUvDecalPlacementPreview(Texture2D sourceTexture, Vector2 uv)
+    private void ShowUvDecalPlacementPreview(Texture2D sourceTexture, Vector2 uv, MirrorPaintTarget mirrorTarget)
     {
         if (_uvDecalPreviewRect == null || _uvDecalPreviewImage == null || _previewViewportRect == null || sourceTexture == null || _loadedDecal == null)
         {
@@ -2912,9 +3166,9 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         ConfigureUvDecalPreview(_uvDecalPreviewRect, _uvDecalPreviewImage, sourceTexture, uv, false);
 
-        if (ShouldApplyMirror(sourceTexture, uv))
+        if (ShouldApplyMirror(sourceTexture, uv, mirrorTarget))
         {
-            ConfigureUvDecalPreview(_uvMirrorDecalPreviewRect, _uvMirrorDecalPreviewImage, sourceTexture, MirrorUv(uv), true);
+            ConfigureUvDecalPreview(_uvMirrorDecalPreviewRect, _uvMirrorDecalPreviewImage, sourceTexture, mirrorTarget.Uv, true);
         }
         else if (_uvMirrorDecalPreviewRect != null)
         {
@@ -2922,9 +3176,9 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         _decalPreviewVisible = true;
-        _lastDecalPreviewKey = BuildDecalPreviewKey("TextureFallback", sourceTexture, uv);
-        SetDecalPreviewStatus();
-        LogDecalPreviewUpdated("TextureFallback", sourceTexture, uv, false);
+        _lastDecalPreviewKey = BuildDecalPreviewKey("TextureFallback", sourceTexture, uv, mirrorTarget);
+        SetDecalPreviewStatus(mirrorTarget);
+        LogDecalPreviewUpdated("TextureFallback", sourceTexture, uv, mirrorTarget, false);
     }
 
     private void ConfigureUvDecalPreview(RectTransform previewRect, RawImage previewImage, Texture2D sourceTexture, Vector2 uv, bool mirrored)
@@ -3087,22 +3341,31 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
     }
 
-    private string BuildDecalPreviewKey(string mode, Texture2D sourceTexture, Vector2 uv)
+    private string BuildDecalPreviewKey(string mode, Texture2D sourceTexture, Vector2 uv, MirrorPaintTarget mirrorTarget)
     {
         var px = sourceTexture != null ? Mathf.RoundToInt(uv.x * (sourceTexture.width - 1)) : -1;
         var py = sourceTexture != null ? Mathf.RoundToInt(uv.y * (sourceTexture.height - 1)) : -1;
-        return $"{_decalPreviewSerial}|{mode}|suit={_selectedSuitId}|pixel={px},{py}|mirror={DescribeMirrorTarget(sourceTexture, uv)}|size={Mathf.RoundToInt(_decalSize)}|rot={Mathf.RoundToInt(_decalRotation * 10f)}|opacity={Mathf.RoundToInt(_brushOpacity * 1000f)}|decal={CurrentDecalName()}|texture={sourceTexture?.width ?? 0}x{sourceTexture?.height ?? 0}";
+        return $"{_decalPreviewSerial}|{mode}|suit={_selectedSuitId}|pixel={px},{py}|mirror={DescribeMirrorTarget(sourceTexture, mirrorTarget)}|size={Mathf.RoundToInt(_decalSize)}|rot={Mathf.RoundToInt(_decalRotation * 10f)}|opacity={Mathf.RoundToInt(_brushOpacity * 1000f)}|decal={CurrentDecalName()}|texture={sourceTexture?.width ?? 0}x{sourceTexture?.height ?? 0}";
     }
 
-    private void SetDecalPreviewStatus()
+    private void SetDecalPreviewStatus(MirrorPaintTarget mirrorTarget)
     {
+        if (mirrorTarget.Enabled && !mirrorTarget.Available)
+        {
+            if (!_statusMessage.StartsWith("Previewing decal. Mirror target not found", StringComparison.OrdinalIgnoreCase))
+            {
+                SetStatus("Previewing decal. Mirror target not found; stamp affects primary only.", false);
+            }
+            return;
+        }
+
         if (!_statusMessage.StartsWith("Previewing decal", StringComparison.OrdinalIgnoreCase))
         {
             SetStatus("Previewing decal. Click/RT to stamp.", false);
         }
     }
 
-    private void LogDecalPreviewUpdated(string mode, Texture2D texture, Vector2 uv, bool force)
+    private void LogDecalPreviewUpdated(string mode, Texture2D texture, Vector2 uv, MirrorPaintTarget mirrorTarget, bool force)
     {
         if (texture == null)
         {
@@ -3111,7 +3374,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         var px = Mathf.RoundToInt(uv.x * (texture.width - 1));
         var py = Mathf.RoundToInt(uv.y * (texture.height - 1));
-        var key = $"updated|mode={mode}|pixel={px},{py}|mirror={DescribeMirrorTarget(texture, uv)}|size={Mathf.RoundToInt(_decalSize)}|rotation={Mathf.RoundToInt(_decalRotation)}|opacity={_brushOpacity:0.##}|decal={CurrentDecalName()}|preview={_decalPreviewTexture?.width ?? 0}x{_decalPreviewTexture?.height ?? 0}";
+        var key = $"updated|mode={mode}|pixel={px},{py}|mirror={DescribeMirrorTarget(texture, mirrorTarget)}|size={Mathf.RoundToInt(_decalSize)}|rotation={Mathf.RoundToInt(_decalRotation)}|opacity={_brushOpacity:0.##}|decal={CurrentDecalName()}|preview={_decalPreviewTexture?.width ?? 0}x{_decalPreviewTexture?.height ?? 0}";
         if (!force && Time.unscaledTime - _lastDecalPreviewLogTime < 0.5f && string.Equals(key, _lastDecalPreviewLogKey, StringComparison.Ordinal))
         {
             return;
@@ -3135,7 +3398,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawableSuitsDiagnostics.Info($"DecalPreviewHidden: {key}; pointerSource={_pointerSource}; cursor={_cursor}");
     }
 
-    private void LogDecalStampCommitted(string mode, Texture2D texture, Vector2 uv)
+    private void LogDecalStampCommitted(string mode, Texture2D texture, Vector2 uv, MirrorPaintTarget mirrorTarget)
     {
         if (texture == null)
         {
@@ -3144,7 +3407,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         var px = Mathf.RoundToInt(uv.x * (texture.width - 1));
         var py = Mathf.RoundToInt(uv.y * (texture.height - 1));
-        DrawableSuitsDiagnostics.Info($"DecalStampCommitted: mode={mode}; pointerSource={_pointerSource}; uv={uv}; pixel={px},{py}; {DescribeMirrorTarget(texture, uv)}; decal={CurrentDecalName()}; size={Mathf.RoundToInt(_decalSize)}; rotation={Mathf.RoundToInt(_decalRotation)}; opacity={_brushOpacity:0.##}; previewTexture={_decalPreviewTexture?.width ?? 0}x{_decalPreviewTexture?.height ?? 0}");
+        DrawableSuitsDiagnostics.Info($"DecalStampCommitted: mode={mode}; pointerSource={_pointerSource}; uv={uv}; pixel={px},{py}; {DescribeMirrorTarget(texture, mirrorTarget)}; decal={CurrentDecalName()}; size={Mathf.RoundToInt(_decalSize)}; rotation={Mathf.RoundToInt(_decalRotation)}; opacity={_brushOpacity:0.##}; previewTexture={_decalPreviewTexture?.width ?? 0}x{_decalPreviewTexture?.height ?? 0}");
     }
 
     private string CurrentDecalName()
@@ -3154,21 +3417,208 @@ internal sealed class SuitEditorController : MonoBehaviour
             : "none";
     }
 
-    private static Vector2 MirrorUv(Vector2 uv)
+    private MirrorPaintTarget ResolveWorldMirrorTarget(Texture2D texture, RaycastHit hit, bool allowStatus)
     {
-        return new Vector2(1f - Mathf.Clamp01(uv.x), Mathf.Clamp01(uv.y));
+        var target = CreateMirrorTargetShell("WorldThirdPerson");
+        if (!target.Enabled || texture == null || _worldPaintProxyObject == null)
+        {
+            return target;
+        }
+
+        if (!EnsureMirrorSurfaceMap(texture, "world mirror"))
+        {
+            target.Reason = "mirror surface map unavailable";
+            LogMirrorTarget(target, texture, hit.textureCoord, allowStatus);
+            return target;
+        }
+
+        var localPoint = _worldPaintProxyObject.transform.InverseTransformPoint(hit.point);
+        target.PrimaryLocalPoint = localPoint;
+        if (_mirrorSurfaceMap.TryMirrorFromLocalPoint(localPoint, out var result))
+        {
+            target.Available = true;
+            target.Uv = result.Uv;
+            target.ReflectedLocalPoint = result.ReflectedLocalPoint;
+            target.MirroredLocalPoint = result.LocalPoint;
+            target.Distance = result.Distance;
+            target.TriangleIndex = result.TriangleIndex;
+            target.Reason = result.Reason;
+        }
+        else
+        {
+            target.ReflectedLocalPoint = result.ReflectedLocalPoint;
+            target.MirroredLocalPoint = result.LocalPoint;
+            target.Distance = result.Distance;
+            target.TriangleIndex = result.TriangleIndex;
+            target.Reason = result.Reason;
+        }
+
+        LogMirrorTarget(target, texture, hit.textureCoord, allowStatus);
+        return target;
     }
 
-    private bool ShouldApplyMirror(Texture2D texture, Vector2 uv)
+    private MirrorPaintTarget ResolveUvMirrorTarget(Texture2D texture, Vector2 uv, bool allowStatus)
     {
-        if (!_mirrorEnabled || texture == null)
+        var target = CreateMirrorTargetShell("TextureFallback");
+        if (!target.Enabled || texture == null)
+        {
+            return target;
+        }
+
+        if (!EnsureMirrorSurfaceMap(texture, "uv fallback mirror"))
+        {
+            target.Reason = "mirror surface map unavailable";
+            LogMirrorTarget(target, texture, uv, allowStatus);
+            return target;
+        }
+
+        if (!_mirrorSurfaceMap.TryLocalPointFromUv(uv, out var localPoint, out var sourceTriangle, out var uvReason))
+        {
+            target.Reason = uvReason;
+            target.TriangleIndex = sourceTriangle;
+            LogMirrorTarget(target, texture, uv, allowStatus);
+            return target;
+        }
+
+        target.PrimaryLocalPoint = localPoint;
+        if (_mirrorSurfaceMap.TryMirrorFromLocalPoint(localPoint, out var result))
+        {
+            target.Available = true;
+            target.Uv = result.Uv;
+            target.ReflectedLocalPoint = result.ReflectedLocalPoint;
+            target.MirroredLocalPoint = result.LocalPoint;
+            target.Distance = result.Distance;
+            target.TriangleIndex = result.TriangleIndex;
+            target.Reason = $"{uvReason}; {result.Reason}";
+        }
+        else
+        {
+            target.ReflectedLocalPoint = result.ReflectedLocalPoint;
+            target.MirroredLocalPoint = result.LocalPoint;
+            target.Distance = result.Distance;
+            target.TriangleIndex = result.TriangleIndex;
+            target.Reason = result.Reason;
+        }
+
+        LogMirrorTarget(target, texture, uv, allowStatus);
+        return target;
+    }
+
+    private MirrorPaintTarget CreateMirrorTargetShell(string mode)
+    {
+        return new MirrorPaintTarget
+        {
+            Enabled = _mirrorEnabled,
+            Available = false,
+            Mode = mode,
+            Reason = _mirrorEnabled ? "not resolved" : "disabled"
+        };
+    }
+
+    private bool EnsureMirrorSurfaceMap(Texture2D texture, string context)
+    {
+        if (!_mirrorEnabled)
         {
             return false;
         }
 
-        var primary = TexturePixel(texture, uv);
-        var mirrored = TexturePixel(texture, MirrorUv(uv));
-        return primary.x != mirrored.x || primary.y != mirrored.y;
+        var source = _worldSourceRenderer ?? FindBestSuitRenderer(StartOfRound.Instance?.localPlayerController);
+        var mesh = _worldPaintMesh != null && _worldPaintMesh.vertexCount > 0 ? _worldPaintMesh : null;
+        Mesh temporaryMesh = null;
+        try
+        {
+            if (mesh == null && source != null)
+            {
+                temporaryMesh = new Mesh { name = "DrawableSuitsMirrorSurfaceBake" };
+                var previousEnabled = source.enabled;
+                try
+                {
+                    source.enabled = true;
+                    source.BakeMesh(temporaryMesh, true);
+                }
+                finally
+                {
+                    source.enabled = previousEnabled;
+                }
+
+                if (temporaryMesh.vertexCount > 0)
+                {
+                    temporaryMesh.RecalculateBounds();
+                    mesh = temporaryMesh;
+                }
+            }
+
+            if (mesh == null || mesh.vertexCount == 0)
+            {
+                InvalidateMirrorSurfaceMap("no mesh");
+                return false;
+            }
+
+            var key = $"{_selectedSuitId}|{source?.name ?? "unknown"}|v={mesh.vertexCount}|sub={mesh.subMeshCount}|bounds={mesh.bounds}|texture={texture?.width ?? 0}x{texture?.height ?? 0}";
+            if (_mirrorSurfaceMap != null && string.Equals(_mirrorSurfaceMapKey, key, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            _mirrorSurfaceMap = MirrorSurfaceMap.Build(mesh, key);
+            _mirrorSurfaceMapKey = _mirrorSurfaceMap?.Key ?? string.Empty;
+            if (_mirrorSurfaceMap == null)
+            {
+                DrawableSuitsDiagnostics.Warn($"MirrorSurfaceMap build failed. context={context}; key={key}; meshVertices={mesh.vertexCount}; subMeshes={mesh.subMeshCount}; uvCount={mesh.uv?.Length ?? 0}");
+                return false;
+            }
+
+            DrawableSuitsDiagnostics.Info($"MirrorSurfaceMap built. context={context}; key={key}; triangles={_mirrorSurfaceMap.TriangleCount}; bounds={_mirrorSurfaceMap.Bounds}; mirrorPlaneX={_mirrorSurfaceMap.MirrorPlaneX:0.###}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            DrawableSuitsDiagnostics.Exception($"MirrorSurfaceMap build failed. context={context}", ex);
+            InvalidateMirrorSurfaceMap("exception");
+            return false;
+        }
+        finally
+        {
+            if (temporaryMesh != null)
+            {
+                Destroy(temporaryMesh);
+            }
+        }
+    }
+
+    private void InvalidateMirrorSurfaceMap(string reason)
+    {
+        if (_mirrorSurfaceMap != null || !string.IsNullOrEmpty(_mirrorSurfaceMapKey))
+        {
+            DrawableSuitsDiagnostics.Info($"MirrorSurfaceMap invalidated. reason={reason}; previousKey={_mirrorSurfaceMapKey}");
+        }
+
+        _mirrorSurfaceMap = null;
+        _mirrorSurfaceMapKey = string.Empty;
+    }
+
+    private void LogMirrorTarget(MirrorPaintTarget target, Texture2D texture, Vector2 primaryUv, bool allowStatus)
+    {
+        if (!target.Enabled)
+        {
+            return;
+        }
+
+        var primaryPixel = TexturePixel(texture, primaryUv);
+        var mirroredPixel = target.Available ? TexturePixel(texture, target.Uv) : new Vector2Int(-1, -1);
+        var key = $"mode={target.Mode}|available={target.Available}|primary={primaryPixel.x},{primaryPixel.y}|mirrored={mirroredPixel.x},{mirroredPixel.y}|tri={target.TriangleIndex}|reason={target.Reason}";
+        if (Time.unscaledTime - _lastMirrorDiagnosticsTime < 0.75f && string.Equals(key, _lastMirrorDiagnosticsKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastMirrorDiagnosticsTime = Time.unscaledTime;
+        _lastMirrorDiagnosticsKey = key;
+        DrawableSuitsDiagnostics.Info($"MirrorSurfaceTarget: {key}; primaryUv={primaryUv}; mirroredUv={(target.Available ? target.Uv.ToString() : "none")}; primaryLocal={target.PrimaryLocalPoint}; reflectedLocal={target.ReflectedLocalPoint}; mirrorLocal={target.MirroredLocalPoint}; distance={target.Distance:0.###}; mapKey={_mirrorSurfaceMapKey}");
+        if (allowStatus && !target.Available)
+        {
+            SetStatus("Mirror target not found; applied primary only.", false);
+        }
     }
 
     private static Vector2Int TexturePixel(Texture2D texture, Vector2 uv)
@@ -3183,16 +3633,32 @@ internal sealed class SuitEditorController : MonoBehaviour
             Mathf.RoundToInt(Mathf.Clamp01(uv.y) * (texture.height - 1)));
     }
 
-    private string DescribeMirrorTarget(Texture2D texture, Vector2 uv)
+    private static bool ShouldApplyMirror(Texture2D texture, Vector2 primaryUv, MirrorPaintTarget mirrorTarget)
     {
-        if (!_mirrorEnabled)
+        if (texture == null || !mirrorTarget.Enabled || !mirrorTarget.Available)
+        {
+            return false;
+        }
+
+        var primary = TexturePixel(texture, primaryUv);
+        var mirrored = TexturePixel(texture, mirrorTarget.Uv);
+        return primary.x != mirrored.x || primary.y != mirrored.y;
+    }
+
+    private string DescribeMirrorTarget(Texture2D texture, MirrorPaintTarget mirrorTarget)
+    {
+        if (!mirrorTarget.Enabled)
         {
             return "mirrorEnabled=False";
         }
 
-        var mirroredUv = MirrorUv(uv);
-        var mirroredPixel = TexturePixel(texture, mirroredUv);
-        return $"mirrorEnabled=True; mirroredUv={mirroredUv}; mirroredPixel={mirroredPixel.x},{mirroredPixel.y}";
+        if (!mirrorTarget.Available)
+        {
+            return $"mirrorEnabled=True; mirrorMode=SurfaceMap; mirrorAvailable=False; reason={mirrorTarget.Reason}";
+        }
+
+        var mirroredPixel = TexturePixel(texture, mirrorTarget.Uv);
+        return $"mirrorEnabled=True; mirrorMode=SurfaceMap; mirroredUv={mirrorTarget.Uv}; mirroredPixel={mirroredPixel.x},{mirroredPixel.y}; mirrorDistance={mirrorTarget.Distance:0.###}; mirrorTriangle={mirrorTarget.TriangleIndex}; mirrorReason={mirrorTarget.Reason}";
     }
 
     private void HandleControllerCursor()
@@ -3647,11 +4113,12 @@ internal sealed class SuitEditorController : MonoBehaviour
         var texture = DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId);
         var uvAvailable = TryGetTexturePreviewUv(_cursor, out var uv);
         var overPreview = IsCursorOverPreviewViewport() && uvAvailable;
-        LogPaintAttemptIfNeeded("paint input", overPreview, uvAvailable, uv, texture, !_strokeActive);
+        var mirrorTarget = overPreview && texture != null ? ResolveUvMirrorTarget(texture, uv, false) : CreateMirrorTargetShell("TextureFallback");
+        LogPaintAttemptIfNeeded("paint input", overPreview, uvAvailable, uv, texture, mirrorTarget, !_strokeActive);
 
         if (_tool == EditorTool.Decal)
         {
-            HandleSingleDecalStampInput(texture, overPreview, uv, "TextureFallback");
+            HandleSingleDecalStampInput(texture, overPreview, uv, mirrorTarget, "TextureFallback");
             return;
         }
 
@@ -3678,7 +4145,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             _strokeActive = true;
         }
 
-        PaintAtCursor(texture, uv);
+        PaintAtCursor(texture, uv, mirrorTarget);
     }
 
     private void HandleWorldPaintingInput()
@@ -3697,11 +4164,12 @@ internal sealed class SuitEditorController : MonoBehaviour
         var texture = DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId);
         var hitAvailable = TryGetWorldPaintHit(out var hit, true);
         var uv = hitAvailable ? hit.textureCoord : default;
-        LogPaintAttemptIfNeeded("world paint input", hitAvailable, hitAvailable, uv, texture, !_strokeActive);
+        var mirrorTarget = hitAvailable && texture != null ? ResolveWorldMirrorTarget(texture, hit, false) : CreateMirrorTargetShell("WorldThirdPerson");
+        LogPaintAttemptIfNeeded("world paint input", hitAvailable, hitAvailable, uv, texture, mirrorTarget, !_strokeActive);
 
         if (_tool == EditorTool.Decal)
         {
-            HandleSingleDecalStampInput(texture, hitAvailable, uv, "WorldThirdPerson");
+            HandleSingleDecalStampInput(texture, hitAvailable, uv, mirrorTarget, "WorldThirdPerson");
             return;
         }
 
@@ -3737,10 +4205,10 @@ internal sealed class SuitEditorController : MonoBehaviour
             _strokeActive = true;
         }
 
-        PaintAtCursor(texture, uv);
+        PaintAtCursor(texture, uv, mirrorTarget);
     }
 
-    private void HandleSingleDecalStampInput(Texture2D texture, bool targetAvailable, Vector2 uv, string mode)
+    private void HandleSingleDecalStampInput(Texture2D texture, bool targetAvailable, Vector2 uv, MirrorPaintTarget mirrorTarget, string mode)
     {
         _strokeActive = false;
         if (!_decalStampArmed)
@@ -3771,12 +4239,12 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         SaveUndo();
         _redo.Clear();
-        if (PaintAtCursor(texture, uv))
+        if (PaintAtCursor(texture, uv, mirrorTarget))
         {
-            LogDecalStampCommitted(mode, texture, uv);
+            LogDecalStampCommitted(mode, texture, uv, mirrorTarget);
         }
     }
-    private void LogPaintAttemptIfNeeded(string reason, bool overPreview, bool uvAvailable, Vector2 uv, Texture2D texture, bool force)
+    private void LogPaintAttemptIfNeeded(string reason, bool overPreview, bool uvAvailable, Vector2 uv, Texture2D texture, MirrorPaintTarget mirrorTarget, bool force)
     {
         var pixel = "none";
         if (uvAvailable && texture != null)
@@ -3786,7 +4254,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             pixel = $"{px},{py}";
         }
 
-        var mirror = uvAvailable ? DescribeMirrorTarget(texture, uv) : $"mirrorEnabled={_mirrorEnabled}";
+        var mirror = uvAvailable ? DescribeMirrorTarget(texture, mirrorTarget) : $"mirrorEnabled={_mirrorEnabled}";
         var key = $"{reason}|tool={_tool}|over={overPreview}|uv={uvAvailable}:{uv}|pixel={pixel}|{mirror}|brush={Mathf.RoundToInt(_brushSize)}|opacity={_brushOpacity:0.##}|decal={_loadedDecal != null}|source={_pointerSource}";
         if (!force && Time.unscaledTime - _lastPaintDiagnosticsTime < 0.75f && string.Equals(key, _lastPaintDiagnosticsKey, StringComparison.Ordinal))
         {
@@ -3800,11 +4268,11 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawableSuitsDiagnostics.Info($"PaintAttempt: {key}; cursor={_cursor}; texture={DescribeEditableTexture()}; mouseDown={DrawableSuitsInput.IsLeftMousePressed()}; trigger={trigger}");
     }
 
-    private void LogPaintApplied(Texture2D texture, Vector2 uv)
+    private void LogPaintApplied(Texture2D texture, Vector2 uv, MirrorPaintTarget mirrorTarget)
     {
         var px = Mathf.RoundToInt(uv.x * (texture.width - 1));
         var py = Mathf.RoundToInt(uv.y * (texture.height - 1));
-        var key = $"applied|tool={_tool}|pixel={px},{py}|{DescribeMirrorTarget(texture, uv)}|brush={Mathf.RoundToInt(_brushSize)}|opacity={_brushOpacity:0.##}|decal={_loadedDecal != null}";
+        var key = $"applied|tool={_tool}|pixel={px},{py}|{DescribeMirrorTarget(texture, mirrorTarget)}|brush={Mathf.RoundToInt(_brushSize)}|opacity={_brushOpacity:0.##}|decal={_loadedDecal != null}";
         if (Time.unscaledTime - _lastPaintDiagnosticsTime < 0.5f && string.Equals(key, _lastPaintDiagnosticsKey, StringComparison.Ordinal))
         {
             return;
@@ -3857,7 +4325,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         return true;
     }
 
-    private bool PaintAtCursor(Texture2D texture, Vector2 uv)
+    private bool PaintAtCursor(Texture2D texture, Vector2 uv, MirrorPaintTarget mirrorTarget)
     {
         if (texture == null)
         {
@@ -3866,9 +4334,8 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
-        var applyMirror = ShouldApplyMirror(texture, uv);
+        var applyMirror = ShouldApplyMirror(texture, uv, mirrorTarget);
         var touchedPixels = applyMirror ? new HashSet<int>() : null;
-        var mirrorUv = MirrorUv(uv);
         var changed = true;
         switch (_tool)
         {
@@ -3876,21 +4343,21 @@ internal sealed class SuitEditorController : MonoBehaviour
                 changed = PaintCircle(texture, uv, _brushColor, _brushSize, _brushOpacity, touchedPixels);
                 if (applyMirror)
                 {
-                    changed |= PaintCircle(texture, mirrorUv, _brushColor, _brushSize, _brushOpacity, touchedPixels);
+                    changed |= PaintCircle(texture, mirrorTarget.Uv, _brushColor, _brushSize, _brushOpacity, touchedPixels);
                 }
                 break;
             case EditorTool.Erase:
                 changed = EraseCircle(texture, uv, _brushSize, _brushOpacity, touchedPixels);
                 if (applyMirror)
                 {
-                    changed |= EraseCircle(texture, mirrorUv, _brushSize, _brushOpacity, touchedPixels);
+                    changed |= EraseCircle(texture, mirrorTarget.Uv, _brushSize, _brushOpacity, touchedPixels);
                 }
                 break;
             case EditorTool.Decal:
                 changed = ApplyDecal(texture, uv, false, touchedPixels);
                 if (applyMirror)
                 {
-                    changed |= ApplyDecal(texture, mirrorUv, true, touchedPixels);
+                    changed |= ApplyDecal(texture, mirrorTarget.Uv, true, touchedPixels);
                 }
                 _strokeActive = false;
                 break;
@@ -3916,7 +4383,12 @@ internal sealed class SuitEditorController : MonoBehaviour
             UseTexturePreview("PaintAtCursor", false);
         }
 
-        LogPaintApplied(texture, uv);
+        if (_mirrorEnabled && !mirrorTarget.Available)
+        {
+            SetStatus("Mirror target not found; applied primary only.", false);
+        }
+
+        LogPaintApplied(texture, uv, mirrorTarget);
         UpdateBrushIndicator();
         return true;
     }
@@ -4074,6 +4546,119 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         return touchedPixels.Add((y * texture.width) + x);
+    }
+
+    private static Vector2 ClampUv(Vector2 uv)
+    {
+        return new Vector2(Mathf.Clamp01(uv.x), Mathf.Clamp01(uv.y));
+    }
+
+    private static float Cross2D(Vector2 a, Vector2 b)
+    {
+        return (a.x * b.y) - (a.y * b.x);
+    }
+
+    private static bool TryBarycentric2D(Vector2 p, Vector2 a, Vector2 b, Vector2 c, out Vector3 barycentric, float epsilon)
+    {
+        barycentric = default;
+        var v0 = b - a;
+        var v1 = c - a;
+        var v2 = p - a;
+        var den = Cross2D(v0, v1);
+        if (Mathf.Abs(den) < 0.0000001f)
+        {
+            return false;
+        }
+
+        var v = Cross2D(v2, v1) / den;
+        var w = Cross2D(v0, v2) / den;
+        var u = 1f - v - w;
+        if (u < -epsilon || v < -epsilon || w < -epsilon || u > 1f + epsilon || v > 1f + epsilon || w > 1f + epsilon)
+        {
+            return false;
+        }
+
+        barycentric = new Vector3(u, v, w);
+        return true;
+    }
+
+    private static bool TryBarycentric3D(Vector3 p, Vector3 a, Vector3 b, Vector3 c, out Vector3 barycentric)
+    {
+        barycentric = default;
+        var v0 = b - a;
+        var v1 = c - a;
+        var v2 = p - a;
+        var d00 = Vector3.Dot(v0, v0);
+        var d01 = Vector3.Dot(v0, v1);
+        var d11 = Vector3.Dot(v1, v1);
+        var d20 = Vector3.Dot(v2, v0);
+        var d21 = Vector3.Dot(v2, v1);
+        var denom = (d00 * d11) - (d01 * d01);
+        if (Mathf.Abs(denom) < 0.0000001f)
+        {
+            return false;
+        }
+
+        var v = ((d11 * d20) - (d01 * d21)) / denom;
+        var w = ((d00 * d21) - (d01 * d20)) / denom;
+        var u = 1f - v - w;
+        barycentric = new Vector3(u, v, w);
+        return true;
+    }
+
+    private static Vector3 ClosestPointOnTriangle(Vector3 point, Vector3 a, Vector3 b, Vector3 c)
+    {
+        var ab = b - a;
+        var ac = c - a;
+        var ap = point - a;
+        var d1 = Vector3.Dot(ab, ap);
+        var d2 = Vector3.Dot(ac, ap);
+        if (d1 <= 0f && d2 <= 0f)
+        {
+            return a;
+        }
+
+        var bp = point - b;
+        var d3 = Vector3.Dot(ab, bp);
+        var d4 = Vector3.Dot(ac, bp);
+        if (d3 >= 0f && d4 <= d3)
+        {
+            return b;
+        }
+
+        var vc = (d1 * d4) - (d3 * d2);
+        if (vc <= 0f && d1 >= 0f && d3 <= 0f)
+        {
+            var v = d1 / (d1 - d3);
+            return a + (ab * v);
+        }
+
+        var cp = point - c;
+        var d5 = Vector3.Dot(ab, cp);
+        var d6 = Vector3.Dot(ac, cp);
+        if (d6 >= 0f && d5 <= d6)
+        {
+            return c;
+        }
+
+        var vb = (d5 * d2) - (d1 * d6);
+        if (vb <= 0f && d2 >= 0f && d6 <= 0f)
+        {
+            var w = d2 / (d2 - d6);
+            return a + (ac * w);
+        }
+
+        var va = (d3 * d6) - (d5 * d4);
+        if (va <= 0f && (d4 - d3) >= 0f && (d5 - d6) >= 0f)
+        {
+            var w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+            return b + ((c - b) * w);
+        }
+
+        var denom = 1f / (va + vb + vc);
+        var vFace = vb * denom;
+        var wFace = vc * denom;
+        return a + (ab * vFace) + (ac * wFace);
     }
 
     private void SaveUndo()
@@ -4297,6 +4882,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         _redo.Clear();
         DrawableSuitsDiagnostics.Info($"SelectSuit selected suitId={_selectedSuitId}; name={DrawableSuitsPlugin.Registry.GetSuitName(_selectedSuitId)}");
         InvalidateDecalPreview("select suit");
+        InvalidateMirrorSurfaceMap("select suit");
         RefreshEditorReadiness("after select suit");
         UpdateUiState();
         TryRebuildPreviewForCurrentReadiness("SelectSuit");
@@ -5165,6 +5751,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private void DestroyWorldThirdPersonPreview(bool restoreRenderers)
     {
         DestroyDecalPlacementPreviewResources();
+        InvalidateMirrorSurfaceMap("destroy world third-person preview");
         if (_worldEditorCamera != null)
         {
             _worldEditorCamera.enabled = false;
