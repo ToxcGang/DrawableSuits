@@ -56,6 +56,20 @@ internal sealed class SuitEditorController : MonoBehaviour
         public Vector3 Center;
         public float Height;
         public float Side;
+        public float XOffset;
+    }
+
+    private sealed class VanillaPresetCorrectionStats
+    {
+        public int HelmetToTorso;
+        public int OtherToTorso;
+        public int ArmStrapToTorso;
+        public int OtherToArm;
+
+        public override string ToString()
+        {
+            return $"helmetToTorso={HelmetToTorso},otherToTorso={OtherToTorso},armStrapToTorso={ArmStrapToTorso},otherToArm={OtherToArm}";
+        }
     }
 
     [Serializable]
@@ -4669,13 +4683,15 @@ internal sealed class SuitEditorController : MonoBehaviour
                     UsedBones = usedBones,
                     Center = region.Center,
                     Height = region.Height,
-                    Side = region.Side
+                    Side = region.Side,
+                    XOffset = region.XOffset
                 });
                 allTriangleCount++;
             }
         }
 
         var rawCounts = CountPartTriangleRecords(records);
+        var vanillaCorrectionSummary = useVanillaPreset ? ApplyVanillaHumanoidPresetCorrections(records) : "none";
         var cleanupSummary = CleanupPartTriangleRecords(records);
         var cleanedCounts = CountPartTriangleRecords(records);
         foreach (var record in records)
@@ -4722,7 +4738,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             countParts.Add($"{part}=triangles:{GetPartTriangleCount(part)},pixels:{GetPartMaskPixelCount(part)}");
         }
-        DrawableSuitsDiagnostics.Info($"PartClassifierBuilt[{context}]: source={_partClassifierSource}; fingerprint={fingerprint}; presetMatch={(useConfigPreset ? configPresetName : useVanillaPreset ? vanillaPresetReason : "none")}; configPresetTriangles={configPresetTriangles}; vanillaPresetTriangles={vanillaPresetTriangles}; renderer={source.name}; texture={texture.width}x{texture.height}; overlap={_partUvOverlapDetected}; raw={DescribePartCounts(rawCounts)}; cleaned={DescribePartCounts(cleanedCounts)}; bounds={DescribePartBounds(records)}; sanity={cleanupSummary}; helmetRecoveredByTopCap={recoveredHelmetByGeometry}; weakOrAmbiguousBoneTriangles={weakOrAmbiguousBoneTriangles}; bones={DescribeTopMappedBones(source, bones)}; {string.Join("; ", countParts)}");
+        DrawableSuitsDiagnostics.Info($"PartClassifierBuilt[{context}]: source={_partClassifierSource}; fingerprint={fingerprint}; presetMatch={(useConfigPreset ? configPresetName : useVanillaPreset ? vanillaPresetReason : "none")}; configPresetTriangles={configPresetTriangles}; vanillaPresetTriangles={vanillaPresetTriangles}; renderer={source.name}; texture={texture.width}x{texture.height}; overlap={_partUvOverlapDetected}; raw={DescribePartCounts(rawCounts)}; cleaned={DescribePartCounts(cleanedCounts)}; bounds={DescribePartBounds(records)}; components={DescribePartComponentRanges(records)}; sanity={cleanupSummary}; vanillaCorrections={vanillaCorrectionSummary}; helmetRecoveredByTopCap={recoveredHelmetByGeometry}; weakOrAmbiguousBoneTriangles={weakOrAmbiguousBoneTriangles}; bones={DescribeTopMappedBones(source, bones)}; {string.Join("; ", countParts)}");
         UpdatePartButtons();
     }
 
@@ -5004,14 +5020,22 @@ internal sealed class SuitEditorController : MonoBehaviour
             bonePart = ClassifyTriangleByBones(weights, bones, a, b, c, out bestBoneScore);
         }
 
-        if (region.Height >= 0.74f && region.Side <= 0.68f)
-        {
-            return SuitPart.Helmet;
-        }
-
         if (bonePart != SuitPart.Other && bestBoneScore >= 0.16f)
         {
             usedBones = true;
+            if (bonePart == SuitPart.Torso && VanillaBonePartFitsRegion(bonePart, region))
+            {
+                return SuitPart.Torso;
+            }
+
+            if ((bonePart == SuitPart.LeftArm || bonePart == SuitPart.RightArm)
+                && IsVanillaCentralUpperBodyOrStrap(region)
+                && bestBoneScore < 0.55f)
+            {
+                weakOrAmbiguousBone = true;
+                return SuitPart.Torso;
+            }
+
             if (VanillaBonePartFitsRegion(bonePart, region))
             {
                 return bonePart;
@@ -5022,6 +5046,11 @@ internal sealed class SuitEditorController : MonoBehaviour
         else if (bestBoneScore > 0.001f)
         {
             weakOrAmbiguousBone = true;
+        }
+
+        if (IsVanillaStrictHelmetRegion(region))
+        {
+            return SuitPart.Helmet;
         }
 
         return geometryPart;
@@ -5058,7 +5087,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private static SuitPart ClassifyVanillaRegion(TriangleRegion region)
     {
-        if (region.Height >= 0.74f && region.Side <= 0.68f)
+        if (IsVanillaStrictHelmetRegion(region))
         {
             return SuitPart.Helmet;
         }
@@ -5068,12 +5097,17 @@ internal sealed class SuitEditorController : MonoBehaviour
             return region.XOffset <= 0f ? SuitPart.LeftLeg : SuitPart.RightLeg;
         }
 
-        if (region.Height >= 0.32f && region.Height <= 0.76f && region.Side >= 0.58f)
+        if (IsVanillaCentralUpperBodyOrStrap(region))
+        {
+            return SuitPart.Torso;
+        }
+
+        if (region.Height >= 0.30f && region.Height <= 0.80f && region.Side >= 0.62f)
         {
             return region.XOffset <= 0f ? SuitPart.LeftArm : SuitPart.RightArm;
         }
 
-        if (region.Height >= 0.30f && region.Height <= 0.78f && region.Side <= 0.70f)
+        if (region.Height >= 0.30f && region.Height <= 0.84f && region.Side <= 0.76f)
         {
             return SuitPart.Torso;
         }
@@ -5086,18 +5120,189 @@ internal sealed class SuitEditorController : MonoBehaviour
         switch (part)
         {
             case SuitPart.Helmet:
-                return region.Height >= 0.70f && region.Side <= 0.78f;
+                return region.Height >= 0.80f && region.Side <= 0.78f;
             case SuitPart.Torso:
-                return region.Height >= 0.30f && region.Height <= 0.80f && region.Side <= 0.76f;
+                return region.Height >= 0.30f && region.Height <= 0.84f && region.Side <= 0.78f;
             case SuitPart.LeftArm:
             case SuitPart.RightArm:
-                return region.Height >= 0.20f && region.Height <= 0.78f && (region.Side >= 0.34f || region.Height >= 0.48f);
+                return region.Height >= 0.20f && region.Height <= 0.80f && !IsVanillaCentralUpperBodyOrStrap(region) && region.Side >= 0.48f;
             case SuitPart.LeftLeg:
             case SuitPart.RightLeg:
                 return region.Height <= 0.52f;
             default:
                 return false;
         }
+    }
+
+    private static bool IsVanillaStrictHelmetRegion(TriangleRegion region)
+    {
+        return region.Height >= 0.82f
+            && region.MaxHeight >= 0.86f
+            && region.MinHeight >= 0.74f
+            && region.Side <= 0.74f;
+    }
+
+    private static bool IsVanillaCentralUpperBodyOrStrap(TriangleRegion region)
+    {
+        return region.Height >= 0.44f
+            && region.Height <= 0.82f
+            && region.Side <= 0.72f;
+    }
+
+    private static bool IsVanillaArmStrapLeak(PartTriangleRecord record)
+    {
+        if (record == null || (record.Part != SuitPart.LeftArm && record.Part != SuitPart.RightArm))
+        {
+            return false;
+        }
+
+        if (record.Height < 0.46f || record.Height > 0.80f)
+        {
+            return false;
+        }
+
+        return record.Side <= 0.68f
+            || record.GeometryPart == SuitPart.Torso
+            || record.BonePart == SuitPart.Torso;
+    }
+
+    private static bool IsVanillaHelmetLeak(PartTriangleRecord record)
+    {
+        if (record == null || record.Part != SuitPart.Helmet)
+        {
+            return false;
+        }
+
+        return record.Height < 0.80f || record.Side > 0.80f;
+    }
+
+    private static bool IsVanillaTorsoAbsorbCandidate(PartTriangleRecord record)
+    {
+        if (record == null)
+        {
+            return false;
+        }
+
+        return record.Height >= 0.36f
+            && record.Height <= 0.84f
+            && record.Side <= 0.78f;
+    }
+
+    private static bool IsVanillaShoulderFragmentCandidate(PartTriangleRecord record)
+    {
+        if (record == null)
+        {
+            return false;
+        }
+
+        return record.Height >= 0.48f
+            && record.Height <= 0.82f
+            && record.Side > 0.78f
+            && record.Side <= 0.96f;
+    }
+
+    private static string ApplyVanillaHumanoidPresetCorrections(List<PartTriangleRecord> records)
+    {
+        if (records == null || records.Count == 0)
+        {
+            return "none";
+        }
+
+        var stats = new VanillaPresetCorrectionStats();
+        for (var i = 0; i < records.Count; i++)
+        {
+            var record = records[i];
+            if (IsVanillaHelmetLeak(record))
+            {
+                record.Part = SuitPart.Torso;
+                stats.HelmetToTorso++;
+                continue;
+            }
+
+            if (IsVanillaArmStrapLeak(record))
+            {
+                record.Part = SuitPart.Torso;
+                stats.ArmStrapToTorso++;
+                continue;
+            }
+
+            if (record.Part != SuitPart.Other)
+            {
+                continue;
+            }
+
+            if (IsVanillaTorsoAbsorbCandidate(record))
+            {
+                record.Part = SuitPart.Torso;
+                stats.OtherToTorso++;
+                continue;
+            }
+
+            if (IsVanillaShoulderFragmentCandidate(record))
+            {
+                record.Part = record.XOffset <= 0f ? SuitPart.LeftArm : SuitPart.RightArm;
+                stats.OtherToArm++;
+            }
+        }
+
+        var helmetComponents = BuildPartComponents(records, SuitPart.Helmet);
+        for (var componentIndex = 0; componentIndex < helmetComponents.Count; componentIndex++)
+        {
+            var component = helmetComponents[componentIndex];
+            if (component == null || component.Count == 0 || IsPlausibleVanillaHelmetComponent(records, component))
+            {
+                continue;
+            }
+
+            for (var i = 0; i < component.Count; i++)
+            {
+                var recordIndex = component[i];
+                if (recordIndex < 0 || recordIndex >= records.Count || records[recordIndex].Part != SuitPart.Helmet)
+                {
+                    continue;
+                }
+
+                records[recordIndex].Part = SuitPart.Torso;
+                stats.HelmetToTorso++;
+            }
+        }
+
+        return stats.ToString();
+    }
+
+    private static bool IsPlausibleVanillaHelmetComponent(List<PartTriangleRecord> records, List<int> component)
+    {
+        var minHeight = float.MaxValue;
+        var maxHeight = float.MinValue;
+        var averageHeight = 0f;
+        var maxSide = 0f;
+        var validCount = 0;
+        for (var i = 0; i < component.Count; i++)
+        {
+            var recordIndex = component[i];
+            if (recordIndex < 0 || recordIndex >= records.Count)
+            {
+                continue;
+            }
+
+            var record = records[recordIndex];
+            minHeight = Mathf.Min(minHeight, record.Height);
+            maxHeight = Mathf.Max(maxHeight, record.Height);
+            averageHeight += record.Height;
+            maxSide = Mathf.Max(maxSide, record.Side);
+            validCount++;
+        }
+
+        if (validCount == 0)
+        {
+            return false;
+        }
+
+        averageHeight /= validCount;
+        return maxHeight >= 0.86f
+            && averageHeight >= 0.82f
+            && minHeight >= 0.74f
+            && maxSide <= 0.82f;
     }
 
     private static SuitPart ClassifyTriangleByBounds(Bounds bounds, Vector3[] vertices, int a, int b, int c, out TriangleRegion region)
@@ -5360,6 +5565,56 @@ internal sealed class SuitEditorController : MonoBehaviour
             {
                 parts.Add($"{part}:tri={count},h={minHeight.ToString("0.00", CultureInfo.InvariantCulture)}-{maxHeight.ToString("0.00", CultureInfo.InvariantCulture)},sideMax={maxSide.ToString("0.00", CultureInfo.InvariantCulture)}");
             }
+        }
+
+        return string.Join("; ", parts);
+    }
+
+    private static string DescribePartComponentRanges(List<PartTriangleRecord> records)
+    {
+        if (records == null || records.Count == 0)
+        {
+            return "none";
+        }
+
+        var parts = new List<string>();
+        for (var partIndex = 0; partIndex < IsolatedSuitParts.Length; partIndex++)
+        {
+            var part = IsolatedSuitParts[partIndex];
+            var components = BuildPartComponents(records, part);
+            if (components.Count == 0)
+            {
+                parts.Add($"{part}:components=0");
+                continue;
+            }
+
+            components.Sort((left, right) => right.Count.CompareTo(left.Count));
+            var ranges = new List<string>();
+            var described = Mathf.Min(3, components.Count);
+            for (var componentIndex = 0; componentIndex < described; componentIndex++)
+            {
+                var component = components[componentIndex];
+                var minHeight = float.MaxValue;
+                var maxHeight = float.MinValue;
+                var maxSide = 0f;
+                for (var i = 0; i < component.Count; i++)
+                {
+                    var recordIndex = component[i];
+                    if (recordIndex < 0 || recordIndex >= records.Count)
+                    {
+                        continue;
+                    }
+
+                    var record = records[recordIndex];
+                    minHeight = Mathf.Min(minHeight, record.Height);
+                    maxHeight = Mathf.Max(maxHeight, record.Height);
+                    maxSide = Mathf.Max(maxSide, record.Side);
+                }
+
+                ranges.Add($"{component.Count}@h={minHeight.ToString("0.00", CultureInfo.InvariantCulture)}-{maxHeight.ToString("0.00", CultureInfo.InvariantCulture)},sideMax={maxSide.ToString("0.00", CultureInfo.InvariantCulture)}");
+            }
+
+            parts.Add($"{part}:components={components.Count}[{string.Join("|", ranges)}]");
         }
 
         return string.Join("; ", parts);

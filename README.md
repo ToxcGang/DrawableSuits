@@ -105,7 +105,7 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.3 behavior:
+Expected 0.5.4 behavior:
 
 - Opening the editor shows a compact side overlay and a third-person camera view of the local player.
 - The diagnostics text should show `Preview mode: WorldThirdPerson` when the default path succeeds.
@@ -128,13 +128,14 @@ Expected 0.5.3 behavior:
 - Part buttons default to `All`; selecting a region renders only that avatar proxy region in third person and restricts painting, erase, and decals to its UV mask.
 - Vanilla suits use `Preset:VanillaHumanoid` part classification keyed by renderer, mesh, material, and texture fingerprint. Unknown or modded suits fall back to `BonesPrimary+BoundsFallback` unless a matching JSON preset exists.
 - Selected third-person parts are rebuilt as compact proxy meshes, so hidden triangles and unused full-body vertices do not affect selected-part bounds, colliders, or visuals.
-- Part diagnostics list the mesh fingerprint, preset match result, raw/cleaned triangle counts, suspicious component counts, compact mesh vertex counts, selected bounds, UV pixel counts, and mapped bone names in `PartClassifierBuilt` / `WorldAvatarProxy updated`.
+- Part diagnostics list the mesh fingerprint, preset match result, raw/cleaned triangle counts, vanilla correction counters, connected-component ranges, compact mesh vertex counts, selected bounds, UV pixel counts, and mapped bone names in `PartClassifierBuilt` / `WorldAvatarProxy updated`.
+- Vanilla Helmet is limited to the compact head shell, Torso absorbs central chest/back/strap geometry, and the right arm should not include the chest strap.
 - UV fallback mode hides UV islands outside the selected part while preserving the same complete saved texture data.
 
 Troubleshooting:
 
 - If no decal preview appears, confirm a decal row is selected and Decal tool is active, then check `DecalPreviewUpdated` or `DecalPreviewHidden` diagnostics.
-- If Helmet, Torso, or another vanilla part shows unrelated fragments, confirm the installed package is 0.5.3 or newer and check `PartClassifierBuilt` for `source=Preset:VanillaHumanoid`.
+- If Helmet, Torso, or another vanilla part shows unrelated fragments, confirm the installed package is 0.5.4 or newer and check `PartClassifierBuilt` for `source=Preset:VanillaHumanoid`, `vanillaCorrections`, and `components`.
 - If a modded suit's parts are inaccurate, add a matching JSON preset in `PartPresets` or use `All`; unknown meshes intentionally fall back to automatic classification.
 - If a requested part is unavailable on a modded suit, it contained no classified visible geometry; use `All` or check `PartClassifierBuilt` diagnostics for triangle and mask counts.
 - If a part is selectable but painting does nothing, it may be visible-only with no editable UV pixels. The status line will warn that the geometry has no editable UV pixels.

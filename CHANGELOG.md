@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.4
+
+- Tightened the vanilla humanoid part preset so Helmet no longer absorbs upper torso geometry.
+- Moved central upper-body and strap geometry back into Torso before arm classification, preventing the right arm from including chest strap pieces.
+- Added vanilla preset correction diagnostics for `helmetToTorso`, `otherToTorso`, `armStrapToTorso`, `otherToArm`, and per-part connected-component ranges.
+- Preserved the improved vanilla leg classification from 0.5.3 while correcting Helmet, Torso, Arm, and Other cleanup behavior.
+
 ## 0.5.3
 
 - Added preset-based part classification for the vanilla Lethal Company humanoid suit, matched by renderer, mesh, material, and texture fingerprint.
