@@ -10,7 +10,6 @@ internal static class DrawableSuitsPaths
     public static string Textures => Path.Combine(Root, "Textures");
     public static string Decals => Path.Combine(Root, "Decals");
     public static string Logs => Path.Combine(Root, "Logs");
-    public static string PartPresets => Path.Combine(Root, "PartPresets");
 
     public static void EnsureCreated()
     {
@@ -19,6 +18,5 @@ internal static class DrawableSuitsPaths
         Directory.CreateDirectory(Textures);
         Directory.CreateDirectory(Decals);
         Directory.CreateDirectory(Logs);
-        Directory.CreateDirectory(PartPresets);
     }
 }

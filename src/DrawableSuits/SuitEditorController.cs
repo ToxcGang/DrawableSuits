@@ -31,88 +31,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         Decal
     }
 
-    private enum SuitPart
-    {
-        All,
-        Helmet,
-        Torso,
-        LeftArm,
-        RightArm,
-        LeftLeg,
-        RightLeg,
-        Other
-    }
-
-    private sealed class PartTriangleRecord
-    {
-        public int Submesh;
-        public int A;
-        public int B;
-        public int C;
-        public SuitPart Part;
-        public SuitPart GeometryPart;
-        public SuitPart BonePart;
-        public bool UsedBones;
-        public Vector3 Center;
-        public float Height;
-        public float Side;
-        public float XOffset;
-    }
-
-    private sealed class VanillaPresetCorrectionStats
-    {
-        public int HelmetToTorso;
-        public int OtherToTorso;
-        public int ArmStrapToTorso;
-        public int OtherToArm;
-
-        public override string ToString()
-        {
-            return $"helmetToTorso={HelmetToTorso},otherToTorso={OtherToTorso},armStrapToTorso={ArmStrapToTorso},otherToArm={OtherToArm}";
-        }
-    }
-
-    [Serializable]
-    private sealed class PartPresetFile
-    {
-        public string name = string.Empty;
-        public string rendererNameContains = string.Empty;
-        public string rendererPathContains = string.Empty;
-        public string materialNameContains = string.Empty;
-        public int vertexCount = 0;
-        public int triangleCount = 0;
-        public int textureWidth = 0;
-        public int textureHeight = 0;
-        public PartPresetAssignment[] parts = Array.Empty<PartPresetAssignment>();
-    }
-
-    [Serializable]
-    private sealed class PartPresetAssignment
-    {
-        public string part = string.Empty;
-        public int[] triangles = Array.Empty<int>();
-    }
-
-    private readonly struct TriangleRegion
-    {
-        public TriangleRegion(Vector3 center, float height, float minHeight, float maxHeight, float xOffset, float side)
-        {
-            Center = center;
-            Height = height;
-            MinHeight = minHeight;
-            MaxHeight = maxHeight;
-            XOffset = xOffset;
-            Side = side;
-        }
-
-        public Vector3 Center { get; }
-        public float Height { get; }
-        public float MinHeight { get; }
-        public float MaxHeight { get; }
-        public float XOffset { get; }
-        public float Side { get; }
-    }
-
     private readonly Stack<Color32[]> _undo = new();
     private readonly Stack<Color32[]> _redo = new();
     private readonly List<string> _designFiles = new();
@@ -125,7 +43,6 @@ internal sealed class SuitEditorController : MonoBehaviour
     private int _selectedDecalIndex = -1;
     private string _designName = "MyDrawableSuit";
     private EditorTool _tool = EditorTool.Paint;
-    private SuitPart _selectedPart = SuitPart.All;
     private Color _brushColor = Color.red;
     private float _brushSize = 16f;
     private float _brushOpacity = 1f;
@@ -188,17 +105,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         "SpeedCheat"
     };
 
-    private static readonly SuitPart[] IsolatedSuitParts =
-    {
-        SuitPart.Helmet,
-        SuitPart.Torso,
-        SuitPart.LeftArm,
-        SuitPart.RightArm,
-        SuitPart.LeftLeg,
-        SuitPart.RightLeg,
-        SuitPart.Other
-    };
-
     private readonly List<DisabledGameplayActionState> _disabledGameplayActions = new();
 
     private GameObject _previewRoot;
@@ -259,19 +165,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private int _decalListPage;
     private readonly List<RendererRestoreState> _rendererRestoreStates = new();
     private Texture2D _loadedDecal;
-    private readonly Dictionary<SuitPart, int[][]> _partTrianglesBySubmesh = new();
-    private readonly Dictionary<SuitPart, bool[]> _partUvMasks = new();
-    private readonly Dictionary<SuitPart, int> _partTriangleCounts = new();
-    private readonly Dictionary<SuitPart, int> _partMaskPixelCounts = new();
-    private readonly Dictionary<SuitPart, Button> _partButtons = new();
-    private Texture2D _partFilteredPreviewTexture;
-    private bool _partDataReady;
-    private bool _partUvOverlapDetected;
     private string _lastWorldProxyMeshSummary = "none";
-    private int _partDataTextureWidth;
-    private int _partDataTextureHeight;
-    private int _partDataSourceId;
-    private string _partClassifierSource = "none";
 
     private GameObject _editorCanvasObject;
     private RectTransform _canvasRect;
@@ -312,7 +206,6 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Button _paintButton;
     private Button _eraseButton;
     private Button _decalButton;
-    private Button _otherPartButton;
     private Button _applyButton;
     private Button _saveButton;
     private Button _loadButton;
@@ -863,7 +756,6 @@ internal sealed class SuitEditorController : MonoBehaviour
             _editorUiActions = null;
         }
 
-        ClearPartIsolationData();
     }
 
     private void Update()
@@ -932,8 +824,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         CaptureAndUnlockCursor();
         CaptureAndLockPlayerInput();
         _isOpen = true;
-        _selectedPart = SuitPart.All;
-        ClearPartIsolationData();
         _editorCanvasObject.SetActive(true);
         InitializePointerForOpen(source);
         RefreshFileLists();
@@ -1126,12 +1016,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             _selectedSuitId = localSuitId >= 0 ? localSuitId : FirstKnownSuitId();
         }
-        if (priorSelectedSuitId >= 0 && priorSelectedSuitId != _selectedSuitId)
-        {
-            _selectedPart = SuitPart.All;
-            ClearPartIsolationData();
-        }
-
         var player = StartOfRound.Instance?.localPlayerController;
         _hasLocalPlayer = player != null;
         _hasPlayerModel = player?.thisPlayerModel != null;
@@ -1166,8 +1050,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return "Diagnostics: " + string.Join("; ", missing);
         }
 
-        var overlapWarning = _partUvOverlapDetected && _selectedPart != SuitPart.All ? " Shared UV regions detected." : string.Empty;
-        return $"Ready. Preview: {_previewMode}. Editing: {PartDisplayName(_selectedPart)}.{overlapWarning}";
+        return $"Ready. Preview: {_previewMode}. Full-suit editing.";
     }
 
     private bool EnsureEditorCanvas(out string failureReason)
@@ -1261,30 +1144,19 @@ internal sealed class SuitEditorController : MonoBehaviour
         CreateAnchoredButton(panel.transform, "Use Current", new Rect(leftX + 90f, 282f, 112f, 34f), () => SelectSuit(DrawableSuitsPlugin.Registry.GetLocalSuitId()));
         CreateAnchoredButton(panel.transform, "Next", new Rect(leftX + 210f, 282f, 72f, 34f), () => SelectAdjacentSuit(1));
 
-        CreateAnchoredText(panel.transform, "PartHeader", "Part", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 326f, leftW, 24f), Color.white);
-        _partButtons[SuitPart.All] = CreateAnchoredButton(panel.transform, "All", new Rect(leftX, 354f, 62f, 30f), () => SelectPart(SuitPart.All));
-        _partButtons[SuitPart.Helmet] = CreateAnchoredButton(panel.transform, "Helmet", new Rect(leftX + 68f, 354f, 66f, 30f), () => SelectPart(SuitPart.Helmet));
-        _partButtons[SuitPart.Torso] = CreateAnchoredButton(panel.transform, "Torso", new Rect(leftX + 140f, 354f, 62f, 30f), () => SelectPart(SuitPart.Torso));
-        _otherPartButton = CreateAnchoredButton(panel.transform, "Other", new Rect(leftX + 208f, 354f, 66f, 30f), () => SelectPart(SuitPart.Other));
-        _partButtons[SuitPart.Other] = _otherPartButton;
-        _partButtons[SuitPart.LeftArm] = CreateAnchoredButton(panel.transform, "L Arm", new Rect(leftX, 390f, 62f, 30f), () => SelectPart(SuitPart.LeftArm));
-        _partButtons[SuitPart.RightArm] = CreateAnchoredButton(panel.transform, "R Arm", new Rect(leftX + 68f, 390f, 66f, 30f), () => SelectPart(SuitPart.RightArm));
-        _partButtons[SuitPart.LeftLeg] = CreateAnchoredButton(panel.transform, "L Leg", new Rect(leftX + 140f, 390f, 62f, 30f), () => SelectPart(SuitPart.LeftLeg));
-        _partButtons[SuitPart.RightLeg] = CreateAnchoredButton(panel.transform, "R Leg", new Rect(leftX + 208f, 390f, 66f, 30f), () => SelectPart(SuitPart.RightLeg));
+        CreateAnchoredText(panel.transform, "ToolHeader", "Tool", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 326f, leftW, 24f), Color.white);
+        _paintButton = CreateAnchoredButton(panel.transform, "Paint", new Rect(leftX, 354f, 84f, 34f), () => SetTool(EditorTool.Paint));
+        _eraseButton = CreateAnchoredButton(panel.transform, "Erase", new Rect(leftX + 92f, 354f, 84f, 34f), () => SetTool(EditorTool.Erase));
+        _decalButton = CreateAnchoredButton(panel.transform, "Decal", new Rect(leftX + 184f, 354f, 84f, 34f), () => SetTool(EditorTool.Decal));
 
-        CreateAnchoredText(panel.transform, "ToolHeader", "Tool", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 426f, leftW, 24f), Color.white);
-        _paintButton = CreateAnchoredButton(panel.transform, "Paint", new Rect(leftX, 454f, 84f, 34f), () => SetTool(EditorTool.Paint));
-        _eraseButton = CreateAnchoredButton(panel.transform, "Erase", new Rect(leftX + 92f, 454f, 84f, 34f), () => SetTool(EditorTool.Erase));
-        _decalButton = CreateAnchoredButton(panel.transform, "Decal", new Rect(leftX + 184f, 454f, 84f, 34f), () => SetTool(EditorTool.Decal));
+        CreateAnchoredText(panel.transform, "BrushHeader", "Brush", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 406f, leftW, 24f), Color.white);
+        _brushSizeLabel = CreateAnchoredText(panel.transform, "BrushSizeLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 436f, 94f, 24f), Color.white);
+        _brushSizeSlider = CreateAnchoredSlider(panel.transform, "BrushSize", 1f, 96f, _brushSize, new Rect(leftX + 100f, 438f, 174f, 24f), value => _brushSize = value);
+        _brushOpacityLabel = CreateAnchoredText(panel.transform, "BrushOpacityLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 470f, 94f, 24f), Color.white);
+        _brushOpacitySlider = CreateAnchoredSlider(panel.transform, "BrushOpacity", 0.05f, 1f, _brushOpacity, new Rect(leftX + 100f, 472f, 174f, 24f), value => _brushOpacity = value);
 
-        CreateAnchoredText(panel.transform, "BrushHeader", "Brush", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 506f, leftW, 24f), Color.white);
-        _brushSizeLabel = CreateAnchoredText(panel.transform, "BrushSizeLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 536f, 94f, 24f), Color.white);
-        _brushSizeSlider = CreateAnchoredSlider(panel.transform, "BrushSize", 1f, 96f, _brushSize, new Rect(leftX + 100f, 538f, 174f, 24f), value => _brushSize = value);
-        _brushOpacityLabel = CreateAnchoredText(panel.transform, "BrushOpacityLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 570f, 94f, 24f), Color.white);
-        _brushOpacitySlider = CreateAnchoredSlider(panel.transform, "BrushOpacity", 0.05f, 1f, _brushOpacity, new Rect(leftX + 100f, 572f, 174f, 24f), value => _brushOpacity = value);
-
-        CreateAnchoredText(panel.transform, "ColorHeader", "Color", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 610f, leftW, 24f), Color.white);
-        _colorPicker = CreateAnchoredColorPicker(panel.transform, new Rect(leftX, 634f, leftW, 104f), _brushColor, color =>
+        CreateAnchoredText(panel.transform, "ColorHeader", "Color", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 510f, leftW, 24f), Color.white);
+        _colorPicker = CreateAnchoredColorPicker(panel.transform, new Rect(leftX, 534f, leftW, 104f), _brushColor, color =>
         {
             _brushColor = color;
             UpdateColorUi();
@@ -1327,7 +1199,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         var fallbackPreview = CreateUiObject("PreviewViewport", panel.transform, typeof(RectTransform), typeof(Image));
         _previewViewportRect = fallbackPreview.GetComponent<RectTransform>();
-        SetAnchoredRect(_previewViewportRect, new Rect(leftX, 748f, 274f, 190f));
+        SetAnchoredRect(_previewViewportRect, new Rect(leftX, 648f, 274f, 190f));
         var previewBackground = fallbackPreview.GetComponent<Image>();
         previewBackground.color = new Color(0.025f, 0.028f, 0.032f, 1f);
         previewBackground.raycastTarget = true;
@@ -2252,7 +2124,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         SetButtonLabel(_uvFallbackButton, _uvFallbackMode ? "Use Third Person" : "Use UV Fallback");
 
         UpdateToolButtons();
-        UpdatePartButtons();
         UpdateLabels();
         UpdateColorUi();
     }
@@ -2263,8 +2134,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         return string.Join("\n", new[]
         {
             $"Selected suit id: {_selectedSuitId}",
-            $"Selected part: {PartDisplayName(_selectedPart)}",
-            $"Part classifier: {_partClassifierSource}; UV overlap: {_partUvOverlapDetected}",
             $"Suit count: {_knownSuitCount}",
             $"Local player found: {_hasLocalPlayer}",
             $"Player model found: {_hasPlayerModel}",
@@ -2411,75 +2280,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         SetToolButtonColor(_paintButton, _tool == EditorTool.Paint);
         SetToolButtonColor(_eraseButton, _tool == EditorTool.Erase);
         SetToolButtonColor(_decalButton, _tool == EditorTool.Decal);
-    }
-
-    private void UpdatePartButtons()
-    {
-        foreach (var entry in _partButtons)
-        {
-            var part = entry.Key;
-            var button = entry.Value;
-            if (button == null)
-            {
-                continue;
-            }
-
-            var hasTriangles = part == SuitPart.All || GetPartTriangleCount(part) > 0;
-            if (part == SuitPart.Other)
-            {
-                button.gameObject.SetActive(hasTriangles);
-            }
-
-            button.interactable = hasTriangles;
-            SetToolButtonColor(button, part == _selectedPart);
-        }
-    }
-
-    private void SelectPart(SuitPart part)
-    {
-        if (part != SuitPart.All && GetPartTriangleCount(part) <= 0)
-        {
-            SetStatus($"{PartDisplayName(part)} is not available on this suit.", false);
-            UpdateUiState();
-            return;
-        }
-
-        _selectedPart = part;
-        HideDecalPlacementPreview("part changed", false);
-        if (IsWorldThirdPersonMode)
-        {
-            UpdateWorldPaintProxy(true);
-        }
-        else
-        {
-            UseTexturePreview("part changed", true);
-        }
-
-        var warning = string.Empty;
-        if (part != SuitPart.All && GetPartMaskPixelCount(part) <= 0)
-        {
-            warning = " Visible geometry has no editable UV pixels.";
-        }
-        else if (_partUvOverlapDetected && part != SuitPart.All)
-        {
-            warning = " Shared UV pixels may also affect another part.";
-        }
-        SetStatus($"Editing: {PartDisplayName(part)}.{warning}", false);
-        DrawableSuitsDiagnostics.Info($"Suit part selected. part={part}; triangles={GetPartTriangleCount(part)}; maskPixels={GetPartMaskPixelCount(part)}; classifier={_partClassifierSource}; overlap={_partUvOverlapDetected}; mode={_previewMode}");
-        InvalidateDecalPreview("part changed");
-        UpdateUiState();
-    }
-
-    private static string PartDisplayName(SuitPart part)
-    {
-        switch (part)
-        {
-            case SuitPart.LeftArm: return "Left Arm";
-            case SuitPart.RightArm: return "Right Arm";
-            case SuitPart.LeftLeg: return "Left Leg";
-            case SuitPart.RightLeg: return "Right Leg";
-            default: return part.ToString();
-        }
     }
 
     private static void SetToolButtonColor(Button button, bool selected)
@@ -3001,12 +2801,6 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        if (!IsUvTargetInSelectedPart(texture, uv))
-        {
-            HideDecalPlacementPreview("uv outside selected part", false);
-            return;
-        }
-
         ShowUvDecalPlacementPreview(texture, uv);
     }
 
@@ -3069,19 +2863,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         RestoreWorldDecalPreviewMaterial();
-        if (_selectedPart != SuitPart.All && EnsureDecalPreviewTexture(sourceTexture))
-        {
-            _decalPreviewTexture.SetPixels32(sourceTexture.GetPixels32());
-            CompositeDecal(_decalPreviewTexture, _loadedDecal, uv, _decalSize, _decalRotation, Mathf.Clamp01(_brushOpacity * 0.62f));
-            _decalPreviewTexture.Apply(false, false);
-            _previewImage.texture = BuildFilteredPartPreviewTexture(_decalPreviewTexture);
-            _uvDecalPreviewRect.gameObject.SetActive(false);
-            _decalPreviewVisible = true;
-            _lastDecalPreviewKey = BuildDecalPreviewKey("TextureFallback", sourceTexture, uv);
-            SetDecalPreviewStatus();
-            LogDecalPreviewUpdated("TextureFallback", sourceTexture, uv, false);
-            return;
-        }
 
         var rect = _previewViewportRect.rect;
         var localX = Mathf.Lerp(rect.xMin, rect.xMax, uv.x);
@@ -3756,19 +3537,12 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         if (_tool == EditorTool.Decal)
         {
-            HandleSingleDecalStampInput(texture, overPreview && IsUvTargetInSelectedPart(texture, uv), uv, "TextureFallback");
+            HandleSingleDecalStampInput(texture, overPreview, uv, "TextureFallback");
             return;
         }
 
         if (!overPreview || texture == null)
         {
-            _strokeActive = false;
-            return;
-        }
-
-        if (!IsUvTargetInSelectedPart(texture, uv))
-        {
-            SetStatus($"Aim at the visible {PartDisplayName(_selectedPart)} UV region to paint.", false);
             _strokeActive = false;
             return;
         }
@@ -3898,7 +3672,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             pixel = $"{px},{py}";
         }
 
-        var key = $"{reason}|part={_selectedPart}|tool={_tool}|over={overPreview}|uv={uvAvailable}:{uv}|pixel={pixel}|allowed={(uvAvailable && texture != null ? IsUvTargetInSelectedPart(texture, uv).ToString() : "n/a")}|brush={Mathf.RoundToInt(_brushSize)}|opacity={_brushOpacity:0.##}|decal={_loadedDecal != null}|source={_pointerSource}";
+        var key = $"{reason}|tool={_tool}|over={overPreview}|uv={uvAvailable}:{uv}|pixel={pixel}|brush={Mathf.RoundToInt(_brushSize)}|opacity={_brushOpacity:0.##}|decal={_loadedDecal != null}|source={_pointerSource}";
         if (!force && Time.unscaledTime - _lastPaintDiagnosticsTime < 0.75f && string.Equals(key, _lastPaintDiagnosticsKey, StringComparison.Ordinal))
         {
             return;
@@ -3915,7 +3689,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         var px = Mathf.RoundToInt(uv.x * (texture.width - 1));
         var py = Mathf.RoundToInt(uv.y * (texture.height - 1));
-        var key = $"applied|part={_selectedPart}|tool={_tool}|pixel={px},{py}|brush={Mathf.RoundToInt(_brushSize)}|opacity={_brushOpacity:0.##}|decal={_loadedDecal != null}";
+        var key = $"applied|tool={_tool}|pixel={px},{py}|brush={Mathf.RoundToInt(_brushSize)}|opacity={_brushOpacity:0.##}|decal={_loadedDecal != null}";
         if (Time.unscaledTime - _lastPaintDiagnosticsTime < 0.5f && string.Equals(key, _lastPaintDiagnosticsKey, StringComparison.Ordinal))
         {
             return;
@@ -4039,11 +3813,6 @@ internal sealed class SuitEditorController : MonoBehaviour
                 {
                     continue;
                 }
-                if (!IsPixelInSelectedPart(texture, x, y))
-                {
-                    continue;
-                }
-
                 var falloff = 1f - Mathf.Sqrt(dx * dx + dy * dy) / Mathf.Max(1f, r);
                 var existing = texture.GetPixel(x, y);
                 texture.SetPixel(x, y, Color.Lerp(existing, color, opacity * Mathf.Clamp01(falloff + 0.25f)));
@@ -4081,11 +3850,6 @@ internal sealed class SuitEditorController : MonoBehaviour
                 {
                     continue;
                 }
-                if (!IsPixelInSelectedPart(texture, x, y))
-                {
-                    continue;
-                }
-
                 var existing = texture.GetPixel(x, y);
                 var original = state.BaseTexture.GetPixel(x, y);
                 texture.SetPixel(x, y, Color.Lerp(existing, original, opacity));
@@ -4139,11 +3903,6 @@ internal sealed class SuitEditorController : MonoBehaviour
                 {
                     continue;
                 }
-                if (!IsPixelInSelectedPart(target, tx, ty))
-                {
-                    continue;
-                }
-
                 var decalColor = decal.GetPixelBilinear(u, v);
                 if (decalColor.a <= 0.01f)
                 {
@@ -4157,38 +3916,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         return changed;
-    }
-
-    private bool IsUvTargetInSelectedPart(Texture2D texture, Vector2 uv)
-    {
-        if (_selectedPart == SuitPart.All || texture == null)
-        {
-            return true;
-        }
-
-        var x = Mathf.RoundToInt(Mathf.Clamp01(uv.x) * (texture.width - 1));
-        var y = Mathf.RoundToInt(Mathf.Clamp01(uv.y) * (texture.height - 1));
-        return IsPixelInSelectedPart(texture, x, y);
-    }
-
-    private bool IsPixelInSelectedPart(Texture2D texture, int x, int y)
-    {
-        if (_selectedPart == SuitPart.All)
-        {
-            return true;
-        }
-
-        if (texture == null
-            || !_partUvMasks.TryGetValue(_selectedPart, out var mask)
-            || mask == null
-            || texture.width != _partDataTextureWidth
-            || texture.height != _partDataTextureHeight
-            || x < 0 || x >= texture.width || y < 0 || y >= texture.height)
-        {
-            return false;
-        }
-
-        return mask[y * texture.width + x];
     }
 
     private void SaveUndo()
@@ -4407,8 +4134,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         _selectedSuitId = suitId;
-        _selectedPart = SuitPart.All;
-        ClearPartIsolationData();
         DrawableSuitsPlugin.Registry.GetOrCreateState(_selectedSuitId);
         _undo.Clear();
         _redo.Clear();
@@ -4489,10 +4214,9 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         if (_uvFallbackMode)
         {
-            EnsurePartIsolationDataForCurrentSuit(editableTexture, "UV fallback setup");
             DestroyPreview();
             UseTexturePreview(context, true);
-            SetStatus($"Ready. UV fallback preview is active. Editing: {PartDisplayName(_selectedPart)}.", false);
+            SetStatus("Ready. UV fallback preview is active. Full-suit editing.", false);
             return;
         }
 
@@ -4505,1393 +4229,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         DestroyPreview();
         UseTexturePreview(context, true);
         SetStatus("Third-person setup failed; using UV fallback preview.", true);
-    }
-
-    private void EnsurePartIsolationDataForCurrentSuit(Texture2D texture, string context)
-    {
-        if (texture == null)
-        {
-            return;
-        }
-
-        var player = StartOfRound.Instance?.localPlayerController;
-        var source = _worldSourceRenderer ?? FindBestSuitRenderer(player);
-        if (source == null)
-        {
-            DrawableSuitsDiagnostics.Warn($"Part isolation skipped [{context}] because no suit renderer was found.");
-            return;
-        }
-
-        if (_partDataReady
-            && _partDataSourceId == source.GetInstanceID()
-            && _partDataTextureWidth == texture.width
-            && _partDataTextureHeight == texture.height)
-        {
-            return;
-        }
-
-        var mesh = new Mesh { name = "DrawableSuitsPartClassificationMesh" };
-        var previousEnabled = source.enabled;
-        try
-        {
-            source.enabled = true;
-            source.BakeMesh(mesh, true);
-            BuildPartIsolationData(source, mesh, texture, context);
-        }
-        catch (Exception ex)
-        {
-            DrawableSuitsDiagnostics.Exception($"Part isolation mesh bake failed [{context}]", ex);
-        }
-        finally
-        {
-            source.enabled = DrawableSuitsPlugin.IsEditorOpen ? false : previousEnabled;
-            Destroy(mesh);
-        }
-    }
-
-    private void BuildPartIsolationData(SkinnedMeshRenderer source, Mesh bakedMesh, Texture2D texture, string context)
-    {
-        if (source == null || bakedMesh == null || texture == null || bakedMesh.vertexCount == 0)
-        {
-            return;
-        }
-
-        ClearPartIsolationData();
-        var subMeshCount = Mathf.Max(1, bakedMesh.subMeshCount);
-        foreach (SuitPart part in Enum.GetValues(typeof(SuitPart)))
-        {
-            _partTrianglesBySubmesh[part] = new int[subMeshCount][];
-            _partTriangleCounts[part] = 0;
-        }
-
-        var workingTriangles = new Dictionary<SuitPart, List<int>[]>();
-        foreach (SuitPart part in Enum.GetValues(typeof(SuitPart)))
-        {
-            var lists = new List<int>[subMeshCount];
-            for (var submesh = 0; submesh < subMeshCount; submesh++)
-            {
-                lists[submesh] = new List<int>();
-            }
-            workingTriangles[part] = lists;
-        }
-
-        var vertices = bakedMesh.vertices;
-        var sourceMesh = source.sharedMesh;
-        var boneWeights = sourceMesh != null && sourceMesh.boneWeights != null && sourceMesh.boneWeights.Length == vertices.Length
-            ? sourceMesh.boneWeights
-            : null;
-        var bones = source.bones;
-        var fingerprint = DescribePartPresetFingerprint(source, bakedMesh, texture);
-        var configPresetName = TryLoadConfigPartPreset(source, bakedMesh, texture, out var configPresetMap);
-        var useConfigPreset = configPresetMap != null && configPresetMap.Count > 0;
-        var vanillaPresetReason = "none";
-        var useVanillaPreset = !useConfigPreset && IsVanillaHumanoidPartPresetMatch(source, bakedMesh, texture, out vanillaPresetReason);
-        var records = new List<PartTriangleRecord>();
-        var usedBoneClassification = false;
-        var recoveredHelmetByGeometry = 0;
-        var weakOrAmbiguousBoneTriangles = 0;
-        var configPresetTriangles = 0;
-        var vanillaPresetTriangles = 0;
-        var allTriangleCount = 0;
-        for (var submesh = 0; submesh < subMeshCount; submesh++)
-        {
-            var triangles = bakedMesh.GetTriangles(submesh);
-            workingTriangles[SuitPart.All][submesh].AddRange(triangles);
-            for (var i = 0; i + 2 < triangles.Length; i += 3)
-            {
-                var a = triangles[i];
-                var b = triangles[i + 1];
-                var c = triangles[i + 2];
-                var triangleOrdinal = allTriangleCount;
-                SuitPart classified;
-                bool usedBones;
-                SuitPart geometryPart;
-                SuitPart bonePart;
-                TriangleRegion region;
-                bool weakOrAmbiguousBone;
-                if (useConfigPreset && configPresetMap.TryGetValue(triangleOrdinal, out var configPart))
-                {
-                    classified = configPart;
-                    ClassifyTriangle(
-                        source,
-                        bakedMesh.bounds,
-                        vertices,
-                        boneWeights,
-                        bones,
-                        a,
-                        b,
-                        c,
-                        out usedBones,
-                        out geometryPart,
-                        out bonePart,
-                        out region,
-                        out weakOrAmbiguousBone);
-                    configPresetTriangles++;
-                }
-                else if (useVanillaPreset)
-                {
-                    classified = ClassifyTriangleByVanillaHumanoidPreset(
-                        bakedMesh.bounds,
-                        vertices,
-                        boneWeights,
-                        bones,
-                        a,
-                        b,
-                        c,
-                        out usedBones,
-                        out geometryPart,
-                        out bonePart,
-                        out region,
-                        out weakOrAmbiguousBone);
-                    vanillaPresetTriangles++;
-                }
-                else
-                {
-                    classified = ClassifyTriangle(
-                        source,
-                        bakedMesh.bounds,
-                        vertices,
-                        boneWeights,
-                        bones,
-                        a,
-                        b,
-                        c,
-                        out usedBones,
-                        out geometryPart,
-                        out bonePart,
-                        out region,
-                        out weakOrAmbiguousBone);
-                }
-                usedBoneClassification |= usedBones;
-                if (weakOrAmbiguousBone)
-                {
-                    weakOrAmbiguousBoneTriangles++;
-                }
-                if (classified == SuitPart.Helmet && geometryPart == SuitPart.Helmet && bonePart != SuitPart.Helmet)
-                {
-                    recoveredHelmetByGeometry++;
-                }
-                records.Add(new PartTriangleRecord
-                {
-                    Submesh = submesh,
-                    A = a,
-                    B = b,
-                    C = c,
-                    Part = classified,
-                    GeometryPart = geometryPart,
-                    BonePart = bonePart,
-                    UsedBones = usedBones,
-                    Center = region.Center,
-                    Height = region.Height,
-                    Side = region.Side,
-                    XOffset = region.XOffset
-                });
-                allTriangleCount++;
-            }
-        }
-
-        var rawCounts = CountPartTriangleRecords(records);
-        var vanillaCorrectionSummary = useVanillaPreset ? ApplyVanillaHumanoidPresetCorrections(records) : "none";
-        var cleanupSummary = CleanupPartTriangleRecords(records);
-        var cleanedCounts = CountPartTriangleRecords(records);
-        foreach (var record in records)
-        {
-            workingTriangles[record.Part][record.Submesh].Add(record.A);
-            workingTriangles[record.Part][record.Submesh].Add(record.B);
-            workingTriangles[record.Part][record.Submesh].Add(record.C);
-        }
-
-        _partTriangleCounts[SuitPart.All] = allTriangleCount;
-        foreach (SuitPart part in Enum.GetValues(typeof(SuitPart)))
-        {
-            var destination = _partTrianglesBySubmesh[part];
-            var lists = workingTriangles[part];
-            for (var submesh = 0; submesh < subMeshCount; submesh++)
-            {
-                destination[submesh] = lists[submesh].ToArray();
-            }
-            if (part != SuitPart.All)
-            {
-                _partTriangleCounts[part] = cleanedCounts.TryGetValue(part, out var count) ? count : 0;
-            }
-        }
-
-        if (useConfigPreset)
-        {
-            _partClassifierSource = $"ConfigPreset:{configPresetName}";
-        }
-        else if (useVanillaPreset)
-        {
-            _partClassifierSource = "Preset:VanillaHumanoid";
-        }
-        else
-        {
-            _partClassifierSource = usedBoneClassification ? "BonesPrimary+BoundsFallback" : "BoundsFallback";
-        }
-        BuildPartUvMasks(bakedMesh, texture);
-        _partDataReady = true;
-        _partDataSourceId = source.GetInstanceID();
-        _partDataTextureWidth = texture.width;
-        _partDataTextureHeight = texture.height;
-        var countParts = new List<string>();
-        foreach (SuitPart part in Enum.GetValues(typeof(SuitPart)))
-        {
-            countParts.Add($"{part}=triangles:{GetPartTriangleCount(part)},pixels:{GetPartMaskPixelCount(part)}");
-        }
-        DrawableSuitsDiagnostics.Info($"PartClassifierBuilt[{context}]: source={_partClassifierSource}; fingerprint={fingerprint}; presetMatch={(useConfigPreset ? configPresetName : useVanillaPreset ? vanillaPresetReason : "none")}; configPresetTriangles={configPresetTriangles}; vanillaPresetTriangles={vanillaPresetTriangles}; renderer={source.name}; texture={texture.width}x{texture.height}; overlap={_partUvOverlapDetected}; raw={DescribePartCounts(rawCounts)}; cleaned={DescribePartCounts(cleanedCounts)}; bounds={DescribePartBounds(records)}; components={DescribePartComponentRanges(records)}; sanity={cleanupSummary}; vanillaCorrections={vanillaCorrectionSummary}; helmetRecoveredByTopCap={recoveredHelmetByGeometry}; weakOrAmbiguousBoneTriangles={weakOrAmbiguousBoneTriangles}; bones={DescribeTopMappedBones(source, bones)}; {string.Join("; ", countParts)}");
-        UpdatePartButtons();
-    }
-
-    private static string TryLoadConfigPartPreset(SkinnedMeshRenderer source, Mesh mesh, Texture2D texture, out Dictionary<int, SuitPart> triangleMap)
-    {
-        triangleMap = null;
-        try
-        {
-            Directory.CreateDirectory(DrawableSuitsPaths.PartPresets);
-            var files = Directory.GetFiles(DrawableSuitsPaths.PartPresets, "*.json", SearchOption.TopDirectoryOnly);
-            for (var fileIndex = 0; fileIndex < files.Length; fileIndex++)
-            {
-                PartPresetFile preset;
-                try
-                {
-                    preset = JsonUtility.FromJson<PartPresetFile>(File.ReadAllText(files[fileIndex]));
-                }
-                catch (Exception ex)
-                {
-                    DrawableSuitsDiagnostics.Exception($"Part preset file could not be parsed. file={files[fileIndex]}", ex);
-                    continue;
-                }
-
-                var mismatch = "null preset";
-                if (preset == null || !ConfigPartPresetMatches(preset, source, mesh, texture, out mismatch))
-                {
-                    if (preset != null)
-                    {
-                        DrawableSuitsDiagnostics.Info($"Part preset skipped. name={preset.name ?? Path.GetFileNameWithoutExtension(files[fileIndex])}; reason={mismatch}");
-                    }
-                    continue;
-                }
-
-                var map = new Dictionary<int, SuitPart>();
-                var assignments = preset.parts;
-                if (assignments != null)
-                {
-                    for (var assignmentIndex = 0; assignmentIndex < assignments.Length; assignmentIndex++)
-                    {
-                        var assignment = assignments[assignmentIndex];
-                        if (assignment == null || assignment.triangles == null || !TryParseSuitPart(assignment.part, out var part) || part == SuitPart.All)
-                        {
-                            continue;
-                        }
-
-                        for (var i = 0; i < assignment.triangles.Length; i++)
-                        {
-                            var triangle = assignment.triangles[i];
-                            if (triangle >= 0)
-                            {
-                                map[triangle] = part;
-                            }
-                        }
-                    }
-                }
-
-                if (map.Count == 0)
-                {
-                    DrawableSuitsDiagnostics.Warn($"Part preset matched but has no valid triangle assignments. name={preset.name ?? Path.GetFileNameWithoutExtension(files[fileIndex])}; file={files[fileIndex]}");
-                    continue;
-                }
-
-                triangleMap = map;
-                var name = string.IsNullOrWhiteSpace(preset.name) ? Path.GetFileNameWithoutExtension(files[fileIndex]) : preset.name;
-                DrawableSuitsDiagnostics.Info($"Part preset matched. name={name}; assignments={map.Count}; file={files[fileIndex]}");
-                return name;
-            }
-        }
-        catch (Exception ex)
-        {
-            DrawableSuitsDiagnostics.Exception("Part preset loading failed", ex);
-        }
-
-        return "none";
-    }
-
-    private static bool ConfigPartPresetMatches(PartPresetFile preset, SkinnedMeshRenderer source, Mesh mesh, Texture2D texture, out string mismatch)
-    {
-        mismatch = "matched";
-        if (source == null || mesh == null || texture == null)
-        {
-            mismatch = "missing source, mesh, or texture";
-            return false;
-        }
-
-        var rendererName = source.name ?? string.Empty;
-        var rendererPath = GetTransformPath(source.transform);
-        var materialName = source.sharedMaterial?.name ?? string.Empty;
-        if (!StringContainsIfSet(rendererName, preset.rendererNameContains))
-        {
-            mismatch = $"rendererName does not contain {preset.rendererNameContains}";
-            return false;
-        }
-        if (!StringContainsIfSet(rendererPath, preset.rendererPathContains))
-        {
-            mismatch = $"rendererPath does not contain {preset.rendererPathContains}";
-            return false;
-        }
-        if (!StringContainsIfSet(materialName, preset.materialNameContains))
-        {
-            mismatch = $"materialName does not contain {preset.materialNameContains}";
-            return false;
-        }
-        if (preset.vertexCount > 0 && mesh.vertexCount != preset.vertexCount)
-        {
-            mismatch = $"vertexCount {mesh.vertexCount} != {preset.vertexCount}";
-            return false;
-        }
-        if (preset.triangleCount > 0 && CountMeshTriangles(mesh) != preset.triangleCount)
-        {
-            mismatch = $"triangleCount {CountMeshTriangles(mesh)} != {preset.triangleCount}";
-            return false;
-        }
-        if (preset.textureWidth > 0 && texture.width != preset.textureWidth)
-        {
-            mismatch = $"textureWidth {texture.width} != {preset.textureWidth}";
-            return false;
-        }
-        if (preset.textureHeight > 0 && texture.height != preset.textureHeight)
-        {
-            mismatch = $"textureHeight {texture.height} != {preset.textureHeight}";
-            return false;
-        }
-
-        return true;
-    }
-
-    private static bool IsVanillaHumanoidPartPresetMatch(SkinnedMeshRenderer source, Mesh mesh, Texture2D texture, out string reason)
-    {
-        reason = "none";
-        if (source == null || mesh == null || texture == null)
-        {
-            return false;
-        }
-
-        var rendererPath = GetTransformPath(source.transform);
-        var materialName = source.sharedMaterial?.name ?? string.Empty;
-        var triangleCount = CountMeshTriangles(mesh);
-        var exactVanillaMesh = mesh.vertexCount == 7998 && triangleCount == 8016;
-        var vanillaRenderer = string.Equals(source.name, "LOD1", StringComparison.OrdinalIgnoreCase)
-            && rendererPath.IndexOf("ScavengerModel/LOD1", StringComparison.OrdinalIgnoreCase) >= 0;
-        var vanillaMaterial = materialName.IndexOf("DefaultPlayerSuit", StringComparison.OrdinalIgnoreCase) >= 0;
-        var vanillaTexture = texture.width == 1024 && texture.height == 1024;
-        if (exactVanillaMesh && vanillaRenderer && vanillaMaterial && vanillaTexture)
-        {
-            reason = $"VanillaHumanoid vertexCount={mesh.vertexCount}; triangleCount={triangleCount}; rendererPath={rendererPath}; material={materialName}; texture={texture.width}x{texture.height}";
-            return true;
-        }
-
-        reason = $"no vanilla preset match vertexCount={mesh.vertexCount}; triangleCount={triangleCount}; renderer={source.name}; path={rendererPath}; material={materialName}; texture={texture.width}x{texture.height}";
-        return false;
-    }
-
-    private static string DescribePartPresetFingerprint(SkinnedMeshRenderer source, Mesh mesh, Texture2D texture)
-    {
-        return $"renderer={source?.name ?? "null"}; path={GetTransformPath(source?.transform)}; material={source?.sharedMaterial?.name ?? "null"}; meshVertices={mesh?.vertexCount ?? 0}; meshTriangles={(mesh != null ? CountMeshTriangles(mesh) : 0)}; subMeshes={mesh?.subMeshCount ?? 0}; texture={texture?.width ?? 0}x{texture?.height ?? 0}";
-    }
-
-    private static bool StringContainsIfSet(string source, string required)
-    {
-        return string.IsNullOrWhiteSpace(required)
-            || (source ?? string.Empty).IndexOf(required, StringComparison.OrdinalIgnoreCase) >= 0;
-    }
-
-    private static int CountMeshTriangles(Mesh mesh)
-    {
-        if (mesh == null)
-        {
-            return 0;
-        }
-
-        var count = 0;
-        for (var submesh = 0; submesh < mesh.subMeshCount; submesh++)
-        {
-            count += mesh.GetTriangles(submesh).Length / 3;
-        }
-        return count;
-    }
-
-    private static bool TryParseSuitPart(string value, out SuitPart part)
-    {
-        part = SuitPart.Other;
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return false;
-        }
-
-        var normalized = value.Replace(" ", string.Empty).Replace("_", string.Empty).Replace("-", string.Empty);
-        foreach (SuitPart candidate in Enum.GetValues(typeof(SuitPart)))
-        {
-            if (string.Equals(normalized, candidate.ToString(), StringComparison.OrdinalIgnoreCase))
-            {
-                part = candidate;
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private SuitPart ClassifyTriangle(
-        SkinnedMeshRenderer source,
-        Bounds bounds,
-        Vector3[] vertices,
-        BoneWeight[] weights,
-        Transform[] bones,
-        int a,
-        int b,
-        int c,
-        out bool usedBones,
-        out SuitPart geometryPart,
-        out SuitPart bonePart,
-        out TriangleRegion region,
-        out bool weakOrAmbiguousBone)
-    {
-        usedBones = false;
-        geometryPart = SuitPart.Other;
-        bonePart = SuitPart.Other;
-        region = default;
-        weakOrAmbiguousBone = false;
-        if (a < 0 || b < 0 || c < 0 || a >= vertices.Length || b >= vertices.Length || c >= vertices.Length)
-        {
-            return SuitPart.Other;
-        }
-
-        geometryPart = ClassifyTriangleByBounds(bounds, vertices, a, b, c, out region);
-        if (weights != null && bones != null && bones.Length > 0)
-        {
-            bonePart = ClassifyTriangleByBones(weights, bones, a, b, c, out var bestBoneScore);
-            if (bonePart != SuitPart.Other && bestBoneScore >= 0.16f)
-            {
-                usedBones = true;
-
-                if (IsStrongHelmetFallback(region, bonePart))
-                {
-                    return SuitPart.Helmet;
-                }
-
-                return bonePart;
-            }
-
-            weakOrAmbiguousBone = bestBoneScore > 0.001f;
-        }
-
-        return geometryPart;
-    }
-
-    private static SuitPart ClassifyTriangleByVanillaHumanoidPreset(
-        Bounds bounds,
-        Vector3[] vertices,
-        BoneWeight[] weights,
-        Transform[] bones,
-        int a,
-        int b,
-        int c,
-        out bool usedBones,
-        out SuitPart geometryPart,
-        out SuitPart bonePart,
-        out TriangleRegion region,
-        out bool weakOrAmbiguousBone)
-    {
-        usedBones = false;
-        weakOrAmbiguousBone = false;
-        geometryPart = SuitPart.Other;
-        bonePart = SuitPart.Other;
-        region = default;
-        if (a < 0 || b < 0 || c < 0 || a >= vertices.Length || b >= vertices.Length || c >= vertices.Length)
-        {
-            return SuitPart.Other;
-        }
-
-        // Vanilla Lethal Company player suits bake with their body height along local Z and side along local X.
-        region = BuildTriangleRegionForAxes(bounds, vertices, a, b, c, verticalAxis: 2, sideAxis: 0);
-        geometryPart = ClassifyVanillaRegion(region);
-
-        var bestBoneScore = 0f;
-        if (weights != null && bones != null && bones.Length > 0)
-        {
-            bonePart = ClassifyTriangleByBones(weights, bones, a, b, c, out bestBoneScore);
-        }
-
-        if (bonePart != SuitPart.Other && bestBoneScore >= 0.16f)
-        {
-            usedBones = true;
-            if (bonePart == SuitPart.Torso && VanillaBonePartFitsRegion(bonePart, region))
-            {
-                return SuitPart.Torso;
-            }
-
-            if ((bonePart == SuitPart.LeftArm || bonePart == SuitPart.RightArm)
-                && IsVanillaCentralUpperBodyOrStrap(region)
-                && bestBoneScore < 0.55f)
-            {
-                weakOrAmbiguousBone = true;
-                return SuitPart.Torso;
-            }
-
-            if (VanillaBonePartFitsRegion(bonePart, region))
-            {
-                return bonePart;
-            }
-
-            weakOrAmbiguousBone = true;
-        }
-        else if (bestBoneScore > 0.001f)
-        {
-            weakOrAmbiguousBone = true;
-        }
-
-        if (IsVanillaStrictHelmetRegion(region))
-        {
-            return SuitPart.Helmet;
-        }
-
-        return geometryPart;
-    }
-
-    private static TriangleRegion BuildTriangleRegionForAxes(Bounds bounds, Vector3[] vertices, int a, int b, int c, int verticalAxis, int sideAxis)
-    {
-        var center = (vertices[a] + vertices[b] + vertices[c]) / 3f;
-        var va = GetAxisValue(vertices[a], verticalAxis);
-        var vb = GetAxisValue(vertices[b], verticalAxis);
-        var vc = GetAxisValue(vertices[c], verticalAxis);
-        var minVertical = Mathf.Min(va, Mathf.Min(vb, vc));
-        var maxVertical = Mathf.Max(va, Mathf.Max(vb, vc));
-        var boundsMin = GetAxisValue(bounds.min, verticalAxis);
-        var boundsMax = GetAxisValue(bounds.max, verticalAxis);
-        var height = Mathf.InverseLerp(boundsMin, boundsMax, GetAxisValue(center, verticalAxis));
-        var minHeight = Mathf.InverseLerp(boundsMin, boundsMax, minVertical);
-        var maxHeight = Mathf.InverseLerp(boundsMin, boundsMax, maxVertical);
-        var xOffset = GetAxisValue(center, sideAxis) - GetAxisValue(bounds.center, sideAxis);
-        var sideExtent = Mathf.Max(0.001f, GetAxisValue(bounds.extents, sideAxis));
-        var side = Mathf.Abs(xOffset) / sideExtent;
-        return new TriangleRegion(center, height, minHeight, maxHeight, xOffset, side);
-    }
-
-    private static float GetAxisValue(Vector3 value, int axis)
-    {
-        switch (axis)
-        {
-            case 0: return value.x;
-            case 1: return value.y;
-            default: return value.z;
-        }
-    }
-
-    private static SuitPart ClassifyVanillaRegion(TriangleRegion region)
-    {
-        if (IsVanillaStrictHelmetRegion(region))
-        {
-            return SuitPart.Helmet;
-        }
-
-        if (region.Height <= 0.43f)
-        {
-            return region.XOffset <= 0f ? SuitPart.LeftLeg : SuitPart.RightLeg;
-        }
-
-        if (IsVanillaCentralUpperBodyOrStrap(region))
-        {
-            return SuitPart.Torso;
-        }
-
-        if (region.Height >= 0.30f && region.Height <= 0.80f && region.Side >= 0.62f)
-        {
-            return region.XOffset <= 0f ? SuitPart.LeftArm : SuitPart.RightArm;
-        }
-
-        if (region.Height >= 0.30f && region.Height <= 0.84f && region.Side <= 0.76f)
-        {
-            return SuitPart.Torso;
-        }
-
-        return SuitPart.Other;
-    }
-
-    private static bool VanillaBonePartFitsRegion(SuitPart part, TriangleRegion region)
-    {
-        switch (part)
-        {
-            case SuitPart.Helmet:
-                return region.Height >= 0.80f && region.Side <= 0.78f;
-            case SuitPart.Torso:
-                return region.Height >= 0.30f && region.Height <= 0.84f && region.Side <= 0.78f;
-            case SuitPart.LeftArm:
-            case SuitPart.RightArm:
-                return region.Height >= 0.20f && region.Height <= 0.80f && !IsVanillaCentralUpperBodyOrStrap(region) && region.Side >= 0.48f;
-            case SuitPart.LeftLeg:
-            case SuitPart.RightLeg:
-                return region.Height <= 0.52f;
-            default:
-                return false;
-        }
-    }
-
-    private static bool IsVanillaStrictHelmetRegion(TriangleRegion region)
-    {
-        return region.Height >= 0.82f
-            && region.MaxHeight >= 0.86f
-            && region.MinHeight >= 0.74f
-            && region.Side <= 0.74f;
-    }
-
-    private static bool IsVanillaCentralUpperBodyOrStrap(TriangleRegion region)
-    {
-        return region.Height >= 0.44f
-            && region.Height <= 0.82f
-            && region.Side <= 0.72f;
-    }
-
-    private static bool IsVanillaArmStrapLeak(PartTriangleRecord record)
-    {
-        if (record == null || (record.Part != SuitPart.LeftArm && record.Part != SuitPart.RightArm))
-        {
-            return false;
-        }
-
-        if (record.Height < 0.46f || record.Height > 0.80f)
-        {
-            return false;
-        }
-
-        return record.Side <= 0.68f
-            || record.GeometryPart == SuitPart.Torso
-            || record.BonePart == SuitPart.Torso;
-    }
-
-    private static bool IsVanillaHelmetLeak(PartTriangleRecord record)
-    {
-        if (record == null || record.Part != SuitPart.Helmet)
-        {
-            return false;
-        }
-
-        return record.Height < 0.80f || record.Side > 0.80f;
-    }
-
-    private static bool IsVanillaTorsoAbsorbCandidate(PartTriangleRecord record)
-    {
-        if (record == null)
-        {
-            return false;
-        }
-
-        return record.Height >= 0.36f
-            && record.Height <= 0.84f
-            && record.Side <= 0.78f;
-    }
-
-    private static bool IsVanillaShoulderFragmentCandidate(PartTriangleRecord record)
-    {
-        if (record == null)
-        {
-            return false;
-        }
-
-        return record.Height >= 0.48f
-            && record.Height <= 0.82f
-            && record.Side > 0.78f
-            && record.Side <= 0.96f;
-    }
-
-    private static string ApplyVanillaHumanoidPresetCorrections(List<PartTriangleRecord> records)
-    {
-        if (records == null || records.Count == 0)
-        {
-            return "none";
-        }
-
-        var stats = new VanillaPresetCorrectionStats();
-        for (var i = 0; i < records.Count; i++)
-        {
-            var record = records[i];
-            if (IsVanillaHelmetLeak(record))
-            {
-                record.Part = SuitPart.Torso;
-                stats.HelmetToTorso++;
-                continue;
-            }
-
-            if (IsVanillaArmStrapLeak(record))
-            {
-                record.Part = SuitPart.Torso;
-                stats.ArmStrapToTorso++;
-                continue;
-            }
-
-            if (record.Part != SuitPart.Other)
-            {
-                continue;
-            }
-
-            if (IsVanillaTorsoAbsorbCandidate(record))
-            {
-                record.Part = SuitPart.Torso;
-                stats.OtherToTorso++;
-                continue;
-            }
-
-            if (IsVanillaShoulderFragmentCandidate(record))
-            {
-                record.Part = record.XOffset <= 0f ? SuitPart.LeftArm : SuitPart.RightArm;
-                stats.OtherToArm++;
-            }
-        }
-
-        var helmetComponents = BuildPartComponents(records, SuitPart.Helmet);
-        for (var componentIndex = 0; componentIndex < helmetComponents.Count; componentIndex++)
-        {
-            var component = helmetComponents[componentIndex];
-            if (component == null || component.Count == 0 || IsPlausibleVanillaHelmetComponent(records, component))
-            {
-                continue;
-            }
-
-            for (var i = 0; i < component.Count; i++)
-            {
-                var recordIndex = component[i];
-                if (recordIndex < 0 || recordIndex >= records.Count || records[recordIndex].Part != SuitPart.Helmet)
-                {
-                    continue;
-                }
-
-                records[recordIndex].Part = SuitPart.Torso;
-                stats.HelmetToTorso++;
-            }
-        }
-
-        return stats.ToString();
-    }
-
-    private static bool IsPlausibleVanillaHelmetComponent(List<PartTriangleRecord> records, List<int> component)
-    {
-        var minHeight = float.MaxValue;
-        var maxHeight = float.MinValue;
-        var averageHeight = 0f;
-        var maxSide = 0f;
-        var validCount = 0;
-        for (var i = 0; i < component.Count; i++)
-        {
-            var recordIndex = component[i];
-            if (recordIndex < 0 || recordIndex >= records.Count)
-            {
-                continue;
-            }
-
-            var record = records[recordIndex];
-            minHeight = Mathf.Min(minHeight, record.Height);
-            maxHeight = Mathf.Max(maxHeight, record.Height);
-            averageHeight += record.Height;
-            maxSide = Mathf.Max(maxSide, record.Side);
-            validCount++;
-        }
-
-        if (validCount == 0)
-        {
-            return false;
-        }
-
-        averageHeight /= validCount;
-        return maxHeight >= 0.86f
-            && averageHeight >= 0.82f
-            && minHeight >= 0.74f
-            && maxSide <= 0.82f;
-    }
-
-    private static SuitPart ClassifyTriangleByBounds(Bounds bounds, Vector3[] vertices, int a, int b, int c, out TriangleRegion region)
-    {
-        var center = (vertices[a] + vertices[b] + vertices[c]) / 3f;
-        var minHeight = Mathf.InverseLerp(bounds.min.y, bounds.max.y, Mathf.Min(vertices[a].y, Mathf.Min(vertices[b].y, vertices[c].y)));
-        var maxHeight = Mathf.InverseLerp(bounds.min.y, bounds.max.y, Mathf.Max(vertices[a].y, Mathf.Max(vertices[b].y, vertices[c].y)));
-        var height = Mathf.InverseLerp(bounds.min.y, bounds.max.y, center.y);
-        var xOffset = center.x - bounds.center.x;
-        var side = Mathf.Abs(xOffset) / Mathf.Max(0.001f, bounds.extents.x);
-        region = new TriangleRegion(center, height, minHeight, maxHeight, xOffset, side);
-
-        if ((height >= 0.78f && side <= 0.88f) || maxHeight >= 0.94f)
-        {
-            return SuitPart.Helmet;
-        }
-
-        if (height <= 0.35f || maxHeight <= 0.40f)
-        {
-            return xOffset <= 0f ? SuitPart.LeftLeg : SuitPart.RightLeg;
-        }
-
-        if (height <= 0.76f && height >= 0.38f && side >= 0.62f)
-        {
-            return xOffset <= 0f ? SuitPart.LeftArm : SuitPart.RightArm;
-        }
-
-        if (height >= 0.28f && height <= 0.86f)
-        {
-            return SuitPart.Torso;
-        }
-
-        if (height < 0.28f)
-        {
-            return xOffset <= 0f ? SuitPart.LeftLeg : SuitPart.RightLeg;
-        }
-
-        return SuitPart.Torso;
-    }
-
-    private static bool IsStrongHelmetFallback(TriangleRegion region, SuitPart bonePart)
-    {
-        return bonePart != SuitPart.Helmet
-            && region.Height >= 0.82f
-            && region.MaxHeight >= 0.9f
-            && region.Side <= 0.8f;
-    }
-
-    private static SuitPart ClassifyTriangleByBones(BoneWeight[] weights, Transform[] bones, int a, int b, int c, out float bestScore)
-    {
-        var scores = new float[Enum.GetValues(typeof(SuitPart)).Length];
-        AccumulateVertexBoneScores(weights[a], bones, scores);
-        AccumulateVertexBoneScores(weights[b], bones, scores);
-        AccumulateVertexBoneScores(weights[c], bones, scores);
-        var bestPart = SuitPart.Other;
-        bestScore = 0f;
-        for (var i = 0; i < IsolatedSuitParts.Length; i++)
-        {
-            var part = IsolatedSuitParts[i];
-            if (scores[(int)part] > bestScore)
-            {
-                bestScore = scores[(int)part];
-                bestPart = part;
-            }
-        }
-
-        bestScore /= 3f;
-        return bestPart;
-    }
-
-    private static Dictionary<SuitPart, int> CountPartTriangleRecords(List<PartTriangleRecord> records)
-    {
-        var counts = new Dictionary<SuitPart, int>();
-        foreach (SuitPart part in Enum.GetValues(typeof(SuitPart)))
-        {
-            counts[part] = 0;
-        }
-
-        if (records == null)
-        {
-            return counts;
-        }
-
-        for (var i = 0; i < records.Count; i++)
-        {
-            var record = records[i];
-            counts[record.Part] = counts.TryGetValue(record.Part, out var count) ? count + 1 : 1;
-        }
-
-        return counts;
-    }
-
-    private static string CleanupPartTriangleRecords(List<PartTriangleRecord> records)
-    {
-        if (records == null || records.Count == 0)
-        {
-            return "none";
-        }
-
-        var summaries = new List<string>();
-        for (var partIndex = 0; partIndex < IsolatedSuitParts.Length; partIndex++)
-        {
-            var part = IsolatedSuitParts[partIndex];
-            var components = BuildPartComponents(records, part);
-            if (components.Count == 0)
-            {
-                summaries.Add($"{part}:components=0");
-                continue;
-            }
-
-            var largest = 0;
-            for (var i = 0; i < components.Count; i++)
-            {
-                largest = Mathf.Max(largest, components[i].Count);
-            }
-
-            var suspiciousTinyThreshold = Mathf.Max(4, Mathf.RoundToInt(largest * 0.015f));
-            var suspiciousTinyComponents = 0;
-            for (var i = 0; i < components.Count; i++)
-            {
-                var component = components[i];
-                if (component.Count < suspiciousTinyThreshold)
-                {
-                    suspiciousTinyComponents++;
-                }
-            }
-
-            summaries.Add($"{part}:components={components.Count},largest={largest},tinyThreshold={suspiciousTinyThreshold},suspiciousTiny={suspiciousTinyComponents}");
-        }
-
-        return string.Join("; ", summaries);
-    }
-
-    private static List<List<int>> BuildPartComponents(List<PartTriangleRecord> records, SuitPart part)
-    {
-        var localRecordIndexes = new List<int>();
-        var vertexToLocalIndexes = new Dictionary<int, List<int>>();
-        for (var i = 0; i < records.Count; i++)
-        {
-            if (records[i].Part != part)
-            {
-                continue;
-            }
-
-            var localIndex = localRecordIndexes.Count;
-            localRecordIndexes.Add(i);
-            AddTriangleVertexIndex(vertexToLocalIndexes, records[i].A, localIndex);
-            AddTriangleVertexIndex(vertexToLocalIndexes, records[i].B, localIndex);
-            AddTriangleVertexIndex(vertexToLocalIndexes, records[i].C, localIndex);
-        }
-
-        var components = new List<List<int>>();
-        var visited = new bool[localRecordIndexes.Count];
-        var stack = new Stack<int>();
-        for (var start = 0; start < localRecordIndexes.Count; start++)
-        {
-            if (visited[start])
-            {
-                continue;
-            }
-
-            var component = new List<int>();
-            visited[start] = true;
-            stack.Push(start);
-            while (stack.Count > 0)
-            {
-                var localIndex = stack.Pop();
-                var recordIndex = localRecordIndexes[localIndex];
-                component.Add(recordIndex);
-                PushUnvisitedTriangleNeighbors(records[recordIndex].A, vertexToLocalIndexes, visited, stack);
-                PushUnvisitedTriangleNeighbors(records[recordIndex].B, vertexToLocalIndexes, visited, stack);
-                PushUnvisitedTriangleNeighbors(records[recordIndex].C, vertexToLocalIndexes, visited, stack);
-            }
-
-            components.Add(component);
-        }
-
-        return components;
-    }
-
-    private static void AddTriangleVertexIndex(Dictionary<int, List<int>> vertexToLocalIndexes, int vertexIndex, int localIndex)
-    {
-        if (!vertexToLocalIndexes.TryGetValue(vertexIndex, out var indexes))
-        {
-            indexes = new List<int>();
-            vertexToLocalIndexes[vertexIndex] = indexes;
-        }
-        indexes.Add(localIndex);
-    }
-
-    private static void PushUnvisitedTriangleNeighbors(int vertexIndex, Dictionary<int, List<int>> vertexToLocalIndexes, bool[] visited, Stack<int> stack)
-    {
-        if (!vertexToLocalIndexes.TryGetValue(vertexIndex, out var neighbors))
-        {
-            return;
-        }
-
-        for (var i = 0; i < neighbors.Count; i++)
-        {
-            var neighbor = neighbors[i];
-            if (neighbor < 0 || neighbor >= visited.Length || visited[neighbor])
-            {
-                continue;
-            }
-
-            visited[neighbor] = true;
-            stack.Push(neighbor);
-        }
-    }
-
-    private static string DescribePartCounts(Dictionary<SuitPart, int> counts)
-    {
-        var parts = new List<string>();
-        foreach (SuitPart part in Enum.GetValues(typeof(SuitPart)))
-        {
-            if (part == SuitPart.All)
-            {
-                continue;
-            }
-
-            parts.Add($"{part}:{(counts != null && counts.TryGetValue(part, out var count) ? count : 0)}");
-        }
-
-        return string.Join(",", parts);
-    }
-
-    private static string DescribePartBounds(List<PartTriangleRecord> records)
-    {
-        if (records == null || records.Count == 0)
-        {
-            return "none";
-        }
-
-        var parts = new List<string>();
-        for (var partIndex = 0; partIndex < IsolatedSuitParts.Length; partIndex++)
-        {
-            var part = IsolatedSuitParts[partIndex];
-            var count = 0;
-            var minHeight = float.MaxValue;
-            var maxHeight = float.MinValue;
-            var maxSide = 0f;
-            for (var i = 0; i < records.Count; i++)
-            {
-                if (records[i].Part != part)
-                {
-                    continue;
-                }
-
-                count++;
-                minHeight = Mathf.Min(minHeight, records[i].Height);
-                maxHeight = Mathf.Max(maxHeight, records[i].Height);
-                maxSide = Mathf.Max(maxSide, records[i].Side);
-            }
-
-            if (count == 0)
-            {
-                parts.Add($"{part}:empty");
-            }
-            else
-            {
-                parts.Add($"{part}:tri={count},h={minHeight.ToString("0.00", CultureInfo.InvariantCulture)}-{maxHeight.ToString("0.00", CultureInfo.InvariantCulture)},sideMax={maxSide.ToString("0.00", CultureInfo.InvariantCulture)}");
-            }
-        }
-
-        return string.Join("; ", parts);
-    }
-
-    private static string DescribePartComponentRanges(List<PartTriangleRecord> records)
-    {
-        if (records == null || records.Count == 0)
-        {
-            return "none";
-        }
-
-        var parts = new List<string>();
-        for (var partIndex = 0; partIndex < IsolatedSuitParts.Length; partIndex++)
-        {
-            var part = IsolatedSuitParts[partIndex];
-            var components = BuildPartComponents(records, part);
-            if (components.Count == 0)
-            {
-                parts.Add($"{part}:components=0");
-                continue;
-            }
-
-            components.Sort((left, right) => right.Count.CompareTo(left.Count));
-            var ranges = new List<string>();
-            var described = Mathf.Min(3, components.Count);
-            for (var componentIndex = 0; componentIndex < described; componentIndex++)
-            {
-                var component = components[componentIndex];
-                var minHeight = float.MaxValue;
-                var maxHeight = float.MinValue;
-                var maxSide = 0f;
-                for (var i = 0; i < component.Count; i++)
-                {
-                    var recordIndex = component[i];
-                    if (recordIndex < 0 || recordIndex >= records.Count)
-                    {
-                        continue;
-                    }
-
-                    var record = records[recordIndex];
-                    minHeight = Mathf.Min(minHeight, record.Height);
-                    maxHeight = Mathf.Max(maxHeight, record.Height);
-                    maxSide = Mathf.Max(maxSide, record.Side);
-                }
-
-                ranges.Add($"{component.Count}@h={minHeight.ToString("0.00", CultureInfo.InvariantCulture)}-{maxHeight.ToString("0.00", CultureInfo.InvariantCulture)},sideMax={maxSide.ToString("0.00", CultureInfo.InvariantCulture)}");
-            }
-
-            parts.Add($"{part}:components={components.Count}[{string.Join("|", ranges)}]");
-        }
-
-        return string.Join("; ", parts);
-    }
-
-    private static string DescribeTopMappedBones(SkinnedMeshRenderer source, Transform[] bones)
-    {
-        if (source == null || bones == null || bones.Length == 0)
-        {
-            return "none";
-        }
-
-        var mapped = new Dictionary<SuitPart, List<string>>();
-        for (var i = 0; i < bones.Length; i++)
-        {
-            var bone = bones[i];
-            if (bone == null || !TryMapBoneToPart(bone.name, out var part))
-            {
-                continue;
-            }
-
-            if (!mapped.TryGetValue(part, out var names))
-            {
-                names = new List<string>();
-                mapped[part] = names;
-            }
-
-            if (names.Count < 4)
-            {
-                names.Add(bone.name);
-            }
-        }
-
-        if (mapped.Count == 0)
-        {
-            return "none";
-        }
-
-        var parts = new List<string>();
-        foreach (SuitPart part in Enum.GetValues(typeof(SuitPart)))
-        {
-            if (mapped.TryGetValue(part, out var names))
-            {
-                parts.Add($"{part}=[{string.Join(",", names)}]");
-            }
-        }
-
-        return string.Join("; ", parts);
-    }
-
-    private static void AccumulateVertexBoneScores(BoneWeight weight, Transform[] bones, float[] scores)
-    {
-        AccumulateBoneScore(weight.boneIndex0, weight.weight0, bones, scores);
-        AccumulateBoneScore(weight.boneIndex1, weight.weight1, bones, scores);
-        AccumulateBoneScore(weight.boneIndex2, weight.weight2, bones, scores);
-        AccumulateBoneScore(weight.boneIndex3, weight.weight3, bones, scores);
-    }
-
-    private static void AccumulateBoneScore(int boneIndex, float weight, Transform[] bones, float[] scores)
-    {
-        if (weight <= 0f || boneIndex < 0 || boneIndex >= bones.Length || bones[boneIndex] == null)
-        {
-            return;
-        }
-
-        if (TryMapBoneToPart(bones[boneIndex].name, out var part))
-        {
-            scores[(int)part] += weight;
-        }
-    }
-
-    private static bool TryMapBoneToPart(string boneName, out SuitPart part)
-    {
-        part = SuitPart.Other;
-        var lower = (boneName ?? string.Empty).ToLowerInvariant();
-        var left = BoneNameHasSideToken(lower, true);
-        var right = BoneNameHasSideToken(lower, false);
-        if (lower.Contains("head")
-            || lower.Contains("neck")
-            || lower.Contains("helmet")
-            || lower.Contains("skull")
-            || lower.Contains("visor")
-            || lower.Contains("mask"))
-        {
-            part = SuitPart.Helmet;
-            return true;
-        }
-        if ((lower.Contains("arm")
-                || lower.Contains("shoulder")
-                || lower.Contains("clavicle")
-                || lower.Contains("elbow")
-                || lower.Contains("forearm")
-                || lower.Contains("hand")
-                || lower.Contains("wrist"))
-            && (left || right))
-        {
-            part = left ? SuitPart.LeftArm : SuitPart.RightArm;
-            return true;
-        }
-        if ((lower.Contains("leg")
-                || lower.Contains("thigh")
-                || lower.Contains("knee")
-                || lower.Contains("shin")
-                || lower.Contains("ankle")
-                || lower.Contains("foot")
-                || lower.Contains("toe")
-                || lower.Contains("calf"))
-            && (left || right))
-        {
-            part = left ? SuitPart.LeftLeg : SuitPart.RightLeg;
-            return true;
-        }
-        if (lower.Contains("spine")
-            || lower.Contains("chest")
-            || lower.Contains("torso")
-            || lower.Contains("hips")
-            || lower.Contains("pelvis")
-            || lower.Contains("abdomen")
-            || lower.Contains("waist")
-            || lower.Contains("body"))
-        {
-            part = SuitPart.Torso;
-            return true;
-        }
-        return false;
-    }
-
-    private static bool BoneNameHasSideToken(string lowerBoneName, bool left)
-    {
-        if (string.IsNullOrWhiteSpace(lowerBoneName))
-        {
-            return false;
-        }
-
-        var longToken = left ? "left" : "right";
-        if (lowerBoneName.Contains(longToken))
-        {
-            return true;
-        }
-
-        var shortToken = left ? "l" : "r";
-        var tokens = lowerBoneName.Split('.', '_', '-', ' ', ':', '/', '\\', '|', '(', ')', '[', ']');
-        for (var i = 0; i < tokens.Length; i++)
-        {
-            if (string.Equals(tokens[i], shortToken, StringComparison.Ordinal))
-            {
-                return true;
-            }
-        }
-
-        return lowerBoneName.EndsWith("." + shortToken, StringComparison.Ordinal)
-            || lowerBoneName.EndsWith("_" + shortToken, StringComparison.Ordinal)
-            || lowerBoneName.EndsWith("-" + shortToken, StringComparison.Ordinal)
-            || lowerBoneName.EndsWith(" " + shortToken, StringComparison.Ordinal);
-    }
-
-    private void BuildPartUvMasks(Mesh mesh, Texture2D texture)
-    {
-        var pixelCount = texture.width * texture.height;
-        var allMask = new bool[pixelCount];
-        for (var i = 0; i < allMask.Length; i++)
-        {
-            allMask[i] = true;
-        }
-        _partUvMasks[SuitPart.All] = allMask;
-        _partMaskPixelCounts[SuitPart.All] = pixelCount;
-        var uv = mesh.uv;
-        if (uv == null || uv.Length != mesh.vertexCount)
-        {
-            DrawableSuitsDiagnostics.Warn("Part UV masks unavailable because the baked suit mesh does not expose matching UV coordinates.");
-            return;
-        }
-
-        for (var i = 0; i < IsolatedSuitParts.Length; i++)
-        {
-            var part = IsolatedSuitParts[i];
-            var mask = new bool[pixelCount];
-            if (_partTrianglesBySubmesh.TryGetValue(part, out var submeshes))
-            {
-                for (var submesh = 0; submesh < submeshes.Length; submesh++)
-                {
-                    var triangles = submeshes[submesh];
-                    for (var triangle = 0; triangle + 2 < triangles.Length; triangle += 3)
-                    {
-                        RasterizeUvTriangle(mask, texture.width, texture.height, uv[triangles[triangle]], uv[triangles[triangle + 1]], uv[triangles[triangle + 2]]);
-                    }
-                }
-            }
-            _partUvMasks[part] = mask;
-            var count = 0;
-            for (var pixel = 0; pixel < mask.Length; pixel++)
-            {
-                if (mask[pixel]) count++;
-            }
-            _partMaskPixelCounts[part] = count;
-        }
-
-        var overlapPixels = 0;
-        for (var pixel = 0; pixel < pixelCount; pixel++)
-        {
-            var owners = 0;
-            for (var i = 0; i < IsolatedSuitParts.Length; i++)
-            {
-                if (_partUvMasks[IsolatedSuitParts[i]][pixel]) owners++;
-            }
-            if (owners > 1) overlapPixels++;
-        }
-        var overlapWarningThreshold = Mathf.Max(16, pixelCount / 4096);
-        _partUvOverlapDetected = overlapPixels > overlapWarningThreshold;
-        if (_partUvOverlapDetected)
-        {
-            DrawableSuitsDiagnostics.Warn($"Part UV masks share {overlapPixels} texture pixels across body parts. Isolation cannot prevent shared-UV surfaces from displaying the same edited pixel.");
-        }
-        else if (overlapPixels > 0)
-        {
-            DrawableSuitsDiagnostics.Info($"Part UV masks had {overlapPixels} edge-overlap pixels below warning threshold {overlapWarningThreshold}; treating isolation as clean.");
-        }
-    }
-
-    private static void RasterizeUvTriangle(bool[] mask, int width, int height, Vector2 a, Vector2 b, Vector2 c)
-    {
-        var pa = new Vector2(Mathf.Clamp01(a.x) * (width - 1), Mathf.Clamp01(a.y) * (height - 1));
-        var pb = new Vector2(Mathf.Clamp01(b.x) * (width - 1), Mathf.Clamp01(b.y) * (height - 1));
-        var pc = new Vector2(Mathf.Clamp01(c.x) * (width - 1), Mathf.Clamp01(c.y) * (height - 1));
-        var minX = Mathf.Max(0, Mathf.FloorToInt(Mathf.Min(pa.x, Mathf.Min(pb.x, pc.x))));
-        var maxX = Mathf.Min(width - 1, Mathf.CeilToInt(Mathf.Max(pa.x, Mathf.Max(pb.x, pc.x))));
-        var minY = Mathf.Max(0, Mathf.FloorToInt(Mathf.Min(pa.y, Mathf.Min(pb.y, pc.y))));
-        var maxY = Mathf.Min(height - 1, Mathf.CeilToInt(Mathf.Max(pa.y, Mathf.Max(pb.y, pc.y))));
-        var denominator = (pb.y - pc.y) * (pa.x - pc.x) + (pc.x - pb.x) * (pa.y - pc.y);
-        if (Mathf.Abs(denominator) < 0.00001f)
-        {
-            return;
-        }
-
-        for (var y = minY; y <= maxY; y++)
-        {
-            for (var x = minX; x <= maxX; x++)
-            {
-                var point = new Vector2(x + 0.5f, y + 0.5f);
-                var w1 = ((pb.y - pc.y) * (point.x - pc.x) + (pc.x - pb.x) * (point.y - pc.y)) / denominator;
-                var w2 = ((pc.y - pa.y) * (point.x - pc.x) + (pa.x - pc.x) * (point.y - pc.y)) / denominator;
-                var w3 = 1f - w1 - w2;
-                if (w1 >= -0.001f && w2 >= -0.001f && w3 >= -0.001f)
-                {
-                    mask[y * width + x] = true;
-                }
-            }
-        }
-    }
-
-    private int GetPartTriangleCount(SuitPart part)
-    {
-        return _partTriangleCounts.TryGetValue(part, out var count) ? count : 0;
-    }
-
-    private int GetPartMaskPixelCount(SuitPart part)
-    {
-        return _partMaskPixelCounts.TryGetValue(part, out var count) ? count : 0;
-    }
-
-    private void ClearPartIsolationData()
-    {
-        _partTrianglesBySubmesh.Clear();
-        _partUvMasks.Clear();
-        _partTriangleCounts.Clear();
-        _partMaskPixelCounts.Clear();
-        _partDataReady = false;
-        _partUvOverlapDetected = false;
-        _partDataTextureWidth = 0;
-        _partDataTextureHeight = 0;
-        _partDataSourceId = 0;
-        _partClassifierSource = "none";
-        if (_partFilteredPreviewTexture != null)
-        {
-            Destroy(_partFilteredPreviewTexture);
-            _partFilteredPreviewTexture = null;
-        }
     }
 
     private bool SetupWorldThirdPersonPreview(string context, WorldCameraState preservedCameraState = default)
@@ -6415,16 +4752,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             }
 
             _worldPaintMesh.RecalculateBounds();
-            var editableTexture = DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId);
-            if (editableTexture != null
-                && (!_partDataReady
-                    || _partDataSourceId != source.GetInstanceID()
-                    || _partDataTextureWidth != editableTexture.width
-                    || _partDataTextureHeight != editableTexture.height))
-            {
-                BuildPartIsolationData(source, _worldPaintMesh, editableTexture, "world proxy");
-            }
-            ApplySelectedPartTrianglesToProxy(_worldPaintMesh);
+            _lastWorldProxyMeshSummary = $"mode=Full; vertices={_worldPaintMesh.vertexCount}; subMeshes={_worldPaintMesh.subMeshCount}; bounds={_worldPaintMesh.bounds}";
             if (_worldPaintProxyObject.transform.parent != source.transform)
             {
                 _worldPaintProxyObject.transform.SetParent(source.transform, false);
@@ -6440,7 +4768,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             source.enabled = false;
             if (forceLog)
             {
-                DrawableSuitsDiagnostics.Info($"WorldAvatarProxy updated. part={_selectedPart}; partTriangles={GetPartTriangleCount(_selectedPart)}; mesh={_lastWorldProxyMeshSummary}; renderer={DescribeRendererCandidate(source, "source")}; vertices={_worldPaintMesh.vertexCount}; subMeshes={_worldPaintMesh.subMeshCount}; bounds={_worldPaintMesh.bounds}; proxyPos={_worldPaintProxyObject.transform.position}; proxyRot={_worldPaintProxyObject.transform.rotation.eulerAngles}; proxyScale={_worldPaintProxyObject.transform.localScale}; layer={_worldPaintLayer}; rendererEnabled={_worldAvatarRenderer.enabled}; proxyMaterials=[{DescribeMaterials(_worldAvatarRenderer.sharedMaterials)}]; collider={_worldPaintCollider != null}");
+                DrawableSuitsDiagnostics.Info($"WorldAvatarProxy updated. mesh={_lastWorldProxyMeshSummary}; renderer={DescribeRendererCandidate(source, "source")}; vertices={_worldPaintMesh.vertexCount}; subMeshes={_worldPaintMesh.subMeshCount}; bounds={_worldPaintMesh.bounds}; proxyPos={_worldPaintProxyObject.transform.position}; proxyRot={_worldPaintProxyObject.transform.rotation.eulerAngles}; proxyScale={_worldPaintProxyObject.transform.localScale}; layer={_worldPaintLayer}; rendererEnabled={_worldAvatarRenderer.enabled}; proxyMaterials=[{DescribeMaterials(_worldAvatarRenderer.sharedMaterials)}]; collider={_worldPaintCollider != null}");
                 LogVisibleEditorCameraRenderers(source);
             }
             return true;
@@ -6457,111 +4785,6 @@ internal sealed class SuitEditorController : MonoBehaviour
                 source.enabled = DrawableSuitsPlugin.IsEditorOpen ? false : previousEnabled;
             }
         }
-    }
-
-    private void ApplySelectedPartTrianglesToProxy(Mesh mesh)
-    {
-        if (mesh == null || !_partDataReady || !_partTrianglesBySubmesh.TryGetValue(_selectedPart, out var submeshes))
-        {
-            _lastWorldProxyMeshSummary = "full_or_unavailable";
-            return;
-        }
-
-        if (_selectedPart == SuitPart.All)
-        {
-            mesh.RecalculateBounds();
-            _lastWorldProxyMeshSummary = $"mode=Full; vertices={mesh.vertexCount}; subMeshes={mesh.subMeshCount}; bounds={mesh.bounds}";
-            return;
-        }
-
-        CompactSelectedPartMesh(mesh, submeshes);
-    }
-
-    private void CompactSelectedPartMesh(Mesh mesh, int[][] submeshes)
-    {
-        var sourceVertices = mesh.vertices;
-        var sourceNormals = mesh.normals;
-        var sourceTangents = mesh.tangents;
-        var sourceUv = mesh.uv;
-        var sourceUv2 = mesh.uv2;
-        var sourceColors = mesh.colors32;
-        var hasNormals = sourceNormals != null && sourceNormals.Length == sourceVertices.Length;
-        var hasTangents = sourceTangents != null && sourceTangents.Length == sourceVertices.Length;
-        var hasUv = sourceUv != null && sourceUv.Length == sourceVertices.Length;
-        var hasUv2 = sourceUv2 != null && sourceUv2.Length == sourceVertices.Length;
-        var hasColors = sourceColors != null && sourceColors.Length == sourceVertices.Length;
-
-        var remap = new Dictionary<int, int>();
-        var compactVertices = new List<Vector3>();
-        var compactNormals = hasNormals ? new List<Vector3>() : null;
-        var compactTangents = hasTangents ? new List<Vector4>() : null;
-        var compactUv = hasUv ? new List<Vector2>() : null;
-        var compactUv2 = hasUv2 ? new List<Vector2>() : null;
-        var compactColors = hasColors ? new List<Color32>() : null;
-        var compactSubmeshTriangles = new List<int>[submeshes.Length];
-        var sourceTriangleCount = 0;
-        for (var submesh = 0; submesh < submeshes.Length; submesh++)
-        {
-            compactSubmeshTriangles[submesh] = new List<int>();
-            var triangles = submeshes[submesh] ?? Array.Empty<int>();
-            sourceTriangleCount += triangles.Length / 3;
-            for (var i = 0; i < triangles.Length; i++)
-            {
-                var sourceIndex = triangles[i];
-                if (sourceIndex < 0 || sourceIndex >= sourceVertices.Length)
-                {
-                    continue;
-                }
-
-                if (!remap.TryGetValue(sourceIndex, out var compactIndex))
-                {
-                    compactIndex = compactVertices.Count;
-                    remap[sourceIndex] = compactIndex;
-                    compactVertices.Add(sourceVertices[sourceIndex]);
-                    compactNormals?.Add(sourceNormals[sourceIndex]);
-                    compactTangents?.Add(sourceTangents[sourceIndex]);
-                    compactUv?.Add(sourceUv[sourceIndex]);
-                    compactUv2?.Add(sourceUv2[sourceIndex]);
-                    compactColors?.Add(sourceColors[sourceIndex]);
-                }
-
-                compactSubmeshTriangles[submesh].Add(compactIndex);
-            }
-        }
-
-        mesh.Clear();
-        mesh.SetVertices(compactVertices);
-        if (compactNormals != null)
-        {
-            mesh.SetNormals(compactNormals);
-        }
-        if (compactTangents != null)
-        {
-            mesh.SetTangents(compactTangents);
-        }
-        if (compactUv != null)
-        {
-            mesh.SetUVs(0, compactUv);
-        }
-        if (compactUv2 != null)
-        {
-            mesh.SetUVs(1, compactUv2);
-        }
-        if (compactColors != null)
-        {
-            mesh.SetColors(compactColors);
-        }
-        mesh.subMeshCount = submeshes.Length;
-        for (var submesh = 0; submesh < submeshes.Length; submesh++)
-        {
-            mesh.SetTriangles(compactSubmeshTriangles[submesh], submesh, false);
-        }
-        if (compactNormals == null || compactNormals.Count != compactVertices.Count)
-        {
-            mesh.RecalculateNormals();
-        }
-        mesh.RecalculateBounds();
-        _lastWorldProxyMeshSummary = $"mode=Compact; sourceTriangles={sourceTriangleCount}; compactVertices={compactVertices.Count}; subMeshes={submeshes.Length}; bounds={mesh.bounds}";
     }
 
     private Material[] BuildWorldProxyMaterials(SkinnedMeshRenderer source, bool forceLog = false)
@@ -7095,9 +5318,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private void UseTexturePreview(string context, bool forceLog)
     {
         var texture = _selectedSuitId >= 0 ? DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId) : null;
-        var assignedTexture = texture != null
-            ? (_selectedPart == SuitPart.All ? (Texture)texture : BuildFilteredPartPreviewTexture(texture))
-            : EnsureCheckerTexture();
+        var assignedTexture = texture != null ? (Texture)texture : EnsureCheckerTexture();
         _usingTexturePreview = true;
         _previewMode = texture != null ? "TextureFallback" : "TextureFallbackNoEditableTexture";
         _canPaint = texture != null;
@@ -7117,41 +5338,6 @@ internal sealed class SuitEditorController : MonoBehaviour
             DrawableSuitsDiagnostics.Info($"TexturePreview[{context}]: {assignment}; viewport={(_previewViewportRect != null ? _previewViewportRect.rect.ToString() : "null")}");
             _lastPreviewAssignmentLog = assignment;
         }
-    }
-
-    private Texture BuildFilteredPartPreviewTexture(Texture2D texture)
-    {
-        if (texture == null || _selectedPart == SuitPart.All || !_partUvMasks.TryGetValue(_selectedPart, out var mask) || mask == null)
-        {
-            return texture;
-        }
-
-        if (_partFilteredPreviewTexture == null
-            || _partFilteredPreviewTexture.width != texture.width
-            || _partFilteredPreviewTexture.height != texture.height)
-        {
-            if (_partFilteredPreviewTexture != null)
-            {
-                Destroy(_partFilteredPreviewTexture);
-            }
-            _partFilteredPreviewTexture = new Texture2D(texture.width, texture.height, TextureFormat.RGBA32, false)
-            {
-                name = "DrawableSuitsSelectedPartUvPreview",
-                filterMode = texture.filterMode,
-                wrapMode = TextureWrapMode.Clamp,
-                hideFlags = HideFlags.HideAndDontSave
-            };
-        }
-
-        var source = texture.GetPixels32();
-        var filtered = new Color32[source.Length];
-        for (var i = 0; i < source.Length && i < mask.Length; i++)
-        {
-            filtered[i] = mask[i] ? source[i] : new Color32(0, 0, 0, 0);
-        }
-        _partFilteredPreviewTexture.SetPixels32(filtered);
-        _partFilteredPreviewTexture.Apply(false, false);
-        return _partFilteredPreviewTexture;
     }
 
     private string DescribeEditableTexture()

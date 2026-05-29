@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.5
+
+- Removed the part picker and restored full-suit third-person editing as the only active editing workflow.
+- Stopped filtering third-person proxy meshes, UV fallback textures, paint strokes, erase strokes, and decal stamps through generated part masks.
+- Stopped creating the `PartPresets` folder during runtime setup; existing user files are left untouched but ignored by the editor.
+- Updated diagnostics so active editor logs report full proxy mesh state instead of part classifier output.
+
 ## 0.5.4
 
 - Tightened the vanilla humanoid part preset so Helmet no longer absorbs upper torso geometry.
