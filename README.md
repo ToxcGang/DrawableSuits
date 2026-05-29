@@ -5,7 +5,7 @@ DrawableSuits is a Lethal Company v81 BepInEx mod that lets players draw on suit
 ## Features
 
 - Default third-person paint editor: opening DrawableSuits switches to an editor camera around the local player so you can paint directly on the visible suit.
-- Compact side overlay with Paint, Erase, Decal, a UI-only Mirror toggle, brush sliders, a hue/SV color picker, decal controls, design name, visible decal rows, visible saved-design rows, Undo, Redo, Reset, Apply, Save, Load, and Close.
+- Compact side overlay with Paint, Erase, Decal, Eyedropper, a UI-only Mirror toggle, brush sliders, a hue/SV color picker, decal controls, design name, visible decal rows, visible saved-design rows, Undo, Redo, Reset, Apply, Save, Load, and Close.
 - Mirror painting duplicates Paint, Erase, and Decal edits onto the opposite suit surface using the editor's baked avatar mesh, without adding keyboard or controller shortcuts.
 - Decal placement preview: Decal mode shows a translucent live preview before stamping, then places one decal per click or right-trigger press.
 - Pause-menu entry point: use the `DrawableSuits` button below Resume.
@@ -33,6 +33,7 @@ Keyboard and mouse:
 - `F8`: toggle editor.
 - `F10`: emergency open.
 - Left mouse: paint/erase continuously; in Decal mode, stamp one decal at the preview location.
+- Eyedropper: click the `Eyedropper` UI button, then left-click the suit to sample that texture color. It returns to the previous tool after one successful sample.
 - Mirror: click the `Mirror` UI button to duplicate paint, erase, and decal stamps onto the opposite suit surface.
 - Right mouse: orbit the third-person editor camera.
 - Mouse wheel: zoom the third-person camera.
@@ -44,6 +45,7 @@ Controller:
 - `View/Back + Y`: open or close.
 - Left stick: move the editor cursor.
 - `A`: click the button, field, slider, or color picker region directly under the cursor.
+- Eyedropper: move the virtual cursor over the `Eyedropper` UI button, press `A`, then aim at the suit and press right trigger once to sample a color. It returns to the previous tool after one successful sample.
 - Mirror: move the virtual cursor over the `Mirror` UI button and press `A`; there is no controller shortcut for this modifier.
 - Right trigger: paint/erase continuously; in Decal mode, stamp one decal at the preview location.
 - Right stick or bumpers: orbit the third-person editor camera.
@@ -101,7 +103,7 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.7 behavior:
+Expected 0.5.8 behavior:
 
 - Opening the editor shows a compact side overlay and a third-person camera view of the local player.
 - The diagnostics text should show `Preview mode: WorldThirdPerson` when the default path succeeds.
@@ -124,6 +126,8 @@ Expected 0.5.7 behavior:
 - The `Mirror` button is a UI-only modifier. When it is orange, paint, erase, and decal stamps use a surface-map mirror target on the opposite side of the baked suit mesh in one undo action.
 - Mirrored decal previews show both the primary and mirrored decal. The mirrored decal is horizontally flipped and uses inverse rotation.
 - UV fallback also uses the mesh mirror map when the clicked UV maps back to a suit triangle. If no mirror target is available, DrawableSuits applies the primary edit only and shows a short status.
+- The `Eyedropper` button is a UI-only one-shot tool. It samples the editable suit texture at the cursor hit point, updates the swatch, color picker, hex field, and brush color, then returns to the previous Paint, Erase, or Decal tool.
+- Eyedropper does not create undo entries and Mirror does not affect sampling.
 - The part picker is removed. Third-person mode always shows the full avatar proxy, and UV fallback always shows the full editable suit texture.
 - Paint, erase, decal preview, and decal stamping operate on the full editable texture.
 - Active editor diagnostics report full proxy mesh/collider state through `WorldAvatarProxy updated`; `PartClassifierBuilt` should not appear during normal editor use.
@@ -147,6 +151,7 @@ Troubleshooting:
 - If editing one player changes every other player wearing the same skin, confirm the installed package is 0.4.4 or newer. Active edits now sync with owner client IDs and do not mutate suit rack/global suit materials.
 - If you cannot see the local suit in third person, check `diagnostics.log` for `WorldThirdPerson setup`, `WorldAvatarProxy updated`, and `WorldEditorCamera updated`.
 - If painting misses the suit, check `PaintAttempt` entries for `world paint input`, UV coordinates, and whether the cursor is over the editor panel.
+- If Eyedropper does not sample a color, check `EyedropperMiss` entries for whether the cursor was over the visible suit or UV preview. A successful sample logs `EyedropperSampled` with UV, pixel, sampled hex color, and return tool.
 - If decals or saved designs do not appear, check `RefreshFileLists complete` and `ListRowsUpdated` entries.
 - If scan, inventory scroll, or item use still happen while the editor is open, check for `Global gameplay actions locked` and `Blocked PlayerControllerB` entries.
 - If keyboard or controller shortcuts do not open the editor, use the pause-menu `DrawableSuits` button.

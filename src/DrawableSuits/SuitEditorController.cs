@@ -28,7 +28,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         Paint,
         Erase,
-        Decal
+        Decal,
+        Eyedropper
     }
 
     private readonly Stack<Color32[]> _undo = new();
@@ -43,6 +44,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private int _selectedDecalIndex = -1;
     private string _designName = "MyDrawableSuit";
     private EditorTool _tool = EditorTool.Paint;
+    private EditorTool _previousToolBeforeEyedropper = EditorTool.Paint;
     private Color _brushColor = Color.red;
     private float _brushSize = 16f;
     private float _brushOpacity = 1f;
@@ -51,6 +53,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private bool _mirrorEnabled;
     private bool _strokeActive;
     private bool _decalStampArmed = true;
+    private bool _suppressPaintInputUntilRelease;
     private string _statusMessage = string.Empty;
     private bool _cursorStateCaptured;
     private bool _previousCursorVisible;
@@ -76,6 +79,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private float _lastGameplayActionRelockLogTime;
     private float _lastMirrorDiagnosticsTime;
     private string _lastMirrorDiagnosticsKey = string.Empty;
+    private float _lastEyedropperDiagnosticsTime;
+    private string _lastEyedropperDiagnosticsKey = string.Empty;
 
     private static readonly string[] GameplayInputActionNames =
     {
@@ -213,6 +218,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Button _paintButton;
     private Button _eraseButton;
     private Button _decalButton;
+    private Button _eyedropperButton;
     private Button _mirrorButton;
     private Button _applyButton;
     private Button _saveButton;
@@ -1400,6 +1406,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         CreateAnchoredButton(panel.transform, "Next", new Rect(leftX + 210f, 282f, 72f, 34f), () => SelectAdjacentSuit(1));
 
         CreateAnchoredText(panel.transform, "ToolHeader", "Tool", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 326f, leftW, 24f), Color.white);
+        _eyedropperButton = CreateAnchoredButton(panel.transform, "Eyedropper", new Rect(leftX + 154f, 322f, 120f, 28f), () => SetTool(EditorTool.Eyedropper));
         _paintButton = CreateAnchoredButton(panel.transform, "Paint", new Rect(leftX, 354f, 64f, 34f), () => SetTool(EditorTool.Paint));
         _eraseButton = CreateAnchoredButton(panel.transform, "Erase", new Rect(leftX + 70f, 354f, 64f, 34f), () => SetTool(EditorTool.Erase));
         _decalButton = CreateAnchoredButton(panel.transform, "Decal", new Rect(leftX + 140f, 354f, 64f, 34f), () => SetTool(EditorTool.Decal));
@@ -1421,7 +1428,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         _colorHexInput.onEndEdit.AddListener(ApplyHexInput);
 
         _uvFallbackButton = CreateAnchoredButton(panel.transform, "Use UV Fallback", new Rect(rightX, 54f, 150f, 34f), ToggleUvFallback);
-        CreateAnchoredText(panel.transform, "WorldHelp", "Third-person mode: aim at the visible suit and hold left mouse or right trigger to paint. Right mouse/right stick or bumpers orbit. Wheel or D-pad up/down zooms; Ctrl+wheel changes brush size.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(rightX, 96f, rightW, 76f), new Color(0.86f, 0.9f, 0.94f, 1f));
+        CreateAnchoredText(panel.transform, "WorldHelp", "Third-person mode: aim at the visible suit and hold left mouse or right trigger to paint. Eyedropper samples once, then returns to the previous tool. Right mouse/right stick or bumpers orbit. Wheel or D-pad up/down zooms.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(rightX, 96f, rightW, 76f), new Color(0.86f, 0.9f, 0.94f, 1f));
 
         CreateAnchoredText(panel.transform, "DecalHeader", "Decal", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 188f, rightW, 24f), Color.white);
         _decalSizeLabel = CreateAnchoredText(panel.transform, "DecalSizeLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(rightX, 218f, 112f, 24f), Color.white);
@@ -1502,7 +1509,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         _brushIndicator.gameObject.SetActive(false);
         fallbackPreview.SetActive(false);
 
-        CreateAnchoredText(panel.transform, "ControllerHelp", "Controller: View/Back+Y open/close, left stick cursor, A clicks UI, RT paints only, right stick/bumpers orbit, D-pad up/down zooms, X undo, Start save.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 954f, 574f, 36f), Color.white);
+        CreateAnchoredText(panel.transform, "ControllerHelp", "Controller: View/Back+Y open/close, left stick cursor, A clicks UI, RT paints or samples with Eyedropper, right stick/bumpers orbit, D-pad up/down zooms, X undo, Start save.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 954f, 574f, 36f), Color.white);
 
         _cursorMarker = CreateUiObject("DrawableSuitsCursor", _editorCanvasObject.transform, typeof(Image)).GetComponent<RectTransform>();
         _cursorMarker.sizeDelta = new Vector2(14f, 14f);
@@ -2384,6 +2391,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         SetInteractable(_paintButton, _canPaint);
         SetInteractable(_eraseButton, _canPaint);
         SetInteractable(_decalButton, _canPaint);
+        SetInteractable(_eyedropperButton, _canPaint && hasEditableTexture);
         SetInteractable(_mirrorButton, _canPaint && hasEditableTexture);
         SetInteractable(_applyButton, _canPaint && hasEditableTexture);
         SetInteractable(_saveButton, hasEditableTexture);
@@ -2409,6 +2417,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             $"Preview mode: {_previewMode}",
             $"Editable texture: {DescribeEditableTexture()}",
             $"Preview UI texture: {DescribePreviewImageTexture()}",
+            $"Tool: {_tool}",
             $"Mirror enabled: {_mirrorEnabled}",
             $"Mirror map: {(_mirrorSurfaceMap != null ? $"{_mirrorSurfaceMap.TriangleCount} tris" : "none")}",
             $"UV fallback mode: {_uvFallbackMode}",
@@ -2550,6 +2559,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         SetToolButtonColor(_paintButton, _tool == EditorTool.Paint);
         SetToolButtonColor(_eraseButton, _tool == EditorTool.Erase);
         SetToolButtonColor(_decalButton, _tool == EditorTool.Decal);
+        SetToolButtonColor(_eyedropperButton, _tool == EditorTool.Eyedropper);
         SetToolButtonColor(_mirrorButton, _mirrorEnabled);
     }
 
@@ -2569,6 +2579,11 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void SetTool(EditorTool tool)
     {
+        if (tool == EditorTool.Eyedropper)
+        {
+            _previousToolBeforeEyedropper = IsReturnableEyedropperTool(_tool) ? _tool : EditorTool.Paint;
+        }
+
         if (tool == EditorTool.Decal && _loadedDecal == null)
         {
             WarnMissingDecal("tool selection");
@@ -2581,6 +2596,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         _tool = tool;
         _decalStampArmed = true;
+        _suppressPaintInputUntilRelease = false;
         _suppressDecalPreviewUntilRelease = false;
         if (tool == EditorTool.Decal)
         {
@@ -2594,9 +2610,18 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             SetStatus(BuildReadinessStatus(), false);
         }
+        if (tool == EditorTool.Eyedropper)
+        {
+            SetStatus("Eyedropper active. Aim at the suit to sample a color.", false);
+        }
 
         UpdateToolButtons();
         UpdateBrushIndicator();
+    }
+
+    private static bool IsReturnableEyedropperTool(EditorTool tool)
+    {
+        return tool == EditorTool.Paint || tool == EditorTool.Erase || tool == EditorTool.Decal;
     }
 
     private void ToggleMirror()
@@ -4106,13 +4131,26 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             _strokeActive = false;
             _decalStampArmed = true;
+            _suppressPaintInputUntilRelease = false;
             _suppressDecalPreviewUntilRelease = false;
+            return;
+        }
+
+        if (_suppressPaintInputUntilRelease)
+        {
             return;
         }
 
         var texture = DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId);
         var uvAvailable = TryGetTexturePreviewUv(_cursor, out var uv);
         var overPreview = IsCursorOverPreviewViewport() && uvAvailable;
+
+        if (_tool == EditorTool.Eyedropper)
+        {
+            HandleEyedropperInput(texture, overPreview, uv, "TextureFallback");
+            return;
+        }
+
         var mirrorTarget = overPreview && texture != null ? ResolveUvMirrorTarget(texture, uv, false) : CreateMirrorTargetShell("TextureFallback");
         LogPaintAttemptIfNeeded("paint input", overPreview, uvAvailable, uv, texture, mirrorTarget, !_strokeActive);
 
@@ -4157,13 +4195,28 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             _strokeActive = false;
             _decalStampArmed = true;
+            _suppressPaintInputUntilRelease = false;
             _suppressDecalPreviewUntilRelease = false;
             return;
         }
 
+        if (_suppressPaintInputUntilRelease)
+        {
+            return;
+        }
+
         var texture = DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId);
-        var hitAvailable = TryGetWorldPaintHit(out var hit, true);
+        var canTargetWorld = !IsCursorOverEditorPanel();
+        RaycastHit hit = default;
+        var hitAvailable = canTargetWorld && TryGetWorldPaintHit(out hit, true);
         var uv = hitAvailable ? hit.textureCoord : default;
+
+        if (_tool == EditorTool.Eyedropper)
+        {
+            HandleEyedropperInput(texture, hitAvailable, uv, "WorldThirdPerson");
+            return;
+        }
+
         var mirrorTarget = hitAvailable && texture != null ? ResolveWorldMirrorTarget(texture, hit, false) : CreateMirrorTargetShell("WorldThirdPerson");
         LogPaintAttemptIfNeeded("world paint input", hitAvailable, hitAvailable, uv, texture, mirrorTarget, !_strokeActive);
 
@@ -4206,6 +4259,87 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         PaintAtCursor(texture, uv, mirrorTarget);
+    }
+
+    private void HandleEyedropperInput(Texture2D texture, bool targetAvailable, Vector2 uv, string mode)
+    {
+        _strokeActive = false;
+        _decalStampArmed = true;
+        _suppressDecalPreviewUntilRelease = false;
+        HideDecalPlacementPreview("eyedropper active", false);
+
+        if (!targetAvailable || texture == null)
+        {
+            SetStatus("Aim at the suit to sample a color.", false);
+            LogEyedropperMiss(mode, targetAvailable ? "no editable texture" : "cursor miss");
+            return;
+        }
+
+        var pixel = TexturePixel(texture, uv);
+        if (pixel.x < 0 || pixel.y < 0 || pixel.x >= texture.width || pixel.y >= texture.height)
+        {
+            SetStatus("Aim at the suit to sample a color.", false);
+            LogEyedropperMiss(mode, $"invalid pixel {pixel.x},{pixel.y}");
+            return;
+        }
+
+        var sampled = texture.GetPixel(pixel.x, pixel.y);
+        sampled.a = 1f;
+        _brushColor = sampled;
+        _colorPicker?.SetColor(_brushColor, false);
+        UpdateColorUi();
+        if (_worldBrushMarkerMaterial != null)
+        {
+            _worldBrushMarkerMaterial.color = new Color(_brushColor.r, _brushColor.g, _brushColor.b, 0.85f);
+        }
+
+        var returnTool = ResolveEyedropperReturnTool();
+        _tool = returnTool;
+        _suppressPaintInputUntilRelease = true;
+        _suppressDecalPreviewUntilRelease = false;
+        if (_tool == EditorTool.Decal)
+        {
+            InvalidateDecalPreview("eyedropper return to decal");
+        }
+        else
+        {
+            HideDecalPlacementPreview("eyedropper sampled", false);
+        }
+
+        SetStatus($"Sampled {ColorToHex(_brushColor)}.", false);
+        UpdateToolButtons();
+        UpdateBrushIndicator();
+        LogEyedropperSampled(mode, texture, uv, pixel, returnTool);
+    }
+
+    private EditorTool ResolveEyedropperReturnTool()
+    {
+        if (_previousToolBeforeEyedropper == EditorTool.Decal && _loadedDecal == null)
+        {
+            return EditorTool.Paint;
+        }
+
+        return IsReturnableEyedropperTool(_previousToolBeforeEyedropper)
+            ? _previousToolBeforeEyedropper
+            : EditorTool.Paint;
+    }
+
+    private void LogEyedropperSampled(string mode, Texture2D texture, Vector2 uv, Vector2Int pixel, EditorTool returnTool)
+    {
+        DrawableSuitsDiagnostics.Info($"EyedropperSampled: mode={mode}; pointerSource={_pointerSource}; uv={uv}; pixel={pixel.x},{pixel.y}; color={ColorToHex(_brushColor)}; returnTool={returnTool}; texture={texture.name} {texture.width}x{texture.height}");
+    }
+
+    private void LogEyedropperMiss(string mode, string reason)
+    {
+        var key = $"{mode}|{reason}|source={_pointerSource}";
+        if (Time.unscaledTime - _lastEyedropperDiagnosticsTime < 0.75f && string.Equals(key, _lastEyedropperDiagnosticsKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastEyedropperDiagnosticsTime = Time.unscaledTime;
+        _lastEyedropperDiagnosticsKey = key;
+        DrawableSuitsDiagnostics.Info($"EyedropperMiss: mode={mode}; pointerSource={_pointerSource}; reason={reason}; cursor={_cursor}");
     }
 
     private void HandleSingleDecalStampInput(Texture2D texture, bool targetAvailable, Vector2 uv, MirrorPaintTarget mirrorTarget, string mode)

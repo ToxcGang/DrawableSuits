@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.8
+
+- Added a UI-only one-shot `Eyedropper` tool for sampling colors from the third-person suit surface or UV fallback preview.
+- Sampling updates the brush color, swatch, hue/SV picker, and hex input, then returns to the previous Paint, Erase, or Decal tool.
+- Added `EyedropperSampled` and rate-limited miss diagnostics without adding undo entries or new keyboard/controller shortcuts.
+
 ## 0.5.7
 
 - Replaced UV-axis mirror painting with anatomical surface-map mirroring in third-person mode.
