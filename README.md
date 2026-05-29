@@ -5,7 +5,8 @@ DrawableSuits is a Lethal Company v81 BepInEx mod that lets players draw on suit
 ## Features
 
 - Default third-person paint editor: opening DrawableSuits switches to an editor camera around the local player so you can paint directly on the visible suit.
-- Compact side overlay with Paint, Erase, Decal, brush sliders, a hue/SV color picker, decal controls, design name, visible decal rows, visible saved-design rows, Undo, Redo, Reset, Apply, Save, Load, and Close.
+- Compact side overlay with Paint, Erase, Decal, a UI-only Mirror toggle, brush sliders, a hue/SV color picker, decal controls, design name, visible decal rows, visible saved-design rows, Undo, Redo, Reset, Apply, Save, Load, and Close.
+- Mirror painting duplicates Paint, Erase, and Decal edits across the texture's left-right UV axis without adding keyboard or controller shortcuts.
 - Decal placement preview: Decal mode shows a translucent live preview before stamping, then places one decal per click or right-trigger press.
 - Pause-menu entry point: use the `DrawableSuits` button below Resume.
 - Fallback shortcuts: `F8` on keyboard or `View/Back + Y` on controller.
@@ -32,6 +33,7 @@ Keyboard and mouse:
 - `F8`: toggle editor.
 - `F10`: emergency open.
 - Left mouse: paint/erase continuously; in Decal mode, stamp one decal at the preview location.
+- Mirror: click the `Mirror` UI button to duplicate paint, erase, and decal stamps across the UV left-right axis.
 - Right mouse: orbit the third-person editor camera.
 - Mouse wheel: zoom the third-person camera.
 - Ctrl + mouse wheel: change brush size.
@@ -42,6 +44,7 @@ Controller:
 - `View/Back + Y`: open or close.
 - Left stick: move the editor cursor.
 - `A`: click the button, field, slider, or color picker region directly under the cursor.
+- Mirror: move the virtual cursor over the `Mirror` UI button and press `A`; there is no controller shortcut for this modifier.
 - Right trigger: paint/erase continuously; in Decal mode, stamp one decal at the preview location.
 - Right stick or bumpers: orbit the third-person editor camera.
 - D-pad up/down: zoom the third-person editor camera.
@@ -98,7 +101,7 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.5 behavior:
+Expected 0.5.6 behavior:
 
 - Opening the editor shows a compact side overlay and a third-person camera view of the local player.
 - The diagnostics text should show `Preview mode: WorldThirdPerson` when the default path succeeds.
@@ -118,6 +121,8 @@ Expected 0.5.5 behavior:
 - In Decal mode with a selected decal, hovering over the suit shows a translucent preview and status `Previewing decal. Click/RT to stamp.`
 - Decal placement is single-shot: holding left mouse or RT places one decal until the input is released and pressed again.
 - UV fallback mode shows a non-interactive rotated decal preview over the texture panel.
+- The `Mirror` button is a UI-only modifier. When it is orange, paint, erase, and decal stamps are duplicated across `mirroredUv = (1 - uv.x, uv.y)` in one undo action.
+- Mirrored decal previews show both the primary and mirrored decal. The mirrored decal is horizontally flipped and uses inverse rotation.
 - The part picker is removed. Third-person mode always shows the full avatar proxy, and UV fallback always shows the full editable suit texture.
 - Paint, erase, decal preview, and decal stamping operate on the full editable texture.
 - Active editor diagnostics report full proxy mesh/collider state through `WorldAvatarProxy updated`; `PartClassifierBuilt` should not appear during normal editor use.
@@ -126,6 +131,7 @@ Troubleshooting:
 
 - If no decal preview appears, confirm a decal row is selected and Decal tool is active, then check `DecalPreviewUpdated` or `DecalPreviewHidden` diagnostics.
 - If decals stamp repeatedly while holding input, confirm the installed package is 0.4.8 or newer and check for `DecalStampCommitted` entries; there should be one per press/release cycle.
+- If Mirror does not appear to match the body side you expected, remember it mirrors in UV texture space. Modded suits or unusual UV layouts may not map perfectly to anatomical left/right symmetry.
 - If entering a session starts on a black screen before opening DrawableSuits, check `SessionSafetyCheck` lines. They list `Camera.main`, active cameras, camera target textures, local player flags, prompt context such as grab/hover fields, local renderer materials, and any repaired DrawableSuits objects. DrawableSuits should report no active DrawableSuits cameras while `EditorOpen=False`.
 - If the black screen shows `Grab: [E]` and `SessionSafetyCheck` reports `Camera.main=null`, inspect `LogOutput.log` for repeated `JetpackWarning` `PlayerControllerB.LateUpdate` `NullReferenceException`. By default, DrawableSuits disables only `JetpackWarning.Patches.PlayerControllerB_LateUpdate_Postfix` after repeated failures and logs the unpatch result in `diagnostics.log`. Set `AutoDisableBrokenJetpackWarningLateUpdatePatch=false` to turn this compatibility guard off.
 - If third person shows first-person arms, a giant helmet, held items, or another partial rig, check `World renderer candidate`, `Hidden nearby first-person overlay renderer`, `World editor visible renderer candidate`, and `WorldAvatarProxy updated` lines. The selected renderer should be a body/suit renderer and the proxy should use only the player-specific DrawableSuits material for suit-compatible submeshes.
@@ -151,6 +157,7 @@ Troubleshooting:
 ## Known Limits
 
 - Third-person painting uses the suit mesh UVs from `RaycastHit.textureCoord`; unusual modded suit UV layouts may still make strokes appear somewhere unexpected.
+- Mirror mode is UV-space mirroring, so unusual or asymmetric UV layouts may mirror to a different body area than expected.
 - Cross-suit loading depends on UV compatibility.
 - Very large decal images are resized to the configured maximum texture size.
 - Multiplayer sync is designed for applied designs, not every brush stroke.

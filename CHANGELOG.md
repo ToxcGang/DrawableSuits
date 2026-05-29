@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.6
+
+- Added a UI-only `Mirror` toggle that duplicates Paint, Erase, and Decal edits across the suit texture's left-right UV axis.
+- Mirrored decal stamping now places the primary and mirrored decal in one click or right-trigger press, with one undo entry.
+- Added mirrored decal placement previews in third-person mode and UV fallback mode.
+- Added mirror diagnostics for primary and mirrored UV/pixel coordinates.
+
 ## 0.5.5
 
 - Removed the part picker and restored full-suit third-person editing as the only active editing workflow.

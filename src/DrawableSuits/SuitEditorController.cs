@@ -48,6 +48,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private float _brushOpacity = 1f;
     private float _decalSize = 128f;
     private float _decalRotation;
+    private bool _mirrorEnabled;
     private bool _strokeActive;
     private bool _decalStampArmed = true;
     private string _statusMessage = string.Empty;
@@ -154,6 +155,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Texture2D _decalPreviewTexture;
     private RawImage _uvDecalPreviewImage;
     private RectTransform _uvDecalPreviewRect;
+    private RawImage _uvMirrorDecalPreviewImage;
+    private RectTransform _uvMirrorDecalPreviewRect;
     private bool _worldDecalPreviewApplied;
     private bool _decalPreviewVisible;
     private bool _suppressDecalPreviewUntilRelease;
@@ -206,6 +209,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Button _paintButton;
     private Button _eraseButton;
     private Button _decalButton;
+    private Button _mirrorButton;
     private Button _applyButton;
     private Button _saveButton;
     private Button _loadButton;
@@ -1145,9 +1149,10 @@ internal sealed class SuitEditorController : MonoBehaviour
         CreateAnchoredButton(panel.transform, "Next", new Rect(leftX + 210f, 282f, 72f, 34f), () => SelectAdjacentSuit(1));
 
         CreateAnchoredText(panel.transform, "ToolHeader", "Tool", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 326f, leftW, 24f), Color.white);
-        _paintButton = CreateAnchoredButton(panel.transform, "Paint", new Rect(leftX, 354f, 84f, 34f), () => SetTool(EditorTool.Paint));
-        _eraseButton = CreateAnchoredButton(panel.transform, "Erase", new Rect(leftX + 92f, 354f, 84f, 34f), () => SetTool(EditorTool.Erase));
-        _decalButton = CreateAnchoredButton(panel.transform, "Decal", new Rect(leftX + 184f, 354f, 84f, 34f), () => SetTool(EditorTool.Decal));
+        _paintButton = CreateAnchoredButton(panel.transform, "Paint", new Rect(leftX, 354f, 64f, 34f), () => SetTool(EditorTool.Paint));
+        _eraseButton = CreateAnchoredButton(panel.transform, "Erase", new Rect(leftX + 70f, 354f, 64f, 34f), () => SetTool(EditorTool.Erase));
+        _decalButton = CreateAnchoredButton(panel.transform, "Decal", new Rect(leftX + 140f, 354f, 64f, 34f), () => SetTool(EditorTool.Decal));
+        _mirrorButton = CreateAnchoredButton(panel.transform, "Mirror", new Rect(leftX + 210f, 354f, 64f, 34f), ToggleMirror);
 
         CreateAnchoredText(panel.transform, "BrushHeader", "Brush", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 406f, leftW, 24f), Color.white);
         _brushSizeLabel = CreateAnchoredText(panel.transform, "BrushSizeLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 436f, 94f, 24f), Color.white);
@@ -1226,6 +1231,17 @@ internal sealed class SuitEditorController : MonoBehaviour
         _uvDecalPreviewImage.color = new Color(1f, 1f, 1f, 0.62f);
         _uvDecalPreviewImage.raycastTarget = false;
         _uvDecalPreviewRect.gameObject.SetActive(false);
+
+        _uvMirrorDecalPreviewRect = CreateUiObject("UvMirrorDecalPlacementPreview", fallbackPreview.transform, typeof(RectTransform), typeof(RawImage)).GetComponent<RectTransform>();
+        _uvMirrorDecalPreviewRect.anchorMin = new Vector2(0f, 1f);
+        _uvMirrorDecalPreviewRect.anchorMax = new Vector2(0f, 1f);
+        _uvMirrorDecalPreviewRect.pivot = new Vector2(0.5f, 0.5f);
+        _uvMirrorDecalPreviewRect.anchoredPosition = Vector2.zero;
+        _uvMirrorDecalPreviewRect.sizeDelta = new Vector2(32f, 32f);
+        _uvMirrorDecalPreviewImage = _uvMirrorDecalPreviewRect.GetComponent<RawImage>();
+        _uvMirrorDecalPreviewImage.color = new Color(1f, 1f, 1f, 0.5f);
+        _uvMirrorDecalPreviewImage.raycastTarget = false;
+        _uvMirrorDecalPreviewRect.gameObject.SetActive(false);
 
         _brushIndicator = CreateUiObject("BrushIndicator", fallbackPreview.transform, typeof(RectTransform), typeof(Image)).GetComponent<RectTransform>();
         _brushIndicator.sizeDelta = new Vector2(16f, 16f);
@@ -2117,6 +2133,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         SetInteractable(_paintButton, _canPaint);
         SetInteractable(_eraseButton, _canPaint);
         SetInteractable(_decalButton, _canPaint);
+        SetInteractable(_mirrorButton, _canPaint && hasEditableTexture);
         SetInteractable(_applyButton, _canPaint && hasEditableTexture);
         SetInteractable(_saveButton, hasEditableTexture);
         SetInteractable(_resetButton, hasEditableTexture);
@@ -2141,6 +2158,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             $"Preview mode: {_previewMode}",
             $"Editable texture: {DescribeEditableTexture()}",
             $"Preview UI texture: {DescribePreviewImageTexture()}",
+            $"Mirror enabled: {_mirrorEnabled}",
             $"UV fallback mode: {_uvFallbackMode}",
             $"World camera found: {_worldEditorCamera != null}",
             $"World avatar proxy found: {_worldAvatarRenderer != null}",
@@ -2280,6 +2298,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         SetToolButtonColor(_paintButton, _tool == EditorTool.Paint);
         SetToolButtonColor(_eraseButton, _tool == EditorTool.Erase);
         SetToolButtonColor(_decalButton, _tool == EditorTool.Decal);
+        SetToolButtonColor(_mirrorButton, _mirrorEnabled);
     }
 
     private static void SetToolButtonColor(Button button, bool selected)
@@ -2326,6 +2345,24 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         UpdateToolButtons();
         UpdateBrushIndicator();
+    }
+
+    private void ToggleMirror()
+    {
+        _mirrorEnabled = !_mirrorEnabled;
+        _decalStampArmed = true;
+        _suppressDecalPreviewUntilRelease = false;
+        InvalidateDecalPreview("mirror toggled");
+        if (!_mirrorEnabled && _uvMirrorDecalPreviewRect != null)
+        {
+            _uvMirrorDecalPreviewRect.gameObject.SetActive(false);
+        }
+
+        SetStatus(_mirrorEnabled
+            ? "Mirror enabled. Edits duplicate across UV left-right."
+            : "Mirror disabled.", false);
+        UpdateToolButtons();
+        DrawableSuitsDiagnostics.Info($"Mirror painting toggled. enabled={_mirrorEnabled}; tool={_tool}; suit={_selectedSuitId}; previewMode={_previewMode}");
     }
 
     private void CycleTool()
@@ -2822,7 +2859,12 @@ internal sealed class SuitEditorController : MonoBehaviour
         if (!string.Equals(key, _lastDecalPreviewKey, StringComparison.Ordinal))
         {
             _decalPreviewTexture.SetPixels32(sourceTexture.GetPixels32());
-            CompositeDecal(_decalPreviewTexture, _loadedDecal, uv, _decalSize, _decalRotation, Mathf.Clamp01(_brushOpacity * 0.62f));
+            var touchedPixels = _mirrorEnabled ? new HashSet<int>() : null;
+            CompositeDecal(_decalPreviewTexture, _loadedDecal, uv, _decalSize, _decalRotation, Mathf.Clamp01(_brushOpacity * 0.62f), false, touchedPixels);
+            if (ShouldApplyMirror(sourceTexture, uv))
+            {
+                CompositeDecal(_decalPreviewTexture, _loadedDecal, MirrorUv(uv), _decalSize, -_decalRotation, Mathf.Clamp01(_brushOpacity * 0.62f), true, touchedPixels);
+            }
             _decalPreviewTexture.Apply(false, false);
             _lastDecalPreviewKey = key;
         }
@@ -2849,6 +2891,10 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             _uvDecalPreviewRect.gameObject.SetActive(false);
         }
+        if (_uvMirrorDecalPreviewRect != null)
+        {
+            _uvMirrorDecalPreviewRect.gameObject.SetActive(false);
+        }
 
         SetDecalPreviewStatus();
         LogDecalPreviewUpdated("WorldThirdPerson", sourceTexture, uv, false);
@@ -2864,24 +2910,44 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         RestoreWorldDecalPreviewMaterial();
 
+        ConfigureUvDecalPreview(_uvDecalPreviewRect, _uvDecalPreviewImage, sourceTexture, uv, false);
+
+        if (ShouldApplyMirror(sourceTexture, uv))
+        {
+            ConfigureUvDecalPreview(_uvMirrorDecalPreviewRect, _uvMirrorDecalPreviewImage, sourceTexture, MirrorUv(uv), true);
+        }
+        else if (_uvMirrorDecalPreviewRect != null)
+        {
+            _uvMirrorDecalPreviewRect.gameObject.SetActive(false);
+        }
+
+        _decalPreviewVisible = true;
+        _lastDecalPreviewKey = BuildDecalPreviewKey("TextureFallback", sourceTexture, uv);
+        SetDecalPreviewStatus();
+        LogDecalPreviewUpdated("TextureFallback", sourceTexture, uv, false);
+    }
+
+    private void ConfigureUvDecalPreview(RectTransform previewRect, RawImage previewImage, Texture2D sourceTexture, Vector2 uv, bool mirrored)
+    {
+        if (previewRect == null || previewImage == null || _previewViewportRect == null || sourceTexture == null || _loadedDecal == null)
+        {
+            return;
+        }
+
         var rect = _previewViewportRect.rect;
         var localX = Mathf.Lerp(rect.xMin, rect.xMax, uv.x);
         var localY = Mathf.Lerp(rect.yMin, rect.yMax, uv.y);
         var displayWidth = Mathf.Clamp(_decalSize / Mathf.Max(1f, sourceTexture.width) * rect.width, 4f, rect.width * 1.5f);
         var displayHeight = Mathf.Clamp(_decalSize / Mathf.Max(1f, sourceTexture.height) * rect.height, 4f, rect.height * 1.5f);
 
-        _uvDecalPreviewImage.texture = _loadedDecal;
-        _uvDecalPreviewImage.color = new Color(1f, 1f, 1f, 0.62f);
-        _uvDecalPreviewImage.raycastTarget = false;
-        _uvDecalPreviewRect.anchoredPosition = new Vector2(localX, localY);
-        _uvDecalPreviewRect.sizeDelta = new Vector2(displayWidth, displayHeight);
-        _uvDecalPreviewRect.localRotation = Quaternion.Euler(0f, 0f, _decalRotation);
-        _uvDecalPreviewRect.gameObject.SetActive(true);
-
-        _decalPreviewVisible = true;
-        _lastDecalPreviewKey = BuildDecalPreviewKey("TextureFallback", sourceTexture, uv);
-        SetDecalPreviewStatus();
-        LogDecalPreviewUpdated("TextureFallback", sourceTexture, uv, false);
+        previewImage.texture = _loadedDecal;
+        previewImage.color = mirrored ? new Color(1f, 1f, 1f, 0.5f) : new Color(1f, 1f, 1f, 0.62f);
+        previewImage.raycastTarget = false;
+        previewImage.uvRect = mirrored ? new Rect(1f, 0f, -1f, 1f) : new Rect(0f, 0f, 1f, 1f);
+        previewRect.anchoredPosition = new Vector2(localX, localY);
+        previewRect.sizeDelta = new Vector2(displayWidth, displayHeight);
+        previewRect.localRotation = Quaternion.Euler(0f, 0f, mirrored ? -_decalRotation : _decalRotation);
+        previewRect.gameObject.SetActive(true);
     }
 
     private bool EnsureDecalPreviewTexture(Texture2D sourceTexture)
@@ -2950,10 +3016,17 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void HideDecalPlacementPreview(string reason, bool forceLog)
     {
-        var wasVisible = _decalPreviewVisible || _worldDecalPreviewApplied || (_uvDecalPreviewRect != null && _uvDecalPreviewRect.gameObject.activeSelf);
+        var wasVisible = _decalPreviewVisible
+            || _worldDecalPreviewApplied
+            || (_uvDecalPreviewRect != null && _uvDecalPreviewRect.gameObject.activeSelf)
+            || (_uvMirrorDecalPreviewRect != null && _uvMirrorDecalPreviewRect.gameObject.activeSelf);
         if (_uvDecalPreviewRect != null)
         {
             _uvDecalPreviewRect.gameObject.SetActive(false);
+        }
+        if (_uvMirrorDecalPreviewRect != null)
+        {
+            _uvMirrorDecalPreviewRect.gameObject.SetActive(false);
         }
 
         RestoreWorldDecalPreviewMaterial();
@@ -3018,7 +3091,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         var px = sourceTexture != null ? Mathf.RoundToInt(uv.x * (sourceTexture.width - 1)) : -1;
         var py = sourceTexture != null ? Mathf.RoundToInt(uv.y * (sourceTexture.height - 1)) : -1;
-        return $"{_decalPreviewSerial}|{mode}|suit={_selectedSuitId}|pixel={px},{py}|size={Mathf.RoundToInt(_decalSize)}|rot={Mathf.RoundToInt(_decalRotation * 10f)}|opacity={Mathf.RoundToInt(_brushOpacity * 1000f)}|decal={CurrentDecalName()}|texture={sourceTexture?.width ?? 0}x{sourceTexture?.height ?? 0}";
+        return $"{_decalPreviewSerial}|{mode}|suit={_selectedSuitId}|pixel={px},{py}|mirror={DescribeMirrorTarget(sourceTexture, uv)}|size={Mathf.RoundToInt(_decalSize)}|rot={Mathf.RoundToInt(_decalRotation * 10f)}|opacity={Mathf.RoundToInt(_brushOpacity * 1000f)}|decal={CurrentDecalName()}|texture={sourceTexture?.width ?? 0}x{sourceTexture?.height ?? 0}";
     }
 
     private void SetDecalPreviewStatus()
@@ -3038,7 +3111,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         var px = Mathf.RoundToInt(uv.x * (texture.width - 1));
         var py = Mathf.RoundToInt(uv.y * (texture.height - 1));
-        var key = $"updated|mode={mode}|pixel={px},{py}|size={Mathf.RoundToInt(_decalSize)}|rotation={Mathf.RoundToInt(_decalRotation)}|opacity={_brushOpacity:0.##}|decal={CurrentDecalName()}|preview={_decalPreviewTexture?.width ?? 0}x{_decalPreviewTexture?.height ?? 0}";
+        var key = $"updated|mode={mode}|pixel={px},{py}|mirror={DescribeMirrorTarget(texture, uv)}|size={Mathf.RoundToInt(_decalSize)}|rotation={Mathf.RoundToInt(_decalRotation)}|opacity={_brushOpacity:0.##}|decal={CurrentDecalName()}|preview={_decalPreviewTexture?.width ?? 0}x{_decalPreviewTexture?.height ?? 0}";
         if (!force && Time.unscaledTime - _lastDecalPreviewLogTime < 0.5f && string.Equals(key, _lastDecalPreviewLogKey, StringComparison.Ordinal))
         {
             return;
@@ -3071,7 +3144,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         var px = Mathf.RoundToInt(uv.x * (texture.width - 1));
         var py = Mathf.RoundToInt(uv.y * (texture.height - 1));
-        DrawableSuitsDiagnostics.Info($"DecalStampCommitted: mode={mode}; pointerSource={_pointerSource}; uv={uv}; pixel={px},{py}; decal={CurrentDecalName()}; size={Mathf.RoundToInt(_decalSize)}; rotation={Mathf.RoundToInt(_decalRotation)}; opacity={_brushOpacity:0.##}; previewTexture={_decalPreviewTexture?.width ?? 0}x{_decalPreviewTexture?.height ?? 0}");
+        DrawableSuitsDiagnostics.Info($"DecalStampCommitted: mode={mode}; pointerSource={_pointerSource}; uv={uv}; pixel={px},{py}; {DescribeMirrorTarget(texture, uv)}; decal={CurrentDecalName()}; size={Mathf.RoundToInt(_decalSize)}; rotation={Mathf.RoundToInt(_decalRotation)}; opacity={_brushOpacity:0.##}; previewTexture={_decalPreviewTexture?.width ?? 0}x{_decalPreviewTexture?.height ?? 0}");
     }
 
     private string CurrentDecalName()
@@ -3079,6 +3152,47 @@ internal sealed class SuitEditorController : MonoBehaviour
         return _selectedDecalIndex >= 0 && _selectedDecalIndex < _decalFiles.Count
             ? Path.GetFileName(_decalFiles[_selectedDecalIndex])
             : "none";
+    }
+
+    private static Vector2 MirrorUv(Vector2 uv)
+    {
+        return new Vector2(1f - Mathf.Clamp01(uv.x), Mathf.Clamp01(uv.y));
+    }
+
+    private bool ShouldApplyMirror(Texture2D texture, Vector2 uv)
+    {
+        if (!_mirrorEnabled || texture == null)
+        {
+            return false;
+        }
+
+        var primary = TexturePixel(texture, uv);
+        var mirrored = TexturePixel(texture, MirrorUv(uv));
+        return primary.x != mirrored.x || primary.y != mirrored.y;
+    }
+
+    private static Vector2Int TexturePixel(Texture2D texture, Vector2 uv)
+    {
+        if (texture == null)
+        {
+            return new Vector2Int(-1, -1);
+        }
+
+        return new Vector2Int(
+            Mathf.RoundToInt(Mathf.Clamp01(uv.x) * (texture.width - 1)),
+            Mathf.RoundToInt(Mathf.Clamp01(uv.y) * (texture.height - 1)));
+    }
+
+    private string DescribeMirrorTarget(Texture2D texture, Vector2 uv)
+    {
+        if (!_mirrorEnabled)
+        {
+            return "mirrorEnabled=False";
+        }
+
+        var mirroredUv = MirrorUv(uv);
+        var mirroredPixel = TexturePixel(texture, mirroredUv);
+        return $"mirrorEnabled=True; mirroredUv={mirroredUv}; mirroredPixel={mirroredPixel.x},{mirroredPixel.y}";
     }
 
     private void HandleControllerCursor()
@@ -3672,7 +3786,8 @@ internal sealed class SuitEditorController : MonoBehaviour
             pixel = $"{px},{py}";
         }
 
-        var key = $"{reason}|tool={_tool}|over={overPreview}|uv={uvAvailable}:{uv}|pixel={pixel}|brush={Mathf.RoundToInt(_brushSize)}|opacity={_brushOpacity:0.##}|decal={_loadedDecal != null}|source={_pointerSource}";
+        var mirror = uvAvailable ? DescribeMirrorTarget(texture, uv) : $"mirrorEnabled={_mirrorEnabled}";
+        var key = $"{reason}|tool={_tool}|over={overPreview}|uv={uvAvailable}:{uv}|pixel={pixel}|{mirror}|brush={Mathf.RoundToInt(_brushSize)}|opacity={_brushOpacity:0.##}|decal={_loadedDecal != null}|source={_pointerSource}";
         if (!force && Time.unscaledTime - _lastPaintDiagnosticsTime < 0.75f && string.Equals(key, _lastPaintDiagnosticsKey, StringComparison.Ordinal))
         {
             return;
@@ -3689,7 +3804,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         var px = Mathf.RoundToInt(uv.x * (texture.width - 1));
         var py = Mathf.RoundToInt(uv.y * (texture.height - 1));
-        var key = $"applied|tool={_tool}|pixel={px},{py}|brush={Mathf.RoundToInt(_brushSize)}|opacity={_brushOpacity:0.##}|decal={_loadedDecal != null}";
+        var key = $"applied|tool={_tool}|pixel={px},{py}|{DescribeMirrorTarget(texture, uv)}|brush={Mathf.RoundToInt(_brushSize)}|opacity={_brushOpacity:0.##}|decal={_loadedDecal != null}";
         if (Time.unscaledTime - _lastPaintDiagnosticsTime < 0.5f && string.Equals(key, _lastPaintDiagnosticsKey, StringComparison.Ordinal))
         {
             return;
@@ -3751,17 +3866,32 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
+        var applyMirror = ShouldApplyMirror(texture, uv);
+        var touchedPixels = applyMirror ? new HashSet<int>() : null;
+        var mirrorUv = MirrorUv(uv);
         var changed = true;
         switch (_tool)
         {
             case EditorTool.Paint:
-                changed = PaintCircle(texture, uv, _brushColor, _brushSize, _brushOpacity);
+                changed = PaintCircle(texture, uv, _brushColor, _brushSize, _brushOpacity, touchedPixels);
+                if (applyMirror)
+                {
+                    changed |= PaintCircle(texture, mirrorUv, _brushColor, _brushSize, _brushOpacity, touchedPixels);
+                }
                 break;
             case EditorTool.Erase:
-                changed = EraseCircle(texture, uv, _brushSize, _brushOpacity);
+                changed = EraseCircle(texture, uv, _brushSize, _brushOpacity, touchedPixels);
+                if (applyMirror)
+                {
+                    changed |= EraseCircle(texture, mirrorUv, _brushSize, _brushOpacity, touchedPixels);
+                }
                 break;
             case EditorTool.Decal:
-                changed = ApplyDecal(texture, uv);
+                changed = ApplyDecal(texture, uv, false, touchedPixels);
+                if (applyMirror)
+                {
+                    changed |= ApplyDecal(texture, mirrorUv, true, touchedPixels);
+                }
                 _strokeActive = false;
                 break;
             default:
@@ -3791,7 +3921,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         return true;
     }
 
-    private bool PaintCircle(Texture2D texture, Vector2 uv, Color color, float radius, float opacity)
+    private bool PaintCircle(Texture2D texture, Vector2 uv, Color color, float radius, float opacity, HashSet<int> touchedPixels = null)
     {
         var cx = Mathf.RoundToInt(uv.x * (texture.width - 1));
         var cy = Mathf.RoundToInt(uv.y * (texture.height - 1));
@@ -3813,6 +3943,10 @@ internal sealed class SuitEditorController : MonoBehaviour
                 {
                     continue;
                 }
+                if (!TryMarkTouchedPixel(texture, x, y, touchedPixels))
+                {
+                    continue;
+                }
                 var falloff = 1f - Mathf.Sqrt(dx * dx + dy * dy) / Mathf.Max(1f, r);
                 var existing = texture.GetPixel(x, y);
                 texture.SetPixel(x, y, Color.Lerp(existing, color, opacity * Mathf.Clamp01(falloff + 0.25f)));
@@ -3822,7 +3956,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         return changed;
     }
 
-    private bool EraseCircle(Texture2D texture, Vector2 uv, float radius, float opacity)
+    private bool EraseCircle(Texture2D texture, Vector2 uv, float radius, float opacity, HashSet<int> touchedPixels = null)
     {
         var state = DrawableSuitsPlugin.Registry.GetOrCreateState(_selectedSuitId);
         if (state?.BaseTexture == null)
@@ -3850,6 +3984,10 @@ internal sealed class SuitEditorController : MonoBehaviour
                 {
                     continue;
                 }
+                if (!TryMarkTouchedPixel(texture, x, y, touchedPixels))
+                {
+                    continue;
+                }
                 var existing = texture.GetPixel(x, y);
                 var original = state.BaseTexture.GetPixel(x, y);
                 texture.SetPixel(x, y, Color.Lerp(existing, original, opacity));
@@ -3859,7 +3997,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         return changed;
     }
 
-    private bool ApplyDecal(Texture2D target, Vector2 uv)
+    private bool ApplyDecal(Texture2D target, Vector2 uv, bool mirrored = false, HashSet<int> touchedPixels = null)
     {
         if (_loadedDecal == null)
         {
@@ -3867,10 +4005,10 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
-        return CompositeDecal(target, _loadedDecal, uv, _decalSize, _decalRotation, _brushOpacity);
+        return CompositeDecal(target, _loadedDecal, uv, _decalSize, mirrored ? -_decalRotation : _decalRotation, _brushOpacity, mirrored, touchedPixels);
     }
 
-    private bool CompositeDecal(Texture2D target, Texture2D decal, Vector2 uv, float decalSize, float decalRotation, float opacity)
+    private bool CompositeDecal(Texture2D target, Texture2D decal, Vector2 uv, float decalSize, float decalRotation, float opacity, bool flipHorizontal = false, HashSet<int> touchedPixels = null)
     {
         if (target == null || decal == null)
         {
@@ -3903,8 +4041,18 @@ internal sealed class SuitEditorController : MonoBehaviour
                 {
                     continue;
                 }
+                if (flipHorizontal)
+                {
+                    u = 1f - u;
+                }
+
                 var decalColor = decal.GetPixelBilinear(u, v);
                 if (decalColor.a <= 0.01f)
+                {
+                    continue;
+                }
+
+                if (!TryMarkTouchedPixel(target, tx, ty, touchedPixels))
                 {
                     continue;
                 }
@@ -3916,6 +4064,16 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         return changed;
+    }
+
+    private static bool TryMarkTouchedPixel(Texture2D texture, int x, int y, HashSet<int> touchedPixels)
+    {
+        if (touchedPixels == null || texture == null)
+        {
+            return true;
+        }
+
+        return touchedPixels.Add((y * texture.width) + x);
     }
 
     private void SaveUndo()
