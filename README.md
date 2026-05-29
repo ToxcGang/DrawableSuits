@@ -102,7 +102,7 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.1 behavior:
+Expected 0.5.2 behavior:
 
 - Opening the editor shows a compact side overlay and a third-person camera view of the local player.
 - The diagnostics text should show `Preview mode: WorldThirdPerson` when the default path succeeds.
@@ -123,14 +123,16 @@ Expected 0.5.1 behavior:
 - Decal placement is single-shot: holding left mouse or RT places one decal until the input is released and pressed again.
 - UV fallback mode shows a non-interactive rotated decal preview over the texture panel.
 - Part buttons default to `All`; selecting a region renders only that avatar proxy region in third person and restricts painting, erase, and decals to its UV mask.
-- Part classification uses anatomy-style geometry gates before bone hints, so helmet/top-cap geometry is selectable even if the suit bones do not expose a recognizable helmet bone.
-- Part diagnostics list raw and cleaned triangle counts, component cleanup, per-part bounds, UV pixel counts, and mapped bone names in `PartClassifierBuilt`.
+- Part classification uses corrected bone-token matching first, with bounds fallback for weak or missing bone data and top-cap helmet recovery when needed.
+- Selected third-person parts are rebuilt as compact proxy meshes, so hidden triangles and unused full-body vertices do not affect selected-part bounds, colliders, or visuals.
+- Part diagnostics list raw/cleaned triangle counts, suspicious component counts, compact mesh vertex counts, selected bounds, UV pixel counts, and mapped bone names in `PartClassifierBuilt` / `WorldAvatarProxy updated`.
 - UV fallback mode hides UV islands outside the selected part while preserving the same complete saved texture data.
 
 Troubleshooting:
 
 - If no decal preview appears, confirm a decal row is selected and Decal tool is active, then check `DecalPreviewUpdated` or `DecalPreviewHidden` diagnostics.
-- If Helmet is unavailable or a part shows pieces of another part, confirm the installed package is 0.5.1 or newer and check `PartClassifierBuilt` for raw/cleaned counts, component cleanup, and `helmetRecoveredByTopCap`.
+- If Helmet is unavailable or a part shows pieces of another part, confirm the installed package is 0.5.2 or newer and check `PartClassifierBuilt` for corrected bone-token mapping, `helmetRecoveredByTopCap`, and suspicious component counts.
+- If left/right arms are swapped or one side shows fragments, confirm the installed package is 0.5.2 or newer. Bone names such as `arm.R_lower` should now map to `RightArm`, not `LeftArm`.
 - If a requested part is unavailable on a modded suit, it contained no classified visible geometry; use `All` or check `PartClassifierBuilt` diagnostics for triangle and mask counts.
 - If a part is selectable but painting does nothing, it may be visible-only with no editable UV pixels. The status line will warn that the geometry has no editable UV pixels.
 - If painting a selected part changes another visible surface, check for the shared-UV warning in the status/log. A suit that maps multiple body regions to the same texture pixels cannot be fully isolated at the texture level. Tiny raster edge overlaps are ignored in 0.5.1 to avoid false warnings.

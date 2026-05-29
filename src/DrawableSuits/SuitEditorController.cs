@@ -232,6 +232,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Texture2D _partFilteredPreviewTexture;
     private bool _partDataReady;
     private bool _partUvOverlapDetected;
+    private string _lastWorldProxyMeshSummary = "none";
     private int _partDataTextureWidth;
     private int _partDataTextureHeight;
     private int _partDataSourceId;
@@ -4548,6 +4549,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         var records = new List<PartTriangleRecord>();
         var usedBoneClassification = false;
         var recoveredHelmetByGeometry = 0;
+        var weakOrAmbiguousBoneTriangles = 0;
         var allTriangleCount = 0;
         for (var submesh = 0; submesh < subMeshCount; submesh++)
         {
@@ -4570,8 +4572,13 @@ internal sealed class SuitEditorController : MonoBehaviour
                     out var usedBones,
                     out var geometryPart,
                     out var bonePart,
-                    out var region);
+                    out var region,
+                    out var weakOrAmbiguousBone);
                 usedBoneClassification |= usedBones;
+                if (weakOrAmbiguousBone)
+                {
+                    weakOrAmbiguousBoneTriangles++;
+                }
                 if (classified == SuitPart.Helmet && geometryPart == SuitPart.Helmet && bonePart != SuitPart.Helmet)
                 {
                     recoveredHelmetByGeometry++;
@@ -4619,7 +4626,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             }
         }
 
-        _partClassifierSource = usedBoneClassification ? "Bones+GeometryGates" : "GeometryGates";
+        _partClassifierSource = usedBoneClassification ? "BonesPrimary+BoundsFallback" : "BoundsFallback";
         BuildPartUvMasks(bakedMesh, texture);
         _partDataReady = true;
         _partDataSourceId = source.GetInstanceID();
@@ -4630,7 +4637,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             countParts.Add($"{part}=triangles:{GetPartTriangleCount(part)},pixels:{GetPartMaskPixelCount(part)}");
         }
-        DrawableSuitsDiagnostics.Info($"PartClassifierBuilt[{context}]: source={_partClassifierSource}; renderer={source.name}; texture={texture.width}x{texture.height}; overlap={_partUvOverlapDetected}; raw={DescribePartCounts(rawCounts)}; cleaned={DescribePartCounts(cleanedCounts)}; bounds={DescribePartBounds(records)}; cleanup={cleanupSummary}; helmetRecoveredByTopCap={recoveredHelmetByGeometry}; bones={DescribeTopMappedBones(source, bones)}; {string.Join("; ", countParts)}");
+        DrawableSuitsDiagnostics.Info($"PartClassifierBuilt[{context}]: source={_partClassifierSource}; renderer={source.name}; texture={texture.width}x{texture.height}; overlap={_partUvOverlapDetected}; raw={DescribePartCounts(rawCounts)}; cleaned={DescribePartCounts(cleanedCounts)}; bounds={DescribePartBounds(records)}; sanity={cleanupSummary}; helmetRecoveredByTopCap={recoveredHelmetByGeometry}; weakOrAmbiguousBoneTriangles={weakOrAmbiguousBoneTriangles}; bones={DescribeTopMappedBones(source, bones)}; {string.Join("; ", countParts)}");
         UpdatePartButtons();
     }
 
@@ -4646,12 +4653,14 @@ internal sealed class SuitEditorController : MonoBehaviour
         out bool usedBones,
         out SuitPart geometryPart,
         out SuitPart bonePart,
-        out TriangleRegion region)
+        out TriangleRegion region,
+        out bool weakOrAmbiguousBone)
     {
         usedBones = false;
         geometryPart = SuitPart.Other;
         bonePart = SuitPart.Other;
         region = default;
+        weakOrAmbiguousBone = false;
         if (a < 0 || b < 0 || c < 0 || a >= vertices.Length || b >= vertices.Length || c >= vertices.Length)
         {
             return SuitPart.Other;
@@ -4661,24 +4670,19 @@ internal sealed class SuitEditorController : MonoBehaviour
         if (weights != null && bones != null && bones.Length > 0)
         {
             bonePart = ClassifyTriangleByBones(weights, bones, a, b, c, out var bestBoneScore);
-            if (bonePart != SuitPart.Other && bestBoneScore >= 0.18f)
+            if (bonePart != SuitPart.Other && bestBoneScore >= 0.16f)
             {
                 usedBones = true;
-                if (geometryPart == SuitPart.Helmet && bonePart != SuitPart.Helmet)
+
+                if (IsStrongHelmetFallback(region, bonePart))
                 {
                     return SuitPart.Helmet;
                 }
 
-                if (ArePartFamiliesCompatible(geometryPart, bonePart) && IsPartPlausibleInRegion(bonePart, region))
-                {
-                    return bonePart;
-                }
-
-                if (bonePart == SuitPart.Helmet && IsPartPlausibleInRegion(SuitPart.Helmet, region))
-                {
-                    return SuitPart.Helmet;
-                }
+                return bonePart;
             }
+
+            weakOrAmbiguousBone = bestBoneScore > 0.001f;
         }
 
         return geometryPart;
@@ -4694,22 +4698,22 @@ internal sealed class SuitEditorController : MonoBehaviour
         var side = Mathf.Abs(xOffset) / Mathf.Max(0.001f, bounds.extents.x);
         region = new TriangleRegion(center, height, minHeight, maxHeight, xOffset, side);
 
-        if ((height >= 0.74f && side <= 0.88f) || maxHeight >= 0.9f)
+        if ((height >= 0.78f && side <= 0.88f) || maxHeight >= 0.94f)
         {
             return SuitPart.Helmet;
         }
 
-        if (height <= 0.43f || maxHeight <= 0.48f)
+        if (height <= 0.35f || maxHeight <= 0.40f)
         {
             return xOffset <= 0f ? SuitPart.LeftLeg : SuitPart.RightLeg;
         }
 
-        if (height <= 0.78f && height >= 0.34f && side >= 0.48f)
+        if (height <= 0.76f && height >= 0.38f && side >= 0.62f)
         {
             return xOffset <= 0f ? SuitPart.LeftArm : SuitPart.RightArm;
         }
 
-        if (height >= 0.28f && height <= 0.82f)
+        if (height >= 0.28f && height <= 0.86f)
         {
             return SuitPart.Torso;
         }
@@ -4720,6 +4724,14 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         return SuitPart.Torso;
+    }
+
+    private static bool IsStrongHelmetFallback(TriangleRegion region, SuitPart bonePart)
+    {
+        return bonePart != SuitPart.Helmet
+            && region.Height >= 0.82f
+            && region.MaxHeight >= 0.9f
+            && region.Side <= 0.8f;
     }
 
     private static SuitPart ClassifyTriangleByBones(BoneWeight[] weights, Transform[] bones, int a, int b, int c, out float bestScore)
@@ -4742,46 +4754,6 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         bestScore /= 3f;
         return bestPart;
-    }
-
-    private static bool ArePartFamiliesCompatible(SuitPart geometryPart, SuitPart bonePart)
-    {
-        if (geometryPart == bonePart)
-        {
-            return true;
-        }
-
-        return (IsArmPart(geometryPart) && IsArmPart(bonePart))
-            || (IsLegPart(geometryPart) && IsLegPart(bonePart));
-    }
-
-    private static bool IsArmPart(SuitPart part)
-    {
-        return part == SuitPart.LeftArm || part == SuitPart.RightArm;
-    }
-
-    private static bool IsLegPart(SuitPart part)
-    {
-        return part == SuitPart.LeftLeg || part == SuitPart.RightLeg;
-    }
-
-    private static bool IsPartPlausibleInRegion(SuitPart part, TriangleRegion region)
-    {
-        switch (part)
-        {
-            case SuitPart.Helmet:
-                return (region.Height >= 0.64f && region.Side <= 0.95f) || region.MaxHeight >= 0.86f;
-            case SuitPart.Torso:
-                return region.Height >= 0.30f && region.Height <= 0.84f && region.Side <= 0.82f;
-            case SuitPart.LeftArm:
-            case SuitPart.RightArm:
-                return region.Height >= 0.30f && region.Height <= 0.82f && region.Side >= 0.34f;
-            case SuitPart.LeftLeg:
-            case SuitPart.RightLeg:
-                return region.Height <= 0.56f;
-            default:
-                return true;
-        }
     }
 
     private static Dictionary<SuitPart, int> CountPartTriangleRecords(List<PartTriangleRecord> records)
@@ -4830,30 +4802,18 @@ internal sealed class SuitEditorController : MonoBehaviour
                 largest = Mathf.Max(largest, components[i].Count);
             }
 
-            var tinyThreshold = Mathf.Max(4, Mathf.RoundToInt(largest * 0.025f));
-            var reassigned = 0;
+            var suspiciousTinyThreshold = Mathf.Max(4, Mathf.RoundToInt(largest * 0.015f));
+            var suspiciousTinyComponents = 0;
             for (var i = 0; i < components.Count; i++)
             {
                 var component = components[i];
-                if (component.Count >= tinyThreshold || component.Count > 32)
+                if (component.Count < suspiciousTinyThreshold)
                 {
-                    continue;
-                }
-
-                var fallback = MajorityGeometryPart(records, component);
-                if (fallback == SuitPart.Other || fallback == part)
-                {
-                    continue;
-                }
-
-                for (var j = 0; j < component.Count; j++)
-                {
-                    records[component[j]].Part = fallback;
-                    reassigned++;
+                    suspiciousTinyComponents++;
                 }
             }
 
-            summaries.Add($"{part}:components={components.Count},largest={largest},tinyThreshold={tinyThreshold},reassigned={reassigned}");
+            summaries.Add($"{part}:components={components.Count},largest={largest},tinyThreshold={suspiciousTinyThreshold},suspiciousTiny={suspiciousTinyComponents}");
         }
 
         return string.Join("; ", summaries);
@@ -4934,34 +4894,6 @@ internal sealed class SuitEditorController : MonoBehaviour
             visited[neighbor] = true;
             stack.Push(neighbor);
         }
-    }
-
-    private static SuitPart MajorityGeometryPart(List<PartTriangleRecord> records, List<int> component)
-    {
-        var counts = new Dictionary<SuitPart, int>();
-        for (var i = 0; i < component.Count; i++)
-        {
-            var geometryPart = records[component[i]].GeometryPart;
-            if (geometryPart == SuitPart.Other)
-            {
-                continue;
-            }
-
-            counts[geometryPart] = counts.TryGetValue(geometryPart, out var count) ? count + 1 : 1;
-        }
-
-        var bestPart = SuitPart.Other;
-        var bestCount = 0;
-        foreach (var entry in counts)
-        {
-            if (entry.Value > bestCount)
-            {
-                bestPart = entry.Key;
-                bestCount = entry.Value;
-            }
-        }
-
-        return bestPart;
     }
 
     private static string DescribePartCounts(Dictionary<SuitPart, int> counts)
@@ -5091,20 +5023,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         part = SuitPart.Other;
         var lower = (boneName ?? string.Empty).ToLowerInvariant();
-        var left = lower.Contains("left")
-            || lower.Contains("_l")
-            || lower.Contains("-l")
-            || lower.Contains(" l ")
-            || lower.EndsWith(".l", StringComparison.Ordinal)
-            || lower.EndsWith("_l", StringComparison.Ordinal)
-            || lower.EndsWith(" l", StringComparison.Ordinal);
-        var right = lower.Contains("right")
-            || lower.Contains("_r")
-            || lower.Contains("-r")
-            || lower.Contains(" r ")
-            || lower.EndsWith(".r", StringComparison.Ordinal)
-            || lower.EndsWith("_r", StringComparison.Ordinal)
-            || lower.EndsWith(" r", StringComparison.Ordinal);
+        var left = BoneNameHasSideToken(lower, true);
+        var right = BoneNameHasSideToken(lower, false);
         if (lower.Contains("head")
             || lower.Contains("neck")
             || lower.Contains("helmet")
@@ -5147,13 +5067,41 @@ internal sealed class SuitEditorController : MonoBehaviour
             || lower.Contains("pelvis")
             || lower.Contains("abdomen")
             || lower.Contains("waist")
-            || lower.Contains("body")
-            || lower.Contains("root"))
+            || lower.Contains("body"))
         {
             part = SuitPart.Torso;
             return true;
         }
         return false;
+    }
+
+    private static bool BoneNameHasSideToken(string lowerBoneName, bool left)
+    {
+        if (string.IsNullOrWhiteSpace(lowerBoneName))
+        {
+            return false;
+        }
+
+        var longToken = left ? "left" : "right";
+        if (lowerBoneName.Contains(longToken))
+        {
+            return true;
+        }
+
+        var shortToken = left ? "l" : "r";
+        var tokens = lowerBoneName.Split('.', '_', '-', ' ', ':', '/', '\\', '|', '(', ')', '[', ']');
+        for (var i = 0; i < tokens.Length; i++)
+        {
+            if (string.Equals(tokens[i], shortToken, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return lowerBoneName.EndsWith("." + shortToken, StringComparison.Ordinal)
+            || lowerBoneName.EndsWith("_" + shortToken, StringComparison.Ordinal)
+            || lowerBoneName.EndsWith("-" + shortToken, StringComparison.Ordinal)
+            || lowerBoneName.EndsWith(" " + shortToken, StringComparison.Ordinal);
     }
 
     private void BuildPartUvMasks(Mesh mesh, Texture2D texture)
@@ -5825,7 +5773,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             source.enabled = false;
             if (forceLog)
             {
-                DrawableSuitsDiagnostics.Info($"WorldAvatarProxy updated. part={_selectedPart}; partTriangles={GetPartTriangleCount(_selectedPart)}; renderer={DescribeRendererCandidate(source, "source")}; vertices={_worldPaintMesh.vertexCount}; subMeshes={_worldPaintMesh.subMeshCount}; bounds={_worldPaintMesh.bounds}; proxyPos={_worldPaintProxyObject.transform.position}; proxyRot={_worldPaintProxyObject.transform.rotation.eulerAngles}; proxyScale={_worldPaintProxyObject.transform.localScale}; layer={_worldPaintLayer}; rendererEnabled={_worldAvatarRenderer.enabled}; proxyMaterials=[{DescribeMaterials(_worldAvatarRenderer.sharedMaterials)}]; collider={_worldPaintCollider != null}");
+                DrawableSuitsDiagnostics.Info($"WorldAvatarProxy updated. part={_selectedPart}; partTriangles={GetPartTriangleCount(_selectedPart)}; mesh={_lastWorldProxyMeshSummary}; renderer={DescribeRendererCandidate(source, "source")}; vertices={_worldPaintMesh.vertexCount}; subMeshes={_worldPaintMesh.subMeshCount}; bounds={_worldPaintMesh.bounds}; proxyPos={_worldPaintProxyObject.transform.position}; proxyRot={_worldPaintProxyObject.transform.rotation.eulerAngles}; proxyScale={_worldPaintProxyObject.transform.localScale}; layer={_worldPaintLayer}; rendererEnabled={_worldAvatarRenderer.enabled}; proxyMaterials=[{DescribeMaterials(_worldAvatarRenderer.sharedMaterials)}]; collider={_worldPaintCollider != null}");
                 LogVisibleEditorCameraRenderers(source);
             }
             return true;
@@ -5848,15 +5796,105 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         if (mesh == null || !_partDataReady || !_partTrianglesBySubmesh.TryGetValue(_selectedPart, out var submeshes))
         {
+            _lastWorldProxyMeshSummary = "full_or_unavailable";
             return;
         }
 
+        if (_selectedPart == SuitPart.All)
+        {
+            mesh.RecalculateBounds();
+            _lastWorldProxyMeshSummary = $"mode=Full; vertices={mesh.vertexCount}; subMeshes={mesh.subMeshCount}; bounds={mesh.bounds}";
+            return;
+        }
+
+        CompactSelectedPartMesh(mesh, submeshes);
+    }
+
+    private void CompactSelectedPartMesh(Mesh mesh, int[][] submeshes)
+    {
+        var sourceVertices = mesh.vertices;
+        var sourceNormals = mesh.normals;
+        var sourceTangents = mesh.tangents;
+        var sourceUv = mesh.uv;
+        var sourceUv2 = mesh.uv2;
+        var sourceColors = mesh.colors32;
+        var hasNormals = sourceNormals != null && sourceNormals.Length == sourceVertices.Length;
+        var hasTangents = sourceTangents != null && sourceTangents.Length == sourceVertices.Length;
+        var hasUv = sourceUv != null && sourceUv.Length == sourceVertices.Length;
+        var hasUv2 = sourceUv2 != null && sourceUv2.Length == sourceVertices.Length;
+        var hasColors = sourceColors != null && sourceColors.Length == sourceVertices.Length;
+
+        var remap = new Dictionary<int, int>();
+        var compactVertices = new List<Vector3>();
+        var compactNormals = hasNormals ? new List<Vector3>() : null;
+        var compactTangents = hasTangents ? new List<Vector4>() : null;
+        var compactUv = hasUv ? new List<Vector2>() : null;
+        var compactUv2 = hasUv2 ? new List<Vector2>() : null;
+        var compactColors = hasColors ? new List<Color32>() : null;
+        var compactSubmeshTriangles = new List<int>[submeshes.Length];
+        var sourceTriangleCount = 0;
+        for (var submesh = 0; submesh < submeshes.Length; submesh++)
+        {
+            compactSubmeshTriangles[submesh] = new List<int>();
+            var triangles = submeshes[submesh] ?? Array.Empty<int>();
+            sourceTriangleCount += triangles.Length / 3;
+            for (var i = 0; i < triangles.Length; i++)
+            {
+                var sourceIndex = triangles[i];
+                if (sourceIndex < 0 || sourceIndex >= sourceVertices.Length)
+                {
+                    continue;
+                }
+
+                if (!remap.TryGetValue(sourceIndex, out var compactIndex))
+                {
+                    compactIndex = compactVertices.Count;
+                    remap[sourceIndex] = compactIndex;
+                    compactVertices.Add(sourceVertices[sourceIndex]);
+                    compactNormals?.Add(sourceNormals[sourceIndex]);
+                    compactTangents?.Add(sourceTangents[sourceIndex]);
+                    compactUv?.Add(sourceUv[sourceIndex]);
+                    compactUv2?.Add(sourceUv2[sourceIndex]);
+                    compactColors?.Add(sourceColors[sourceIndex]);
+                }
+
+                compactSubmeshTriangles[submesh].Add(compactIndex);
+            }
+        }
+
+        mesh.Clear();
+        mesh.SetVertices(compactVertices);
+        if (compactNormals != null)
+        {
+            mesh.SetNormals(compactNormals);
+        }
+        if (compactTangents != null)
+        {
+            mesh.SetTangents(compactTangents);
+        }
+        if (compactUv != null)
+        {
+            mesh.SetUVs(0, compactUv);
+        }
+        if (compactUv2 != null)
+        {
+            mesh.SetUVs(1, compactUv2);
+        }
+        if (compactColors != null)
+        {
+            mesh.SetColors(compactColors);
+        }
         mesh.subMeshCount = submeshes.Length;
         for (var submesh = 0; submesh < submeshes.Length; submesh++)
         {
-            mesh.SetTriangles(submeshes[submesh] ?? Array.Empty<int>(), submesh, false);
+            mesh.SetTriangles(compactSubmeshTriangles[submesh], submesh, false);
+        }
+        if (compactNormals == null || compactNormals.Count != compactVertices.Count)
+        {
+            mesh.RecalculateNormals();
         }
         mesh.RecalculateBounds();
+        _lastWorldProxyMeshSummary = $"mode=Compact; sourceTriangles={sourceTriangleCount}; compactVertices={compactVertices.Count}; subMeshes={submeshes.Length}; bounds={mesh.bounds}";
     }
 
     private Material[] BuildWorldProxyMaterials(SkinnedMeshRenderer source, bool forceLog = false)

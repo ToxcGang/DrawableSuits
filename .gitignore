@@ -1,0 +1,37 @@
+# Build output
+bin/
+obj/
+**/bin/
+**/obj/
+
+# Local tool/cache folders
+.dotnet/
+.vs/
+.vscode/
+.idea/
+
+# Generated packages and local release output
+dist/
+*.zip
+*.nupkg
+*.snupkg
+
+# Logs and diagnostics
+*.log
+logs/
+Logs/
+BepInEx/config/DrawableSuits/Logs/
+
+# User/local machine files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.rsuser
+*.tmp
+*.bak
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store

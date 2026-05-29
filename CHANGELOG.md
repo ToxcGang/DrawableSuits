@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.2
+
+- Reworked part isolation to use corrected bone-token classification as the primary path, with bounds fallback only for weak or missing bone data.
+- Fixed right-side bone names such as `arm.R_lower` being misread as left-side names.
+- Rebuilt selected third-person parts as compact proxy meshes so hidden triangles and unused vertices no longer leak into selected-part bounds, colliders, or visuals.
+- Changed part cleanup diagnostics to report suspicious tiny components without aggressively reassigning bone-classified triangles.
+
 ## 0.5.1
 
 - Reworked suit part classification to use geometry gates first and bone weights only when they match plausible helmet, torso, arm, or leg regions.
