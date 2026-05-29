@@ -58,6 +58,27 @@ internal sealed class SuitEditorController : MonoBehaviour
         public float Side;
     }
 
+    [Serializable]
+    private sealed class PartPresetFile
+    {
+        public string name = string.Empty;
+        public string rendererNameContains = string.Empty;
+        public string rendererPathContains = string.Empty;
+        public string materialNameContains = string.Empty;
+        public int vertexCount = 0;
+        public int triangleCount = 0;
+        public int textureWidth = 0;
+        public int textureHeight = 0;
+        public PartPresetAssignment[] parts = Array.Empty<PartPresetAssignment>();
+    }
+
+    [Serializable]
+    private sealed class PartPresetAssignment
+    {
+        public string part = string.Empty;
+        public int[] triangles = Array.Empty<int>();
+    }
+
     private readonly struct TriangleRegion
     {
         public TriangleRegion(Vector3 center, float height, float minHeight, float maxHeight, float xOffset, float side)
@@ -4546,10 +4567,17 @@ internal sealed class SuitEditorController : MonoBehaviour
             ? sourceMesh.boneWeights
             : null;
         var bones = source.bones;
+        var fingerprint = DescribePartPresetFingerprint(source, bakedMesh, texture);
+        var configPresetName = TryLoadConfigPartPreset(source, bakedMesh, texture, out var configPresetMap);
+        var useConfigPreset = configPresetMap != null && configPresetMap.Count > 0;
+        var vanillaPresetReason = "none";
+        var useVanillaPreset = !useConfigPreset && IsVanillaHumanoidPartPresetMatch(source, bakedMesh, texture, out vanillaPresetReason);
         var records = new List<PartTriangleRecord>();
         var usedBoneClassification = false;
         var recoveredHelmetByGeometry = 0;
         var weakOrAmbiguousBoneTriangles = 0;
+        var configPresetTriangles = 0;
+        var vanillaPresetTriangles = 0;
         var allTriangleCount = 0;
         for (var submesh = 0; submesh < subMeshCount; submesh++)
         {
@@ -4560,20 +4588,66 @@ internal sealed class SuitEditorController : MonoBehaviour
                 var a = triangles[i];
                 var b = triangles[i + 1];
                 var c = triangles[i + 2];
-                var classified = ClassifyTriangle(
-                    source,
-                    bakedMesh.bounds,
-                    vertices,
-                    boneWeights,
-                    bones,
-                    a,
-                    b,
-                    c,
-                    out var usedBones,
-                    out var geometryPart,
-                    out var bonePart,
-                    out var region,
-                    out var weakOrAmbiguousBone);
+                var triangleOrdinal = allTriangleCount;
+                SuitPart classified;
+                bool usedBones;
+                SuitPart geometryPart;
+                SuitPart bonePart;
+                TriangleRegion region;
+                bool weakOrAmbiguousBone;
+                if (useConfigPreset && configPresetMap.TryGetValue(triangleOrdinal, out var configPart))
+                {
+                    classified = configPart;
+                    ClassifyTriangle(
+                        source,
+                        bakedMesh.bounds,
+                        vertices,
+                        boneWeights,
+                        bones,
+                        a,
+                        b,
+                        c,
+                        out usedBones,
+                        out geometryPart,
+                        out bonePart,
+                        out region,
+                        out weakOrAmbiguousBone);
+                    configPresetTriangles++;
+                }
+                else if (useVanillaPreset)
+                {
+                    classified = ClassifyTriangleByVanillaHumanoidPreset(
+                        bakedMesh.bounds,
+                        vertices,
+                        boneWeights,
+                        bones,
+                        a,
+                        b,
+                        c,
+                        out usedBones,
+                        out geometryPart,
+                        out bonePart,
+                        out region,
+                        out weakOrAmbiguousBone);
+                    vanillaPresetTriangles++;
+                }
+                else
+                {
+                    classified = ClassifyTriangle(
+                        source,
+                        bakedMesh.bounds,
+                        vertices,
+                        boneWeights,
+                        bones,
+                        a,
+                        b,
+                        c,
+                        out usedBones,
+                        out geometryPart,
+                        out bonePart,
+                        out region,
+                        out weakOrAmbiguousBone);
+                }
                 usedBoneClassification |= usedBones;
                 if (weakOrAmbiguousBone)
                 {
@@ -4626,7 +4700,18 @@ internal sealed class SuitEditorController : MonoBehaviour
             }
         }
 
-        _partClassifierSource = usedBoneClassification ? "BonesPrimary+BoundsFallback" : "BoundsFallback";
+        if (useConfigPreset)
+        {
+            _partClassifierSource = $"ConfigPreset:{configPresetName}";
+        }
+        else if (useVanillaPreset)
+        {
+            _partClassifierSource = "Preset:VanillaHumanoid";
+        }
+        else
+        {
+            _partClassifierSource = usedBoneClassification ? "BonesPrimary+BoundsFallback" : "BoundsFallback";
+        }
         BuildPartUvMasks(bakedMesh, texture);
         _partDataReady = true;
         _partDataSourceId = source.GetInstanceID();
@@ -4637,8 +4722,205 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             countParts.Add($"{part}=triangles:{GetPartTriangleCount(part)},pixels:{GetPartMaskPixelCount(part)}");
         }
-        DrawableSuitsDiagnostics.Info($"PartClassifierBuilt[{context}]: source={_partClassifierSource}; renderer={source.name}; texture={texture.width}x{texture.height}; overlap={_partUvOverlapDetected}; raw={DescribePartCounts(rawCounts)}; cleaned={DescribePartCounts(cleanedCounts)}; bounds={DescribePartBounds(records)}; sanity={cleanupSummary}; helmetRecoveredByTopCap={recoveredHelmetByGeometry}; weakOrAmbiguousBoneTriangles={weakOrAmbiguousBoneTriangles}; bones={DescribeTopMappedBones(source, bones)}; {string.Join("; ", countParts)}");
+        DrawableSuitsDiagnostics.Info($"PartClassifierBuilt[{context}]: source={_partClassifierSource}; fingerprint={fingerprint}; presetMatch={(useConfigPreset ? configPresetName : useVanillaPreset ? vanillaPresetReason : "none")}; configPresetTriangles={configPresetTriangles}; vanillaPresetTriangles={vanillaPresetTriangles}; renderer={source.name}; texture={texture.width}x{texture.height}; overlap={_partUvOverlapDetected}; raw={DescribePartCounts(rawCounts)}; cleaned={DescribePartCounts(cleanedCounts)}; bounds={DescribePartBounds(records)}; sanity={cleanupSummary}; helmetRecoveredByTopCap={recoveredHelmetByGeometry}; weakOrAmbiguousBoneTriangles={weakOrAmbiguousBoneTriangles}; bones={DescribeTopMappedBones(source, bones)}; {string.Join("; ", countParts)}");
         UpdatePartButtons();
+    }
+
+    private static string TryLoadConfigPartPreset(SkinnedMeshRenderer source, Mesh mesh, Texture2D texture, out Dictionary<int, SuitPart> triangleMap)
+    {
+        triangleMap = null;
+        try
+        {
+            Directory.CreateDirectory(DrawableSuitsPaths.PartPresets);
+            var files = Directory.GetFiles(DrawableSuitsPaths.PartPresets, "*.json", SearchOption.TopDirectoryOnly);
+            for (var fileIndex = 0; fileIndex < files.Length; fileIndex++)
+            {
+                PartPresetFile preset;
+                try
+                {
+                    preset = JsonUtility.FromJson<PartPresetFile>(File.ReadAllText(files[fileIndex]));
+                }
+                catch (Exception ex)
+                {
+                    DrawableSuitsDiagnostics.Exception($"Part preset file could not be parsed. file={files[fileIndex]}", ex);
+                    continue;
+                }
+
+                var mismatch = "null preset";
+                if (preset == null || !ConfigPartPresetMatches(preset, source, mesh, texture, out mismatch))
+                {
+                    if (preset != null)
+                    {
+                        DrawableSuitsDiagnostics.Info($"Part preset skipped. name={preset.name ?? Path.GetFileNameWithoutExtension(files[fileIndex])}; reason={mismatch}");
+                    }
+                    continue;
+                }
+
+                var map = new Dictionary<int, SuitPart>();
+                var assignments = preset.parts;
+                if (assignments != null)
+                {
+                    for (var assignmentIndex = 0; assignmentIndex < assignments.Length; assignmentIndex++)
+                    {
+                        var assignment = assignments[assignmentIndex];
+                        if (assignment == null || assignment.triangles == null || !TryParseSuitPart(assignment.part, out var part) || part == SuitPart.All)
+                        {
+                            continue;
+                        }
+
+                        for (var i = 0; i < assignment.triangles.Length; i++)
+                        {
+                            var triangle = assignment.triangles[i];
+                            if (triangle >= 0)
+                            {
+                                map[triangle] = part;
+                            }
+                        }
+                    }
+                }
+
+                if (map.Count == 0)
+                {
+                    DrawableSuitsDiagnostics.Warn($"Part preset matched but has no valid triangle assignments. name={preset.name ?? Path.GetFileNameWithoutExtension(files[fileIndex])}; file={files[fileIndex]}");
+                    continue;
+                }
+
+                triangleMap = map;
+                var name = string.IsNullOrWhiteSpace(preset.name) ? Path.GetFileNameWithoutExtension(files[fileIndex]) : preset.name;
+                DrawableSuitsDiagnostics.Info($"Part preset matched. name={name}; assignments={map.Count}; file={files[fileIndex]}");
+                return name;
+            }
+        }
+        catch (Exception ex)
+        {
+            DrawableSuitsDiagnostics.Exception("Part preset loading failed", ex);
+        }
+
+        return "none";
+    }
+
+    private static bool ConfigPartPresetMatches(PartPresetFile preset, SkinnedMeshRenderer source, Mesh mesh, Texture2D texture, out string mismatch)
+    {
+        mismatch = "matched";
+        if (source == null || mesh == null || texture == null)
+        {
+            mismatch = "missing source, mesh, or texture";
+            return false;
+        }
+
+        var rendererName = source.name ?? string.Empty;
+        var rendererPath = GetTransformPath(source.transform);
+        var materialName = source.sharedMaterial?.name ?? string.Empty;
+        if (!StringContainsIfSet(rendererName, preset.rendererNameContains))
+        {
+            mismatch = $"rendererName does not contain {preset.rendererNameContains}";
+            return false;
+        }
+        if (!StringContainsIfSet(rendererPath, preset.rendererPathContains))
+        {
+            mismatch = $"rendererPath does not contain {preset.rendererPathContains}";
+            return false;
+        }
+        if (!StringContainsIfSet(materialName, preset.materialNameContains))
+        {
+            mismatch = $"materialName does not contain {preset.materialNameContains}";
+            return false;
+        }
+        if (preset.vertexCount > 0 && mesh.vertexCount != preset.vertexCount)
+        {
+            mismatch = $"vertexCount {mesh.vertexCount} != {preset.vertexCount}";
+            return false;
+        }
+        if (preset.triangleCount > 0 && CountMeshTriangles(mesh) != preset.triangleCount)
+        {
+            mismatch = $"triangleCount {CountMeshTriangles(mesh)} != {preset.triangleCount}";
+            return false;
+        }
+        if (preset.textureWidth > 0 && texture.width != preset.textureWidth)
+        {
+            mismatch = $"textureWidth {texture.width} != {preset.textureWidth}";
+            return false;
+        }
+        if (preset.textureHeight > 0 && texture.height != preset.textureHeight)
+        {
+            mismatch = $"textureHeight {texture.height} != {preset.textureHeight}";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsVanillaHumanoidPartPresetMatch(SkinnedMeshRenderer source, Mesh mesh, Texture2D texture, out string reason)
+    {
+        reason = "none";
+        if (source == null || mesh == null || texture == null)
+        {
+            return false;
+        }
+
+        var rendererPath = GetTransformPath(source.transform);
+        var materialName = source.sharedMaterial?.name ?? string.Empty;
+        var triangleCount = CountMeshTriangles(mesh);
+        var exactVanillaMesh = mesh.vertexCount == 7998 && triangleCount == 8016;
+        var vanillaRenderer = string.Equals(source.name, "LOD1", StringComparison.OrdinalIgnoreCase)
+            && rendererPath.IndexOf("ScavengerModel/LOD1", StringComparison.OrdinalIgnoreCase) >= 0;
+        var vanillaMaterial = materialName.IndexOf("DefaultPlayerSuit", StringComparison.OrdinalIgnoreCase) >= 0;
+        var vanillaTexture = texture.width == 1024 && texture.height == 1024;
+        if (exactVanillaMesh && vanillaRenderer && vanillaMaterial && vanillaTexture)
+        {
+            reason = $"VanillaHumanoid vertexCount={mesh.vertexCount}; triangleCount={triangleCount}; rendererPath={rendererPath}; material={materialName}; texture={texture.width}x{texture.height}";
+            return true;
+        }
+
+        reason = $"no vanilla preset match vertexCount={mesh.vertexCount}; triangleCount={triangleCount}; renderer={source.name}; path={rendererPath}; material={materialName}; texture={texture.width}x{texture.height}";
+        return false;
+    }
+
+    private static string DescribePartPresetFingerprint(SkinnedMeshRenderer source, Mesh mesh, Texture2D texture)
+    {
+        return $"renderer={source?.name ?? "null"}; path={GetTransformPath(source?.transform)}; material={source?.sharedMaterial?.name ?? "null"}; meshVertices={mesh?.vertexCount ?? 0}; meshTriangles={(mesh != null ? CountMeshTriangles(mesh) : 0)}; subMeshes={mesh?.subMeshCount ?? 0}; texture={texture?.width ?? 0}x{texture?.height ?? 0}";
+    }
+
+    private static bool StringContainsIfSet(string source, string required)
+    {
+        return string.IsNullOrWhiteSpace(required)
+            || (source ?? string.Empty).IndexOf(required, StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private static int CountMeshTriangles(Mesh mesh)
+    {
+        if (mesh == null)
+        {
+            return 0;
+        }
+
+        var count = 0;
+        for (var submesh = 0; submesh < mesh.subMeshCount; submesh++)
+        {
+            count += mesh.GetTriangles(submesh).Length / 3;
+        }
+        return count;
+    }
+
+    private static bool TryParseSuitPart(string value, out SuitPart part)
+    {
+        part = SuitPart.Other;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var normalized = value.Replace(" ", string.Empty).Replace("_", string.Empty).Replace("-", string.Empty);
+        foreach (SuitPart candidate in Enum.GetValues(typeof(SuitPart)))
+        {
+            if (string.Equals(normalized, candidate.ToString(), StringComparison.OrdinalIgnoreCase))
+            {
+                part = candidate;
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private SuitPart ClassifyTriangle(
@@ -4686,6 +4968,136 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         return geometryPart;
+    }
+
+    private static SuitPart ClassifyTriangleByVanillaHumanoidPreset(
+        Bounds bounds,
+        Vector3[] vertices,
+        BoneWeight[] weights,
+        Transform[] bones,
+        int a,
+        int b,
+        int c,
+        out bool usedBones,
+        out SuitPart geometryPart,
+        out SuitPart bonePart,
+        out TriangleRegion region,
+        out bool weakOrAmbiguousBone)
+    {
+        usedBones = false;
+        weakOrAmbiguousBone = false;
+        geometryPart = SuitPart.Other;
+        bonePart = SuitPart.Other;
+        region = default;
+        if (a < 0 || b < 0 || c < 0 || a >= vertices.Length || b >= vertices.Length || c >= vertices.Length)
+        {
+            return SuitPart.Other;
+        }
+
+        // Vanilla Lethal Company player suits bake with their body height along local Z and side along local X.
+        region = BuildTriangleRegionForAxes(bounds, vertices, a, b, c, verticalAxis: 2, sideAxis: 0);
+        geometryPart = ClassifyVanillaRegion(region);
+
+        var bestBoneScore = 0f;
+        if (weights != null && bones != null && bones.Length > 0)
+        {
+            bonePart = ClassifyTriangleByBones(weights, bones, a, b, c, out bestBoneScore);
+        }
+
+        if (region.Height >= 0.74f && region.Side <= 0.68f)
+        {
+            return SuitPart.Helmet;
+        }
+
+        if (bonePart != SuitPart.Other && bestBoneScore >= 0.16f)
+        {
+            usedBones = true;
+            if (VanillaBonePartFitsRegion(bonePart, region))
+            {
+                return bonePart;
+            }
+
+            weakOrAmbiguousBone = true;
+        }
+        else if (bestBoneScore > 0.001f)
+        {
+            weakOrAmbiguousBone = true;
+        }
+
+        return geometryPart;
+    }
+
+    private static TriangleRegion BuildTriangleRegionForAxes(Bounds bounds, Vector3[] vertices, int a, int b, int c, int verticalAxis, int sideAxis)
+    {
+        var center = (vertices[a] + vertices[b] + vertices[c]) / 3f;
+        var va = GetAxisValue(vertices[a], verticalAxis);
+        var vb = GetAxisValue(vertices[b], verticalAxis);
+        var vc = GetAxisValue(vertices[c], verticalAxis);
+        var minVertical = Mathf.Min(va, Mathf.Min(vb, vc));
+        var maxVertical = Mathf.Max(va, Mathf.Max(vb, vc));
+        var boundsMin = GetAxisValue(bounds.min, verticalAxis);
+        var boundsMax = GetAxisValue(bounds.max, verticalAxis);
+        var height = Mathf.InverseLerp(boundsMin, boundsMax, GetAxisValue(center, verticalAxis));
+        var minHeight = Mathf.InverseLerp(boundsMin, boundsMax, minVertical);
+        var maxHeight = Mathf.InverseLerp(boundsMin, boundsMax, maxVertical);
+        var xOffset = GetAxisValue(center, sideAxis) - GetAxisValue(bounds.center, sideAxis);
+        var sideExtent = Mathf.Max(0.001f, GetAxisValue(bounds.extents, sideAxis));
+        var side = Mathf.Abs(xOffset) / sideExtent;
+        return new TriangleRegion(center, height, minHeight, maxHeight, xOffset, side);
+    }
+
+    private static float GetAxisValue(Vector3 value, int axis)
+    {
+        switch (axis)
+        {
+            case 0: return value.x;
+            case 1: return value.y;
+            default: return value.z;
+        }
+    }
+
+    private static SuitPart ClassifyVanillaRegion(TriangleRegion region)
+    {
+        if (region.Height >= 0.74f && region.Side <= 0.68f)
+        {
+            return SuitPart.Helmet;
+        }
+
+        if (region.Height <= 0.43f)
+        {
+            return region.XOffset <= 0f ? SuitPart.LeftLeg : SuitPart.RightLeg;
+        }
+
+        if (region.Height >= 0.32f && region.Height <= 0.76f && region.Side >= 0.58f)
+        {
+            return region.XOffset <= 0f ? SuitPart.LeftArm : SuitPart.RightArm;
+        }
+
+        if (region.Height >= 0.30f && region.Height <= 0.78f && region.Side <= 0.70f)
+        {
+            return SuitPart.Torso;
+        }
+
+        return SuitPart.Other;
+    }
+
+    private static bool VanillaBonePartFitsRegion(SuitPart part, TriangleRegion region)
+    {
+        switch (part)
+        {
+            case SuitPart.Helmet:
+                return region.Height >= 0.70f && region.Side <= 0.78f;
+            case SuitPart.Torso:
+                return region.Height >= 0.30f && region.Height <= 0.80f && region.Side <= 0.76f;
+            case SuitPart.LeftArm:
+            case SuitPart.RightArm:
+                return region.Height >= 0.20f && region.Height <= 0.78f && (region.Side >= 0.34f || region.Height >= 0.48f);
+            case SuitPart.LeftLeg:
+            case SuitPart.RightLeg:
+                return region.Height <= 0.52f;
+            default:
+                return false;
+        }
     }
 
     private static SuitPart ClassifyTriangleByBounds(Bounds bounds, Vector3[] vertices, int a, int b, int c, out TriangleRegion region)

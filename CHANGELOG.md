@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.3
+
+- Added preset-based part classification for the vanilla Lethal Company humanoid suit, matched by renderer, mesh, material, and texture fingerprint.
+- Added optional JSON part preset loading from `BepInEx/config/DrawableSuits/PartPresets` for future modded suit overrides.
+- Reworked vanilla Helmet, Torso, Arm, and Leg selection to use the vanilla suit's baked mesh orientation instead of loose broad bounds thresholds.
+- Expanded part diagnostics with mesh fingerprints, preset match results, preset triangle counts, and clearer fallback reporting.
+
 ## 0.5.2
 
 - Reworked part isolation to use corrected bone-token classification as the primary path, with bounds fallback only for weak or missing bone data.

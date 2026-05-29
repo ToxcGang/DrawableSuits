@@ -58,6 +58,7 @@ DrawableSuits creates these folders after launch:
 - `BepInEx/config/DrawableSuits/Saves` stores `.json` design metadata.
 - `BepInEx/config/DrawableSuits/Textures` stores saved design `.png` textures.
 - `BepInEx/config/DrawableSuits/Decals` stores user decal images.
+- `BepInEx/config/DrawableSuits/PartPresets` stores optional JSON part maps for modded suits.
 - `BepInEx/config/DrawableSuits/Logs` stores the diagnostics log.
 
 Put `.png`, `.jpg`, or `.jpeg` files in `Decals` and press `Refresh Decals` in the editor to use them.
@@ -74,7 +75,9 @@ DrawableSuits no longer replaces every rack/player using the same base suit when
 
 DrawableSuits works with modded suits by detecting unlockables that expose a `suitMaterial`. Saved designs are reusable on any suit, but loading a design onto a suit with a different UV layout can stretch or misplace drawings and decals.
 
-Part isolation is generated automatically from the selected body mesh. Recognized humanoid bones are used when available; other suits fall back to spatial body regions. Empty regions are disabled, and geometry that cannot be classified is exposed through `Other`.
+Part isolation uses a built-in vanilla humanoid preset for the default Lethal Company suit. Modded suits can provide matching JSON part presets in `BepInEx/config/DrawableSuits/PartPresets`; otherwise DrawableSuits falls back to automatic bone/geometry classification. Empty regions are disabled, and geometry that cannot be classified safely is exposed through `Other`.
+
+Part preset JSON files can match by `rendererNameContains`, `rendererPathContains`, `materialNameContains`, `vertexCount`, `triangleCount`, `textureWidth`, and `textureHeight`. Each part assignment uses global baked triangle indexes, for example `"parts": [{"part": "Helmet", "triangles": [0, 1, 2]}]`.
 
 ## Configuration
 
@@ -102,7 +105,7 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.2 behavior:
+Expected 0.5.3 behavior:
 
 - Opening the editor shows a compact side overlay and a third-person camera view of the local player.
 - The diagnostics text should show `Preview mode: WorldThirdPerson` when the default path succeeds.
@@ -123,16 +126,16 @@ Expected 0.5.2 behavior:
 - Decal placement is single-shot: holding left mouse or RT places one decal until the input is released and pressed again.
 - UV fallback mode shows a non-interactive rotated decal preview over the texture panel.
 - Part buttons default to `All`; selecting a region renders only that avatar proxy region in third person and restricts painting, erase, and decals to its UV mask.
-- Part classification uses corrected bone-token matching first, with bounds fallback for weak or missing bone data and top-cap helmet recovery when needed.
+- Vanilla suits use `Preset:VanillaHumanoid` part classification keyed by renderer, mesh, material, and texture fingerprint. Unknown or modded suits fall back to `BonesPrimary+BoundsFallback` unless a matching JSON preset exists.
 - Selected third-person parts are rebuilt as compact proxy meshes, so hidden triangles and unused full-body vertices do not affect selected-part bounds, colliders, or visuals.
-- Part diagnostics list raw/cleaned triangle counts, suspicious component counts, compact mesh vertex counts, selected bounds, UV pixel counts, and mapped bone names in `PartClassifierBuilt` / `WorldAvatarProxy updated`.
+- Part diagnostics list the mesh fingerprint, preset match result, raw/cleaned triangle counts, suspicious component counts, compact mesh vertex counts, selected bounds, UV pixel counts, and mapped bone names in `PartClassifierBuilt` / `WorldAvatarProxy updated`.
 - UV fallback mode hides UV islands outside the selected part while preserving the same complete saved texture data.
 
 Troubleshooting:
 
 - If no decal preview appears, confirm a decal row is selected and Decal tool is active, then check `DecalPreviewUpdated` or `DecalPreviewHidden` diagnostics.
-- If Helmet is unavailable or a part shows pieces of another part, confirm the installed package is 0.5.2 or newer and check `PartClassifierBuilt` for corrected bone-token mapping, `helmetRecoveredByTopCap`, and suspicious component counts.
-- If left/right arms are swapped or one side shows fragments, confirm the installed package is 0.5.2 or newer. Bone names such as `arm.R_lower` should now map to `RightArm`, not `LeftArm`.
+- If Helmet, Torso, or another vanilla part shows unrelated fragments, confirm the installed package is 0.5.3 or newer and check `PartClassifierBuilt` for `source=Preset:VanillaHumanoid`.
+- If a modded suit's parts are inaccurate, add a matching JSON preset in `PartPresets` or use `All`; unknown meshes intentionally fall back to automatic classification.
 - If a requested part is unavailable on a modded suit, it contained no classified visible geometry; use `All` or check `PartClassifierBuilt` diagnostics for triangle and mask counts.
 - If a part is selectable but painting does nothing, it may be visible-only with no editable UV pixels. The status line will warn that the geometry has no editable UV pixels.
 - If painting a selected part changes another visible surface, check for the shared-UV warning in the status/log. A suit that maps multiple body regions to the same texture pixels cannot be fully isolated at the texture level. Tiny raster edge overlaps are ignored in 0.5.1 to avoid false warnings.
