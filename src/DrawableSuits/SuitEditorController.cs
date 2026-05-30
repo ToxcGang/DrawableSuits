@@ -983,6 +983,11 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private sealed class TextStampRenderer
     {
+        private const int RenderFontSize = 128;
+        private const int RenderHeight = 256;
+        private const int RenderPadding = 64;
+        private const int TrimPadding = 8;
+
         private GameObject _root;
         private Camera _camera;
         private Canvas _canvas;
@@ -990,14 +995,15 @@ internal sealed class SuitEditorController : MonoBehaviour
         private Text _text;
         private RectTransform _textRect;
         private RenderTexture _renderTexture;
+        private Texture2D _readbackTexture;
         private Texture2D _texture;
         private string _cachedKey = string.Empty;
 
-        internal Texture2D GetOrRender(string text, Color color, out string key, out string failureReason)
+        internal Texture2D GetOrRender(string text, out string key, out string failureReason)
         {
             failureReason = string.Empty;
             var normalized = NormalizeTextStampValue(text);
-            key = $"{normalized}|{ColorToHex(color)}";
+            key = $"{normalized}|Arial|{RenderFontSize}|AlphaMaskV2";
             if (string.IsNullOrWhiteSpace(normalized))
             {
                 failureReason = "empty text";
@@ -1018,25 +1024,26 @@ internal sealed class SuitEditorController : MonoBehaviour
                     return null;
                 }
 
-                const int fontSize = 96;
-                var width = CalculateTextureWidth(font, normalized, fontSize);
-                const int height = 128;
-                EnsureObjects(width, height);
+                font.RequestCharactersInTexture(normalized, RenderFontSize, FontStyle.Normal);
+
+                var rawWidth = CalculateTextureWidth(font, normalized, RenderFontSize);
+                const int rawHeight = RenderHeight;
+                EnsureObjects(rawWidth, rawHeight);
 
                 _text.font = font;
                 _text.text = normalized;
-                _text.fontSize = fontSize;
+                _text.fontSize = RenderFontSize;
                 _text.fontStyle = FontStyle.Normal;
                 _text.alignment = TextAnchor.MiddleCenter;
                 _text.horizontalOverflow = HorizontalWrapMode.Overflow;
                 _text.verticalOverflow = VerticalWrapMode.Overflow;
                 _text.supportRichText = false;
-                _text.color = new Color(color.r, color.g, color.b, 1f);
+                _text.color = Color.white;
 
-                _canvasRect.sizeDelta = new Vector2(width, height);
-                _textRect.sizeDelta = new Vector2(width, height);
-                _camera.orthographicSize = height * 0.5f;
-                _camera.aspect = width / (float)height;
+                _canvasRect.sizeDelta = new Vector2(rawWidth, rawHeight);
+                _textRect.sizeDelta = new Vector2(rawWidth - (RenderPadding * 2f), rawHeight);
+                _camera.orthographicSize = rawHeight * 0.5f;
+                _camera.aspect = rawWidth / (float)rawHeight;
                 _camera.targetTexture = _renderTexture;
 
                 var previousActive = RenderTexture.active;
@@ -1048,8 +1055,8 @@ internal sealed class SuitEditorController : MonoBehaviour
                     RenderTexture.active = _renderTexture;
                     GL.Clear(true, true, new Color(0f, 0f, 0f, 0f));
                     _camera.Render();
-                    _texture.ReadPixels(new Rect(0f, 0f, width, height), 0, 0, false);
-                    _texture.Apply(false, false);
+                    _readbackTexture.ReadPixels(new Rect(0f, 0f, rawWidth, rawHeight), 0, 0, false);
+                    _readbackTexture.Apply(false, false);
                 }
                 finally
                 {
@@ -1057,21 +1064,27 @@ internal sealed class SuitEditorController : MonoBehaviour
                     _root.SetActive(previousRootActive);
                 }
 
-                if (!HasVisibleAlpha(_texture))
+                if (!TryBuildTrimmedAlphaMask(_readbackTexture, out var trimmedTexture, out var rawBounds, out var finalSize, out var visiblePixels))
                 {
                     failureReason = "rendered text texture was empty";
-                    DrawableSuitsDiagnostics.Warn($"TextStampSkipped: reason={failureReason}; textLength={normalized.Length}; texture={width}x{height}; color={ColorToHex(color)}");
+                    DrawableSuitsDiagnostics.Warn($"TextStampSkipped: reason={failureReason}; textLength={normalized.Length}; rawTexture={rawWidth}x{rawHeight}; alphaMode=luminance");
                     return null;
                 }
 
+                if (_texture != null && !ReferenceEquals(_texture, trimmedTexture))
+                {
+                    UnityEngine.Object.Destroy(_texture);
+                }
+
+                _texture = trimmedTexture;
                 _cachedKey = key;
-                DrawableSuitsDiagnostics.Info($"TextStampRendered: textLength={normalized.Length}; texture={width}x{height}; color={ColorToHex(color)}");
+                DrawableSuitsDiagnostics.Info($"TextStampRendered: textLength={normalized.Length}; rawTexture={rawWidth}x{rawHeight}; glyphBounds={rawBounds}; finalTexture={finalSize.x}x{finalSize.y}; visiblePixels={visiblePixels}; alphaMode=luminance");
                 return _texture;
             }
             catch (Exception ex)
             {
                 failureReason = ex.Message;
-                DrawableSuitsDiagnostics.Exception($"TextStampSkipped: render exception. textLength={normalized.Length}; color={ColorToHex(color)}", ex);
+                DrawableSuitsDiagnostics.Exception($"TextStampSkipped: render exception. textLength={normalized.Length}", ex);
                 return null;
             }
         }
@@ -1089,6 +1102,11 @@ internal sealed class SuitEditorController : MonoBehaviour
                 UnityEngine.Object.Destroy(_renderTexture);
                 _renderTexture = null;
             }
+            if (_readbackTexture != null)
+            {
+                UnityEngine.Object.Destroy(_readbackTexture);
+                _readbackTexture = null;
+            }
             if (_root != null)
             {
                 UnityEngine.Object.Destroy(_root);
@@ -1097,7 +1115,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             _cachedKey = string.Empty;
         }
 
-        private void EnsureObjects(int width, int height)
+        private void EnsureObjects(int rawWidth, int rawHeight)
         {
             if (_root == null)
             {
@@ -1147,7 +1165,7 @@ internal sealed class SuitEditorController : MonoBehaviour
                 _root.SetActive(false);
             }
 
-            if (_renderTexture == null || _renderTexture.width != width || _renderTexture.height != height)
+            if (_renderTexture == null || _renderTexture.width != rawWidth || _renderTexture.height != rawHeight)
             {
                 if (_renderTexture != null)
                 {
@@ -1155,7 +1173,7 @@ internal sealed class SuitEditorController : MonoBehaviour
                     UnityEngine.Object.Destroy(_renderTexture);
                 }
 
-                _renderTexture = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32)
+                _renderTexture = new RenderTexture(rawWidth, rawHeight, 0, RenderTextureFormat.ARGB32)
                 {
                     name = "DrawableSuitsTextStampRenderTexture",
                     hideFlags = HideFlags.HideAndDontSave,
@@ -1165,16 +1183,16 @@ internal sealed class SuitEditorController : MonoBehaviour
                 _renderTexture.Create();
             }
 
-            if (_texture == null || _texture.width != width || _texture.height != height)
+            if (_readbackTexture == null || _readbackTexture.width != rawWidth || _readbackTexture.height != rawHeight)
             {
-                if (_texture != null)
+                if (_readbackTexture != null)
                 {
-                    UnityEngine.Object.Destroy(_texture);
+                    UnityEngine.Object.Destroy(_readbackTexture);
                 }
 
-                _texture = new Texture2D(width, height, TextureFormat.RGBA32, false)
+                _readbackTexture = new Texture2D(rawWidth, rawHeight, TextureFormat.RGBA32, false)
                 {
-                    name = "DrawableSuitsTextStampTexture",
+                    name = "DrawableSuitsTextStampReadback",
                     hideFlags = HideFlags.HideAndDontSave,
                     filterMode = FilterMode.Bilinear,
                     wrapMode = TextureWrapMode.Clamp
@@ -1203,21 +1221,93 @@ internal sealed class SuitEditorController : MonoBehaviour
             };
             var generator = new TextGenerator();
             var preferred = generator.GetPreferredWidth(text, settings);
-            return Mathf.Clamp(Mathf.CeilToInt(preferred) + 32, 32, 2048);
+            var maxSize = Mathf.Clamp(SystemInfo.maxTextureSize, 2048, 8192);
+            return Mathf.Clamp(Mathf.CeilToInt(preferred) + (RenderPadding * 2), 256, maxSize);
         }
 
-        private static bool HasVisibleAlpha(Texture2D texture)
+        private static bool TryBuildTrimmedAlphaMask(Texture2D source, out Texture2D trimmedTexture, out RectInt rawBounds, out Vector2Int finalSize, out int visiblePixels)
         {
-            var pixels = texture.GetPixels32();
-            for (var i = 0; i < pixels.Length; i++)
+            trimmedTexture = null;
+            rawBounds = default;
+            finalSize = default;
+            visiblePixels = 0;
+
+            if (source == null)
             {
-                if (pixels[i].a > 4)
+                return false;
+            }
+
+            var pixels = source.GetPixels32();
+            var minX = source.width;
+            var minY = source.height;
+            var maxX = -1;
+            var maxY = -1;
+
+            for (var y = 0; y < source.height; y++)
+            {
+                var row = y * source.width;
+                for (var x = 0; x < source.width; x++)
                 {
-                    return true;
+                    var alpha = AlphaFromLuminance(pixels[row + x]);
+                    if (alpha <= 4)
+                    {
+                        continue;
+                    }
+
+                    minX = Mathf.Min(minX, x);
+                    minY = Mathf.Min(minY, y);
+                    maxX = Mathf.Max(maxX, x);
+                    maxY = Mathf.Max(maxY, y);
+                    visiblePixels++;
                 }
             }
 
-            return false;
+            if (maxX < minX || maxY < minY)
+            {
+                return false;
+            }
+
+            minX = Mathf.Max(0, minX - TrimPadding);
+            minY = Mathf.Max(0, minY - TrimPadding);
+            maxX = Mathf.Min(source.width - 1, maxX + TrimPadding);
+            maxY = Mathf.Min(source.height - 1, maxY + TrimPadding);
+
+            var width = Mathf.Max(1, maxX - minX + 1);
+            var height = Mathf.Max(1, maxY - minY + 1);
+            var outputPixels = new Color32[width * height];
+
+            for (var y = 0; y < height; y++)
+            {
+                var sourceRow = (minY + y) * source.width;
+                var outputRow = y * width;
+                for (var x = 0; x < width; x++)
+                {
+                    var alpha = AlphaFromLuminance(pixels[sourceRow + minX + x]);
+                    outputPixels[outputRow + x] = alpha <= 1
+                        ? new Color32(255, 255, 255, 0)
+                        : new Color32(255, 255, 255, alpha);
+                }
+            }
+
+            trimmedTexture = new Texture2D(width, height, TextureFormat.RGBA32, false)
+            {
+                name = "DrawableSuitsTextStampTexture",
+                hideFlags = HideFlags.HideAndDontSave,
+                filterMode = FilterMode.Bilinear,
+                wrapMode = TextureWrapMode.Clamp
+            };
+            trimmedTexture.SetPixels32(outputPixels);
+            trimmedTexture.Apply(false, false);
+
+            rawBounds = new RectInt(minX, minY, width, height);
+            finalSize = new Vector2Int(width, height);
+            return true;
+        }
+
+        private static byte AlphaFromLuminance(Color32 pixel)
+        {
+            var luminance = Mathf.Max(pixel.r, Mathf.Max(pixel.g, pixel.b));
+            return luminance <= 1 ? (byte)0 : (byte)luminance;
         }
 
         private static void SetLayerRecursively(GameObject gameObject, int layer)
@@ -3519,10 +3609,10 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             _decalPreviewTexture.SetPixels32(sourceTexture.GetPixels32());
             var touchedPixels = mirrorTarget.Enabled && mirrorTarget.Available ? new HashSet<int>() : null;
-            CompositePlacementStamp(_decalPreviewTexture, stampTexture, uv, CurrentPlacementSize(), CurrentPlacementRotation(), Mathf.Clamp01(_brushOpacity * 0.62f), false, touchedPixels);
+            CompositePlacementStamp(_decalPreviewTexture, stampTexture, uv, CurrentPlacementSize(), CurrentPlacementRotation(), Mathf.Clamp01(_brushOpacity * 0.62f), false, touchedPixels, _tool == EditorTool.Text);
             if (ShouldApplyMirror(sourceTexture, uv, mirrorTarget))
             {
-                CompositePlacementStamp(_decalPreviewTexture, stampTexture, mirrorTarget.Uv, CurrentPlacementSize(), -CurrentPlacementRotation(), Mathf.Clamp01(_brushOpacity * 0.62f), true, touchedPixels);
+                CompositePlacementStamp(_decalPreviewTexture, stampTexture, mirrorTarget.Uv, CurrentPlacementSize(), -CurrentPlacementRotation(), Mathf.Clamp01(_brushOpacity * 0.62f), true, touchedPixels, _tool == EditorTool.Text);
             }
             _decalPreviewTexture.Apply(false, false);
             _lastDecalPreviewKey = key;
@@ -3603,7 +3693,9 @@ internal sealed class SuitEditorController : MonoBehaviour
         var displayHeight = Mathf.Clamp(stampSize.y / Mathf.Max(1f, sourceTexture.height) * rect.height, 4f, rect.height * 1.5f);
 
         previewImage.texture = stampTexture;
-        previewImage.color = mirrored ? new Color(1f, 1f, 1f, 0.5f) : new Color(1f, 1f, 1f, 0.62f);
+        previewImage.color = _tool == EditorTool.Text
+            ? new Color(_brushColor.r, _brushColor.g, _brushColor.b, mirrored ? 0.5f : 0.62f)
+            : mirrored ? new Color(1f, 1f, 1f, 0.5f) : new Color(1f, 1f, 1f, 0.62f);
         previewImage.raycastTarget = false;
         previewImage.uvRect = mirrored ? new Rect(1f, 0f, -1f, 1f) : new Rect(0f, 0f, 1f, 1f);
         previewRect.anchoredPosition = new Vector2(localX, localY);
@@ -3805,7 +3897,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         _textStampRenderer ??= new TextStampRenderer();
-        texture = _textStampRenderer.GetOrRender(text, _brushColor, out _textStampTextureKey, out failureReason);
+        texture = _textStampRenderer.GetOrRender(text, out _textStampTextureKey, out failureReason);
         _textStampTexture = texture;
         return texture != null;
     }
@@ -5165,10 +5257,10 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
-        return CompositePlacementStamp(target, stampTexture, uv, _textSize, mirrored ? -_textRotation : _textRotation, _brushOpacity, mirrored, touchedPixels);
+        return CompositePlacementStamp(target, stampTexture, uv, _textSize, mirrored ? -_textRotation : _textRotation, _brushOpacity, mirrored, touchedPixels, true);
     }
 
-    private bool CompositePlacementStamp(Texture2D target, Texture2D stamp, Vector2 uv, float stampHeight, float stampRotation, float opacity, bool flipHorizontal = false, HashSet<int> touchedPixels = null)
+    private bool CompositePlacementStamp(Texture2D target, Texture2D stamp, Vector2 uv, float stampHeight, float stampRotation, float opacity, bool flipHorizontal = false, HashSet<int> touchedPixels = null, bool tintWithBrushColor = false)
     {
         if (target == null || stamp == null)
         {
@@ -5210,7 +5302,8 @@ internal sealed class SuitEditorController : MonoBehaviour
                 }
 
                 var stampColor = stamp.GetPixelBilinear(u, v);
-                if (stampColor.a <= 0.01f)
+                var stampAlpha = stampColor.a;
+                if (stampAlpha <= 0.01f)
                 {
                     continue;
                 }
@@ -5221,7 +5314,15 @@ internal sealed class SuitEditorController : MonoBehaviour
                 }
 
                 var existing = target.GetPixel(tx, ty);
-                target.SetPixel(tx, ty, Color.Lerp(existing, stampColor, stampColor.a * Mathf.Clamp01(opacity)));
+                if (tintWithBrushColor)
+                {
+                    var targetColor = new Color(_brushColor.r, _brushColor.g, _brushColor.b, existing.a);
+                    target.SetPixel(tx, ty, Color.Lerp(existing, targetColor, stampAlpha * Mathf.Clamp01(opacity)));
+                }
+                else
+                {
+                    target.SetPixel(tx, ty, Color.Lerp(existing, stampColor, stampAlpha * Mathf.Clamp01(opacity)));
+                }
                 changed = true;
             }
         }

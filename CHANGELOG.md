@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.10
+
+- Fixed Text stamps rendering with an opaque black background by converting rendered glyphs into transparent alpha-mask textures.
+- Fixed clipped Text stamps by trimming generated glyph bounds with padding so first and last letters are preserved.
+- Updated Text diagnostics to log raw render size, glyph bounds, final texture size, visible pixel count, and alpha extraction mode.
+
 ## 0.5.9
 
 - Added a UI-only `Text` tool that previews and stamps single-line text onto the suit in third-person mode and UV fallback.
