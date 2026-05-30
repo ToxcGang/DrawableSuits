@@ -295,6 +295,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         internal Vector3 PrimaryLocalPoint;
         internal Vector3 ReflectedLocalPoint;
         internal Vector3 MirroredLocalPoint;
+        internal Vector3 MirroredLocalNormal;
         internal float Distance;
         internal int TriangleIndex;
         internal string Mode;
@@ -306,9 +307,30 @@ internal sealed class SuitEditorController : MonoBehaviour
         internal Vector2 Uv;
         internal Vector3 LocalPoint;
         internal Vector3 ReflectedLocalPoint;
+        internal Vector3 LocalNormal;
         internal float Distance;
         internal int TriangleIndex;
         internal string Reason;
+    }
+
+    private struct TextProjectionFrame
+    {
+        internal Vector3 Center;
+        internal Vector3 Normal;
+        internal Vector3 Right;
+        internal Vector3 Up;
+        internal float WorldWidth;
+        internal float WorldHeight;
+    }
+
+    private struct TextSurfaceStampStats
+    {
+        internal int AlphaPixels;
+        internal int WrittenPixels;
+        internal int SkippedPixels;
+        internal float WorldWidth;
+        internal float WorldHeight;
+        internal bool Mirrored;
     }
 
     private sealed class MirrorSurfaceMap
@@ -387,6 +409,7 @@ internal sealed class SuitEditorController : MonoBehaviour
                         UvB = uv1,
                         UvC = uv2,
                         Centroid = (a + b + c) / 3f,
+                        Normal = Vector3.Cross(b - a, c - a).normalized,
                         SubMesh = subMesh,
                         TriangleIndex = triangleOrdinal
                     });
@@ -514,6 +537,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
             result.Uv = ClampUv((bestTriangle.UvA * bary.x) + (bestTriangle.UvB * bary.y) + (bestTriangle.UvC * bary.z));
             result.LocalPoint = bestPoint;
+            result.LocalNormal = bestTriangle.Normal;
             result.Distance = distance;
             result.TriangleIndex = bestTriangle.TriangleIndex;
             result.Reason = "surface map";
@@ -530,6 +554,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         internal Vector2 UvB;
         internal Vector2 UvC;
         internal Vector3 Centroid;
+        internal Vector3 Normal;
         internal int SubMesh;
         internal int TriangleIndex;
     }
@@ -3546,6 +3571,12 @@ internal sealed class SuitEditorController : MonoBehaviour
             }
 
             var mirrorTarget = ResolveWorldMirrorTarget(texture, hit, false);
+            if (_tool == EditorTool.Text)
+            {
+                ShowWorldTextPlacementPreview(texture, hit, mirrorTarget, stampTexture);
+                return;
+            }
+
             ShowWorldPlacementPreview(texture, hit.textureCoord, mirrorTarget, stampTexture);
             return;
         }
@@ -3648,6 +3679,82 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         SetPlacementPreviewStatus(mirrorTarget);
         LogPlacementPreviewUpdated("WorldThirdPerson", sourceTexture, uv, mirrorTarget, stampTexture, false);
+    }
+
+    private void ShowWorldTextPlacementPreview(Texture2D sourceTexture, RaycastHit hit, MirrorPaintTarget mirrorTarget, Texture2D stampTexture)
+    {
+        if (_worldAvatarRenderer == null || _worldSourceRenderer == null || sourceTexture == null || stampTexture == null || _worldPaintCollider == null)
+        {
+            HideDecalPlacementPreview("world text dependencies missing", false);
+            return;
+        }
+
+        if (!EnsureDecalPreviewTexture(sourceTexture))
+        {
+            HideDecalPlacementPreview("text preview texture failed", true);
+            return;
+        }
+
+        var key = BuildDecalPreviewKey("WorldThirdPersonSurfaceText", sourceTexture, hit.textureCoord, mirrorTarget);
+        TextSurfaceStampStats primaryStats = default;
+        TextSurfaceStampStats mirrorStats = default;
+        var previewRebuilt = false;
+        if (!string.Equals(key, _lastDecalPreviewKey, StringComparison.Ordinal))
+        {
+            _decalPreviewTexture.SetPixels32(sourceTexture.GetPixels32());
+            var touchedPixels = mirrorTarget.Enabled && mirrorTarget.Available ? new HashSet<int>() : null;
+            var primaryChanged = CompositeTextSurfaceStamp(_decalPreviewTexture, stampTexture, hit.point, hit.normal, _textRotation, false, Mathf.Clamp01(_brushOpacity * 0.62f), touchedPixels, out primaryStats);
+            var mirrorChanged = false;
+            if (ShouldApplyMirror(sourceTexture, hit.textureCoord, mirrorTarget) && TryGetMirrorWorldTextPlacement(mirrorTarget, out var mirrorPoint, out var mirrorNormal))
+            {
+                mirrorChanged = CompositeTextSurfaceStamp(_decalPreviewTexture, stampTexture, mirrorPoint, mirrorNormal, -_textRotation, true, Mathf.Clamp01(_brushOpacity * 0.62f), touchedPixels, out mirrorStats);
+            }
+
+            if (!primaryChanged && !mirrorChanged)
+            {
+                HideDecalPlacementPreview("text surface preview projected no pixels", false);
+                LogTextSurfacePreviewSkipped(sourceTexture, hit, mirrorTarget, stampTexture, primaryStats, mirrorStats);
+                return;
+            }
+
+            _decalPreviewTexture.Apply(false, false);
+            _lastDecalPreviewKey = key;
+            previewRebuilt = true;
+        }
+
+        var previewMaterial = EnsureWorldDecalPreviewMaterial(sourceTexture);
+        if (previewMaterial == null)
+        {
+            HideDecalPlacementPreview("text preview material failed", true);
+            return;
+        }
+
+        previewMaterial.mainTexture = _decalPreviewTexture;
+        var baseMaterials = BuildWorldProxyMaterials(_worldSourceRenderer, false);
+        var previewMaterials = new Material[baseMaterials.Length];
+        for (var i = 0; i < baseMaterials.Length; i++)
+        {
+            previewMaterials[i] = ReferenceEquals(baseMaterials[i], _worldHiddenSubmeshMaterial) ? baseMaterials[i] : previewMaterial;
+        }
+
+        _worldAvatarRenderer.sharedMaterials = previewMaterials;
+        _worldDecalPreviewApplied = true;
+        _decalPreviewVisible = true;
+        _placementPreviewTool = _tool;
+        if (_uvDecalPreviewRect != null)
+        {
+            _uvDecalPreviewRect.gameObject.SetActive(false);
+        }
+        if (_uvMirrorDecalPreviewRect != null)
+        {
+            _uvMirrorDecalPreviewRect.gameObject.SetActive(false);
+        }
+
+        SetPlacementPreviewStatus(mirrorTarget);
+        if (previewRebuilt)
+        {
+            LogTextSurfacePreviewUpdated(sourceTexture, hit, mirrorTarget, stampTexture, primaryStats, mirrorStats);
+        }
     }
 
     private void ShowUvPlacementPreview(Texture2D sourceTexture, Vector2 uv, MirrorPaintTarget mirrorTarget, Texture2D stampTexture)
@@ -3972,6 +4079,44 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawableSuitsDiagnostics.Info($"TextPreviewUpdated: {key}; uv={uv}; pointerSource={_pointerSource}; cursor={_cursor}");
     }
 
+    private void LogTextSurfacePreviewUpdated(Texture2D texture, RaycastHit hit, MirrorPaintTarget mirrorTarget, Texture2D stampTexture, TextSurfaceStampStats primaryStats, TextSurfaceStampStats mirrorStats)
+    {
+        if (texture == null || stampTexture == null)
+        {
+            return;
+        }
+
+        var pixel = TexturePixel(texture, hit.textureCoord);
+        var key = $"surfacePreview|pixel={pixel.x},{pixel.y}|mirror={DescribeMirrorTarget(texture, mirrorTarget)}|textLength={NormalizeTextStampValue(_textStampValue).Length}|fontSize={Mathf.RoundToInt(_textSize)}|rotation={Mathf.RoundToInt(_textRotation)}|color={ColorToHex(_brushColor)}|opacity={_brushOpacity:0.##}|stampTexture={stampTexture.width}x{stampTexture.height}|primaryWritten={primaryStats.WrittenPixels}|mirrorWritten={mirrorStats.WrittenPixels}";
+        if (Time.unscaledTime - _lastTextPreviewLogTime < 0.5f && string.Equals(key, _lastTextPreviewLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastTextPreviewLogTime = Time.unscaledTime;
+        _lastTextPreviewLogKey = key;
+        DrawableSuitsDiagnostics.Info($"TextSurfacePreviewUpdated: {key}; hitPoint={hit.point}; hitNormal={hit.normal}; primaryAlpha={primaryStats.AlphaPixels}; primarySkipped={primaryStats.SkippedPixels}; primaryWorldSize={primaryStats.WorldWidth:0.###}x{primaryStats.WorldHeight:0.###}; mirrorAlpha={mirrorStats.AlphaPixels}; mirrorSkipped={mirrorStats.SkippedPixels}; mirrorWorldSize={mirrorStats.WorldWidth:0.###}x{mirrorStats.WorldHeight:0.###}; pointerSource={_pointerSource}; cursor={_cursor}");
+    }
+
+    private void LogTextSurfacePreviewSkipped(Texture2D texture, RaycastHit hit, MirrorPaintTarget mirrorTarget, Texture2D stampTexture, TextSurfaceStampStats primaryStats, TextSurfaceStampStats mirrorStats)
+    {
+        if (texture == null)
+        {
+            return;
+        }
+
+        var pixel = TexturePixel(texture, hit.textureCoord);
+        var key = $"surfacePreviewSkipped|pixel={pixel.x},{pixel.y}|mirror={DescribeMirrorTarget(texture, mirrorTarget)}|textLength={NormalizeTextStampValue(_textStampValue).Length}|stampTexture={stampTexture?.width ?? 0}x{stampTexture?.height ?? 0}|primarySkipped={primaryStats.SkippedPixels}|mirrorSkipped={mirrorStats.SkippedPixels}";
+        if (Time.unscaledTime - _lastTextPreviewLogTime < 0.75f && string.Equals(key, _lastTextPreviewLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastTextPreviewLogTime = Time.unscaledTime;
+        _lastTextPreviewLogKey = key;
+        DrawableSuitsDiagnostics.Info($"TextSurfacePreviewSkipped: {key}; hitPoint={hit.point}; hitNormal={hit.normal}; pointerSource={_pointerSource}; cursor={_cursor}");
+    }
+
     private void LogPlacementPreviewHidden(string reason, bool force)
     {
         if (_placementPreviewTool == EditorTool.Text || _tool == EditorTool.Text)
@@ -4034,6 +4179,31 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawableSuitsDiagnostics.Info($"TextStampCommitted: mode={mode}; pointerSource={_pointerSource}; uv={uv}; pixel={px},{py}; {DescribeMirrorTarget(texture, mirrorTarget)}; textLength={NormalizeTextStampValue(_textStampValue).Length}; fontSize={Mathf.RoundToInt(_textSize)}; rotation={Mathf.RoundToInt(_textRotation)}; color={ColorToHex(_brushColor)}; opacity={_brushOpacity:0.##}; generatedTexture={stampTexture?.width ?? 0}x{stampTexture?.height ?? 0}; stampSize={Mathf.RoundToInt(stampSize.x)}x{Mathf.RoundToInt(stampSize.y)}");
     }
 
+    private void LogTextSurfaceStampCommitted(Texture2D texture, RaycastHit hit, MirrorPaintTarget mirrorTarget, Texture2D stampTexture, TextSurfaceStampStats primaryStats, TextSurfaceStampStats mirrorStats)
+    {
+        if (texture == null)
+        {
+            return;
+        }
+
+        var pixel = TexturePixel(texture, hit.textureCoord);
+        DrawableSuitsDiagnostics.Info($"TextSurfaceStampCommitted: mode=WorldThirdPerson; pointerSource={_pointerSource}; uv={hit.textureCoord}; pixel={pixel.x},{pixel.y}; {DescribeMirrorTarget(texture, mirrorTarget)}; textLength={NormalizeTextStampValue(_textStampValue).Length}; fontSize={Mathf.RoundToInt(_textSize)}; rotation={Mathf.RoundToInt(_textRotation)}; color={ColorToHex(_brushColor)}; opacity={_brushOpacity:0.##}; generatedTexture={stampTexture?.width ?? 0}x{stampTexture?.height ?? 0}; hitPoint={hit.point}; hitNormal={hit.normal}; primaryWritten={primaryStats.WrittenPixels}; primarySkipped={primaryStats.SkippedPixels}; primaryAlpha={primaryStats.AlphaPixels}; primaryWorldSize={primaryStats.WorldWidth:0.###}x{primaryStats.WorldHeight:0.###}; mirrorWritten={mirrorStats.WrittenPixels}; mirrorSkipped={mirrorStats.SkippedPixels}; mirrorAlpha={mirrorStats.AlphaPixels}; mirrorWorldSize={mirrorStats.WorldWidth:0.###}x{mirrorStats.WorldHeight:0.###}");
+    }
+
+    private void LogTextSurfaceStampSkipped(string mode, string reason, Texture2D texture, RaycastHit hit, MirrorPaintTarget mirrorTarget, Texture2D stampTexture, TextSurfaceStampStats primaryStats, TextSurfaceStampStats mirrorStats)
+    {
+        var pixel = texture != null ? TexturePixel(texture, hit.textureCoord) : new Vector2Int(-1, -1);
+        var key = $"surfaceStampSkipped|mode={mode}|reason={reason}|pixel={pixel.x},{pixel.y}|mirror={DescribeMirrorTarget(texture, mirrorTarget)}|textLength={NormalizeTextStampValue(_textStampValue).Length}|stampTexture={stampTexture?.width ?? 0}x{stampTexture?.height ?? 0}|primaryWritten={primaryStats.WrittenPixels}|mirrorWritten={mirrorStats.WrittenPixels}";
+        if (Time.unscaledTime - _lastTextPreviewLogTime < 0.75f && string.Equals(key, _lastTextPreviewLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastTextPreviewLogTime = Time.unscaledTime;
+        _lastTextPreviewLogKey = key;
+        DrawableSuitsDiagnostics.Info($"TextSurfaceStampSkipped: {key}; hitPoint={hit.point}; hitNormal={hit.normal}; primarySkipped={primaryStats.SkippedPixels}; mirrorSkipped={mirrorStats.SkippedPixels}; pointerSource={_pointerSource}; cursor={_cursor}");
+    }
+
     private void LogTextStampSkipped(string mode, string reason)
     {
         var key = $"skipped|mode={mode}|reason={reason}|textLength={NormalizeTextStampValue(_textStampValue).Length}|color={ColorToHex(_brushColor)}";
@@ -4077,6 +4247,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             target.Uv = result.Uv;
             target.ReflectedLocalPoint = result.ReflectedLocalPoint;
             target.MirroredLocalPoint = result.LocalPoint;
+            target.MirroredLocalNormal = result.LocalNormal;
             target.Distance = result.Distance;
             target.TriangleIndex = result.TriangleIndex;
             target.Reason = result.Reason;
@@ -4085,6 +4256,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             target.ReflectedLocalPoint = result.ReflectedLocalPoint;
             target.MirroredLocalPoint = result.LocalPoint;
+            target.MirroredLocalNormal = result.LocalNormal;
             target.Distance = result.Distance;
             target.TriangleIndex = result.TriangleIndex;
             target.Reason = result.Reason;
@@ -4124,6 +4296,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             target.Uv = result.Uv;
             target.ReflectedLocalPoint = result.ReflectedLocalPoint;
             target.MirroredLocalPoint = result.LocalPoint;
+            target.MirroredLocalNormal = result.LocalNormal;
             target.Distance = result.Distance;
             target.TriangleIndex = result.TriangleIndex;
             target.Reason = $"{uvReason}; {result.Reason}";
@@ -4132,6 +4305,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             target.ReflectedLocalPoint = result.ReflectedLocalPoint;
             target.MirroredLocalPoint = result.LocalPoint;
+            target.MirroredLocalNormal = result.LocalNormal;
             target.Distance = result.Distance;
             target.TriangleIndex = result.TriangleIndex;
             target.Reason = result.Reason;
@@ -4834,6 +5008,12 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         if (IsPlacementTool(_tool))
         {
+            if (_tool == EditorTool.Text)
+            {
+                HandleWorldTextStampInput(texture, hitAvailable, hit, mirrorTarget);
+                return;
+            }
+
             HandleSinglePlacementStampInput(texture, hitAvailable, uv, mirrorTarget, "WorldThirdPerson");
             return;
         }
@@ -5004,6 +5184,61 @@ internal sealed class SuitEditorController : MonoBehaviour
                 LogDecalStampCommitted(mode, texture, uv, mirrorTarget);
             }
         }
+    }
+
+    private void HandleWorldTextStampInput(Texture2D texture, bool targetAvailable, RaycastHit hit, MirrorPaintTarget mirrorTarget)
+    {
+        _strokeActive = false;
+        if (!_decalStampArmed)
+        {
+            return;
+        }
+
+        _decalStampArmed = false;
+        _suppressDecalPreviewUntilRelease = true;
+        HideDecalPlacementPreview("text stamp input", false);
+
+        if (!targetAvailable || texture == null)
+        {
+            SetStatus("Aim at your visible suit to stamp text.", false);
+            LogTextSurfaceStampSkipped("WorldThirdPerson", "cursor miss", texture, hit, mirrorTarget, null, default, default);
+            return;
+        }
+
+        if (!TryGetTextStampTexture(out var stampTexture, out var failureReason))
+        {
+            SetStatus("Enter text before stamping.", false);
+            LogTextSurfaceStampSkipped("WorldThirdPerson", failureReason, texture, hit, mirrorTarget, stampTexture, default, default);
+            return;
+        }
+
+        SaveUndo();
+        _redo.Clear();
+        var touchedPixels = mirrorTarget.Enabled && mirrorTarget.Available ? new HashSet<int>() : null;
+        var primaryChanged = CompositeTextSurfaceStamp(texture, stampTexture, hit.point, hit.normal, _textRotation, false, _brushOpacity, touchedPixels, out var primaryStats);
+        var mirrorChanged = false;
+        TextSurfaceStampStats mirrorStats = default;
+        if (ShouldApplyMirror(texture, hit.textureCoord, mirrorTarget) && TryGetMirrorWorldTextPlacement(mirrorTarget, out var mirrorPoint, out var mirrorNormal))
+        {
+            mirrorChanged = CompositeTextSurfaceStamp(texture, stampTexture, mirrorPoint, mirrorNormal, -_textRotation, true, _brushOpacity, touchedPixels, out mirrorStats);
+        }
+
+        if (!primaryChanged && !mirrorChanged)
+        {
+            LogTextSurfaceStampSkipped("WorldThirdPerson", "surface projection wrote no pixels", texture, hit, mirrorTarget, stampTexture, primaryStats, mirrorStats);
+            return;
+        }
+
+        texture.Apply(false, false);
+        InvalidateDecalPreview("texture changed by text surface stamp");
+        DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, false);
+        if (_mirrorEnabled && !mirrorTarget.Available)
+        {
+            SetStatus("Mirror target not found; applied primary only.", false);
+        }
+        LogTextSurfaceStampCommitted(texture, hit, mirrorTarget, stampTexture, primaryStats, mirrorStats);
+        LogPaintApplied(texture, hit.textureCoord, mirrorTarget);
+        UpdateBrushIndicator();
     }
     private void LogPaintAttemptIfNeeded(string reason, bool overPreview, bool uvAvailable, Vector2 uv, Texture2D texture, MirrorPaintTarget mirrorTarget, bool force)
     {
@@ -5258,6 +5493,193 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         return CompositePlacementStamp(target, stampTexture, uv, _textSize, mirrored ? -_textRotation : _textRotation, _brushOpacity, mirrored, touchedPixels, true);
+    }
+
+    private bool CompositeTextSurfaceStamp(Texture2D target, Texture2D stamp, Vector3 center, Vector3 normal, float rotation, bool mirrored, float opacity, HashSet<int> touchedPixels, out TextSurfaceStampStats stats)
+    {
+        stats = default;
+        stats.Mirrored = mirrored;
+        if (target == null || stamp == null || _worldPaintCollider == null || _worldPaintProxyObject == null)
+        {
+            return false;
+        }
+
+        if (!TryBuildTextProjectionFrame(center, normal, rotation, stamp, out var frame))
+        {
+            stats.SkippedPixels = stamp.width * stamp.height;
+            return false;
+        }
+
+        stats.WorldWidth = frame.WorldWidth;
+        stats.WorldHeight = frame.WorldHeight;
+        var projectedAlpha = new Dictionary<int, float>();
+        var rayOffset = Mathf.Max(0.08f, frame.WorldHeight * 2.5f);
+        var rayDistance = rayOffset * 2.5f;
+
+        for (var y = 0; y < stamp.height; y++)
+        {
+            var v = (y + 0.5f) / Mathf.Max(1f, stamp.height);
+            var localY = (v - 0.5f) * frame.WorldHeight;
+            for (var x = 0; x < stamp.width; x++)
+            {
+                var sampleX = mirrored ? stamp.width - 1 - x : x;
+                var sample = stamp.GetPixel(sampleX, y);
+                if (sample.a <= 0.01f)
+                {
+                    continue;
+                }
+
+                stats.AlphaPixels++;
+                var u = (x + 0.5f) / Mathf.Max(1f, stamp.width);
+                var localX = (u - 0.5f) * frame.WorldWidth;
+                var planePoint = frame.Center + (frame.Right * localX) + (frame.Up * localY);
+                if (!TryRaycastTextSurfacePoint(planePoint, frame.Normal, rayOffset, rayDistance, out var surfaceHit))
+                {
+                    stats.SkippedPixels++;
+                    continue;
+                }
+
+                var pixel = TexturePixel(target, surfaceHit.textureCoord);
+                if (pixel.x < 0 || pixel.y < 0 || pixel.x >= target.width || pixel.y >= target.height)
+                {
+                    stats.SkippedPixels++;
+                    continue;
+                }
+
+                var index = (pixel.y * target.width) + pixel.x;
+                if (projectedAlpha.TryGetValue(index, out var existingAlpha))
+                {
+                    if (sample.a > existingAlpha)
+                    {
+                        projectedAlpha[index] = sample.a;
+                    }
+                }
+                else
+                {
+                    projectedAlpha[index] = sample.a;
+                }
+            }
+        }
+
+        foreach (var pair in projectedAlpha)
+        {
+            var x = pair.Key % target.width;
+            var y = pair.Key / target.width;
+            if (!TryMarkTouchedPixel(target, x, y, touchedPixels))
+            {
+                continue;
+            }
+
+            var existing = target.GetPixel(x, y);
+            var targetColor = new Color(_brushColor.r, _brushColor.g, _brushColor.b, existing.a);
+            target.SetPixel(x, y, Color.Lerp(existing, targetColor, pair.Value * Mathf.Clamp01(opacity)));
+            stats.WrittenPixels++;
+        }
+
+        return stats.WrittenPixels > 0;
+    }
+
+    private bool TryBuildTextProjectionFrame(Vector3 center, Vector3 normal, float rotation, Texture2D stamp, out TextProjectionFrame frame)
+    {
+        frame = default;
+        if (stamp == null || _worldEditorCamera == null)
+        {
+            return false;
+        }
+
+        var normalMagnitude = normal.sqrMagnitude;
+        if (normalMagnitude < 0.0001f)
+        {
+            normal = _worldEditorCamera.transform.forward * -1f;
+        }
+        normal.Normalize();
+
+        var cameraRight = _worldEditorCamera.transform.right;
+        var right = Vector3.ProjectOnPlane(cameraRight, normal);
+        if (right.sqrMagnitude < 0.0001f)
+        {
+            right = Vector3.Cross(Vector3.up, normal);
+            if (right.sqrMagnitude < 0.0001f)
+            {
+                right = Vector3.Cross(Vector3.forward, normal);
+            }
+        }
+        right.Normalize();
+
+        var up = Vector3.Cross(normal, right);
+        if (Vector3.Dot(up, _worldEditorCamera.transform.up) < 0f)
+        {
+            up = -up;
+        }
+        up.Normalize();
+        right = Vector3.Cross(up, normal).normalized;
+
+        var rotationQuat = Quaternion.AngleAxis(rotation, normal);
+        right = rotationQuat * right;
+        up = rotationQuat * up;
+
+        var worldHeight = CalculateTextWorldHeight();
+        var aspect = stamp.width / Mathf.Max(1f, (float)stamp.height);
+        frame = new TextProjectionFrame
+        {
+            Center = center,
+            Normal = normal,
+            Right = right,
+            Up = up,
+            WorldHeight = worldHeight,
+            WorldWidth = Mathf.Max(worldHeight * 0.1f, worldHeight * aspect)
+        };
+        return true;
+    }
+
+    private float CalculateTextWorldHeight()
+    {
+        var boundsHeight = _worldAvatarRenderer != null ? _worldAvatarRenderer.bounds.size.y : 1.8f;
+        if (boundsHeight <= 0.01f)
+        {
+            boundsHeight = 1.8f;
+        }
+
+        return Mathf.Clamp((_textSize / 512f) * boundsHeight, boundsHeight * 0.012f, boundsHeight * 0.45f);
+    }
+
+    private bool TryRaycastTextSurfacePoint(Vector3 planePoint, Vector3 normal, float offset, float distance, out RaycastHit hit)
+    {
+        hit = default;
+        if (_worldPaintCollider == null)
+        {
+            return false;
+        }
+
+        var ray = new Ray(planePoint + normal * offset, -normal);
+        if (_worldPaintCollider.Raycast(ray, out hit, distance))
+        {
+            return true;
+        }
+
+        ray = new Ray(planePoint - normal * offset, normal);
+        return _worldPaintCollider.Raycast(ray, out hit, distance);
+    }
+
+    private bool TryGetMirrorWorldTextPlacement(MirrorPaintTarget mirrorTarget, out Vector3 point, out Vector3 normal)
+    {
+        point = default;
+        normal = default;
+        if (!mirrorTarget.Enabled || !mirrorTarget.Available || _worldPaintProxyObject == null)
+        {
+            return false;
+        }
+
+        point = _worldPaintProxyObject.transform.TransformPoint(mirrorTarget.MirroredLocalPoint);
+        normal = mirrorTarget.MirroredLocalNormal.sqrMagnitude > 0.0001f
+            ? _worldPaintProxyObject.transform.TransformDirection(mirrorTarget.MirroredLocalNormal).normalized
+            : (point - _worldPaintProxyObject.transform.position).normalized;
+        if (normal.sqrMagnitude < 0.0001f)
+        {
+            normal = _worldEditorCamera != null ? -_worldEditorCamera.transform.forward : Vector3.up;
+        }
+
+        return true;
     }
 
     private bool CompositePlacementStamp(Texture2D target, Texture2D stamp, Vector2 uv, float stampHeight, float stampRotation, float opacity, bool flipHorizontal = false, HashSet<int> touchedPixels = null, bool tintWithBrushColor = false)

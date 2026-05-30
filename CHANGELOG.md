@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.11
+
+- Changed third-person Text stamping to project glyph pixels onto the visible suit surface instead of applying a flat UV rectangle.
+- Added third-person Text preview and stamp diagnostics for projected world size, written pixels, skipped glyph pixels, hit point, and hit normal.
+- Kept UV fallback Text stamping as direct UV editing while preserving transparent alpha-mask text rendering from 0.5.10.
+
 ## 0.5.10
 
 - Fixed Text stamps rendering with an opaque black background by converting rendered glyphs into transparent alpha-mask textures.
