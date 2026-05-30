@@ -106,7 +106,7 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.11 behavior:
+Expected 0.5.12 behavior:
 
 - Opening the editor shows a compact side overlay and a third-person camera view of the local player.
 - The diagnostics text should show `Preview mode: WorldThirdPerson` when the default path succeeds.
@@ -128,6 +128,7 @@ Expected 0.5.11 behavior:
 - In Text mode, the text input uses Unity's built-in Arial font, accepts one line up to 64 characters, and shows `Previewing text. Click/RT to stamp.` when the cursor is over a valid suit target.
 - Text stamps are generated as transparent alpha-mask textures and tinted with the current brush color/opacity, so they should not stamp a black rectangle behind the letters.
 - In third-person mode, Text stamps project onto the visible suit surface and skip glyph pixels that fall off the suit instead of wrapping them through unrelated UV islands.
+- Third-person Text should read left-to-right from the editor camera. Mirrored Text should only appear when the UI-only `Mirror` button is enabled.
 - UV fallback keeps direct flat UV Text stamping for texture-layout editing.
 - Text is baked into the suit texture after stamping. It is not an editable layer after placement.
 - UV fallback mode shows a non-interactive rotated decal preview over the texture panel.
@@ -163,6 +164,7 @@ Troubleshooting:
 - If Text does not preview or stamp, check that the text field is not empty, then search `diagnostics.log` for `TextStampRendered`, `TextPreviewUpdated`, `TextPreviewHidden`, `TextStampCommitted`, or `TextStampSkipped`.
 - If Text stamps with a black rectangle, confirm the installed package is 0.5.10 or newer. `TextStampRendered` should report `alphaMode=luminance`, glyph bounds, and a trimmed final texture size.
 - If third-person Text drops side letters, confirm the installed package is 0.5.11 or newer and check `TextSurfacePreviewUpdated`, `TextSurfaceStampCommitted`, or `TextSurfaceStampSkipped` for written and skipped glyph-pixel counts.
+- If third-person Text appears backwards, confirm the installed package is 0.5.12 or newer and check `TextProjectionFrameBuilt` for camera-right alignment and sample order diagnostics.
 - If decals or saved designs do not appear, check `RefreshFileLists complete` and `ListRowsUpdated` entries.
 - If scan, inventory scroll, or item use still happen while the editor is open, check for `Global gameplay actions locked` and `Blocked PlayerControllerB` entries.
 - If keyboard or controller shortcuts do not open the editor, use the pause-menu `DrawableSuits` button.

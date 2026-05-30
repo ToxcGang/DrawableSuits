@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.12
+
+- Fixed third-person Text preview and stamping appearing horizontally mirrored by preserving camera-right alignment in the surface projection basis.
+- Added focused `TextProjectionFrameBuilt` diagnostics for text projection orientation, handedness, sample order, and camera alignment.
+- Kept mirrored Text behavior limited to the UI-only Mirror toggle.
+
 ## 0.5.11
 
 - Changed third-person Text stamping to project glyph pixels onto the visible suit surface instead of applying a flat UV rectangle.

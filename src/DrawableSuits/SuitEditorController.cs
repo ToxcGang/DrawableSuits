@@ -178,6 +178,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private float _lastDecalPreviewLogTime;
     private string _lastTextPreviewLogKey = string.Empty;
     private float _lastTextPreviewLogTime;
+    private string _lastTextProjectionFrameLogKey = string.Empty;
+    private float _lastTextProjectionFrameLogTime;
     private int _designListPage;
     private int _decalListPage;
     private readonly List<RendererRestoreState> _rendererRestoreStates = new();
@@ -5504,7 +5506,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
-        if (!TryBuildTextProjectionFrame(center, normal, rotation, stamp, out var frame))
+        if (!TryBuildTextProjectionFrame(center, normal, rotation, stamp, mirrored, out var frame))
         {
             stats.SkippedPixels = stamp.width * stamp.height;
             return false;
@@ -5579,7 +5581,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         return stats.WrittenPixels > 0;
     }
 
-    private bool TryBuildTextProjectionFrame(Vector3 center, Vector3 normal, float rotation, Texture2D stamp, out TextProjectionFrame frame)
+    private bool TryBuildTextProjectionFrame(Vector3 center, Vector3 normal, float rotation, Texture2D stamp, bool mirrored, out TextProjectionFrame frame)
     {
         frame = default;
         if (stamp == null || _worldEditorCamera == null)
@@ -5595,6 +5597,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         normal.Normalize();
 
         var cameraRight = _worldEditorCamera.transform.right;
+        var cameraUp = _worldEditorCamera.transform.up;
         var right = Vector3.ProjectOnPlane(cameraRight, normal);
         if (right.sqrMagnitude < 0.0001f)
         {
@@ -5606,13 +5609,29 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
         right.Normalize();
 
-        var up = Vector3.Cross(normal, right);
-        if (Vector3.Dot(up, _worldEditorCamera.transform.up) < 0f)
+        var up = Vector3.ProjectOnPlane(cameraUp, normal);
+        up -= right * Vector3.Dot(up, right);
+        if (up.sqrMagnitude < 0.0001f)
+        {
+            up = Vector3.Cross(right, normal);
+            if (up.sqrMagnitude < 0.0001f)
+            {
+                up = Vector3.Cross(normal, right);
+            }
+        }
+
+        if (Vector3.Dot(up, cameraUp) < 0f)
         {
             up = -up;
         }
         up.Normalize();
-        right = Vector3.Cross(up, normal).normalized;
+
+        // Keep positive text X aligned with the editor camera's projected right.
+        // Recomputing this with Cross(up, normal) flips the basis for surfaces facing the camera.
+        if (Vector3.Dot(right, cameraRight) < 0f)
+        {
+            right = -right;
+        }
 
         var rotationQuat = Quaternion.AngleAxis(rotation, normal);
         right = rotationQuat * right;
@@ -5629,7 +5648,34 @@ internal sealed class SuitEditorController : MonoBehaviour
             WorldHeight = worldHeight,
             WorldWidth = Mathf.Max(worldHeight * 0.1f, worldHeight * aspect)
         };
+        LogTextProjectionFrameBuilt(frame, rotation, mirrored, false);
         return true;
+    }
+
+    private void LogTextProjectionFrameBuilt(TextProjectionFrame frame, float rotation, bool mirrored, bool force)
+    {
+        if (_worldEditorCamera == null)
+        {
+            return;
+        }
+
+        var cameraRight = _worldEditorCamera.transform.right;
+        var cameraUp = _worldEditorCamera.transform.up;
+        var cameraForward = _worldEditorCamera.transform.forward;
+        var rightDot = Vector3.Dot(frame.Right.normalized, cameraRight);
+        var upDot = Vector3.Dot(frame.Up.normalized, cameraUp);
+        var handedness = Vector3.Dot(Vector3.Cross(frame.Right.normalized, frame.Up.normalized), frame.Normal.normalized);
+        var cameraFacing = Vector3.Dot(frame.Normal.normalized, cameraForward);
+        var sampleOrder = mirrored ? "flipped" : "normal";
+        var key = $"side={(mirrored ? "Mirrored" : "Primary")}|rot={Mathf.RoundToInt(rotation * 10f)}|right={rightDot:0.###}|up={upDot:0.###}|hand={handedness:0.###}|normal={frame.Normal.x:0.##},{frame.Normal.y:0.##},{frame.Normal.z:0.##}|size={frame.WorldWidth:0.###}x{frame.WorldHeight:0.###}|tool={_tool}|mirror={_mirrorEnabled}";
+        if (!force && Time.unscaledTime - _lastTextProjectionFrameLogTime < 0.75f && string.Equals(key, _lastTextProjectionFrameLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastTextProjectionFrameLogTime = Time.unscaledTime;
+        _lastTextProjectionFrameLogKey = key;
+        DrawableSuitsDiagnostics.Info($"TextProjectionFrameBuilt: {key}; cameraFacing={cameraFacing:0.###}; sampleOrder={sampleOrder}; center={frame.Center}; right={frame.Right}; up={frame.Up}; normal={frame.Normal}; pointerSource={_pointerSource}; cursor={_cursor}");
     }
 
     private float CalculateTextWorldHeight()
