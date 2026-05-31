@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.13
+
+- Added shareable `DSUIT1:` design codes that export the current editable suit texture and metadata into a copy/paste code.
+- Added an import/export design code panel with Copy Current, Paste, Import, and Close controls.
+- Imports validate code prefix, Base64Url, compressed JSON, PNG data, texture dimensions, and design name before loading into the current suit without auto-saving or broadcasting.
+- Added `DesignCodeExported`, `DesignCodeImportRequested`, `DesignCodeImported`, and `DesignCodeImportFailed` diagnostics without logging full codes.
+
 ## 0.5.12
 
 - Fixed third-person Text preview and stamping appearing horizontally mirrored by preserving camera-right alignment in the surface projection basis.

@@ -40,6 +40,11 @@ internal static class TextureTools
     public static Texture2D LoadImageFile(string path, int maxSize)
     {
         var bytes = File.ReadAllBytes(path);
+        return LoadImageBytes(bytes, Path.GetFileNameWithoutExtension(path), maxSize);
+    }
+
+    public static Texture2D LoadImageBytes(byte[] bytes, string name, int maxSize, bool resizeOversized = true)
+    {
         var texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
         if (!ImageConversion.LoadImage(texture, bytes, false))
         {
@@ -47,10 +52,16 @@ internal static class TextureTools
             return null;
         }
 
-        texture.name = Path.GetFileNameWithoutExtension(path);
+        texture.name = string.IsNullOrWhiteSpace(name) ? "DrawableSuitsImage" : name;
         if (texture.width <= maxSize && texture.height <= maxSize)
         {
             return texture;
+        }
+
+        if (!resizeOversized)
+        {
+            UnityEngine.Object.Destroy(texture);
+            return null;
         }
 
         var resized = Resize(texture, maxSize, maxSize);

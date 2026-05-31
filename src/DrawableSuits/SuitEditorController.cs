@@ -239,7 +239,12 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Button _saveButton;
     private Button _loadButton;
     private Button _resetButton;
+    private Button _exportCodeButton;
+    private Button _importCodeButton;
     private Button _uvFallbackButton;
+    private GameObject _designCodePanelObject;
+    private InputField _designCodeInput;
+    private Text _designCodeStatusLabel;
     private GameObject _editorEventSystemObject;
     private EventSystem _editorEventSystem;
     private InputSystemUIInputModule _editorInputModule;
@@ -1587,6 +1592,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         DrawableSuitsDiagnostics.Info($"Closing DrawableSuits editor. reason={reason}");
         _isOpen = false;
+        CloseDesignCodePanel();
         if (_editorCanvasObject != null)
         {
             _editorCanvasObject.SetActive(false);
@@ -1864,9 +1870,12 @@ internal sealed class SuitEditorController : MonoBehaviour
         _designNameInput = CreateAnchoredInputField(panel.transform, _designName, new Rect(rightX, 516f, rightW, 34f));
         _designNameInput.onValueChanged.AddListener(value => _designName = value);
 
-        CreateAnchoredButton(panel.transform, "Undo", new Rect(rightX, 568f, 84f, 34f), Undo);
-        CreateAnchoredButton(panel.transform, "Redo", new Rect(rightX + 92f, 568f, 84f, 34f), Redo);
-        _resetButton = CreateAnchoredButton(panel.transform, "Reset", new Rect(rightX + 184f, 568f, 84f, 34f), () =>
+        _exportCodeButton = CreateAnchoredButton(panel.transform, "Export Code", new Rect(rightX, 558f, 138f, 34f), () => OpenDesignCodePanel(true));
+        _importCodeButton = CreateAnchoredButton(panel.transform, "Import Code", new Rect(rightX + 148f, 558f, 138f, 34f), () => OpenDesignCodePanel(false));
+
+        CreateAnchoredButton(panel.transform, "Undo", new Rect(rightX, 604f, 84f, 34f), Undo);
+        CreateAnchoredButton(panel.transform, "Redo", new Rect(rightX + 92f, 604f, 84f, 34f), Redo);
+        _resetButton = CreateAnchoredButton(panel.transform, "Reset", new Rect(rightX + 184f, 604f, 84f, 34f), () =>
         {
             SaveUndo();
             DrawableSuitsPlugin.Registry.ResetSuit(_selectedSuitId);
@@ -1875,12 +1884,12 @@ internal sealed class SuitEditorController : MonoBehaviour
             UpdateUiState();
         });
 
-        _applyButton = CreateAnchoredButton(panel.transform, "Apply", new Rect(rightX, 610f, 84f, 34f), () => DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, true));
-        _saveButton = CreateAnchoredButton(panel.transform, "Save", new Rect(rightX + 92f, 610f, 84f, 34f), SaveDesign);
-        _loadButton = CreateAnchoredButton(panel.transform, "Load", new Rect(rightX + 184f, 610f, 84f, 34f), LoadSelectedDesign);
+        _applyButton = CreateAnchoredButton(panel.transform, "Apply", new Rect(rightX, 646f, 84f, 34f), () => DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, true));
+        _saveButton = CreateAnchoredButton(panel.transform, "Save", new Rect(rightX + 92f, 646f, 84f, 34f), SaveDesign);
+        _loadButton = CreateAnchoredButton(panel.transform, "Load", new Rect(rightX + 184f, 646f, 84f, 34f), LoadSelectedDesign);
 
-        CreateAnchoredText(panel.transform, "SavedDesignsHeader", "Saved Designs", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 664f, rightW, 24f), Color.white);
-        _designListContent = CreateAnchoredScrollList(panel.transform, "DesignList", new Rect(rightX, 694f, rightW, 142f));
+        CreateAnchoredText(panel.transform, "SavedDesignsHeader", "Saved Designs", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 700f, rightW, 24f), Color.white);
+        _designListContent = CreateAnchoredScrollList(panel.transform, "DesignList", new Rect(rightX, 730f, rightW, 114f));
 
         var fallbackPreview = CreateUiObject("PreviewViewport", panel.transform, typeof(RectTransform), typeof(Image));
         _previewViewportRect = fallbackPreview.GetComponent<RectTransform>();
@@ -1933,6 +1942,8 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         CreateAnchoredText(panel.transform, "ControllerHelp", "Controller: View/Back+Y open/close, left stick cursor, A clicks UI, RT paints or samples with Eyedropper, right stick/bumpers orbit, D-pad up/down zooms, X undo, Start save.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 954f, 574f, 36f), Color.white);
 
+        BuildDesignCodePanel();
+
         _cursorMarker = CreateUiObject("DrawableSuitsCursor", _editorCanvasObject.transform, typeof(Image)).GetComponent<RectTransform>();
         _cursorMarker.sizeDelta = new Vector2(14f, 14f);
         var cursorImage = _cursorMarker.GetComponent<Image>();
@@ -1946,6 +1957,51 @@ internal sealed class SuitEditorController : MonoBehaviour
         LogEditorControlTree(panel.transform);
         DrawableSuitsDiagnostics.Info($"BuildEditorCanvas complete. childCount={_editorCanvasObject.transform.childCount}; panelChildren={panel.transform.childCount}; graphicRaycaster={_editorCanvasObject.GetComponent<GraphicRaycaster>() != null}; mode=compactThirdPerson");
     }
+
+    private void BuildDesignCodePanel()
+    {
+        _designCodePanelObject = CreateUiObject("DesignCodePanel", _editorCanvasObject.transform, typeof(RectTransform), typeof(Image));
+        var overlayRect = _designCodePanelObject.GetComponent<RectTransform>();
+        overlayRect.anchorMin = Vector2.zero;
+        overlayRect.anchorMax = Vector2.one;
+        overlayRect.offsetMin = Vector2.zero;
+        overlayRect.offsetMax = Vector2.zero;
+        var overlayImage = _designCodePanelObject.GetComponent<Image>();
+        overlayImage.color = new Color(0f, 0f, 0f, 0.28f);
+        overlayImage.raycastTarget = true;
+
+        var dialog = CreateUiObject("DesignCodeDialog", _designCodePanelObject.transform, typeof(RectTransform), typeof(Image));
+        var dialogRect = dialog.GetComponent<RectTransform>();
+        dialogRect.anchorMin = new Vector2(0.5f, 0.5f);
+        dialogRect.anchorMax = new Vector2(0.5f, 0.5f);
+        dialogRect.pivot = new Vector2(0.5f, 0.5f);
+        dialogRect.anchoredPosition = Vector2.zero;
+        dialogRect.sizeDelta = new Vector2(760f, 430f);
+        var dialogImage = dialog.GetComponent<Image>();
+        dialogImage.color = new Color(0.025f, 0.03f, 0.035f, 0.98f);
+        dialogImage.raycastTarget = true;
+
+        CreateAnchoredText(dialog.transform, "DesignCodeTitle", "Design Code Import / Export", 22, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(18f, 14f, 560f, 34f), new Color(1f, 0.62f, 0.25f, 1f));
+        CreateAnchoredText(dialog.transform, "DesignCodeHelp", "Export creates a shareable DSUIT1 code for the current editable texture. Import loads a pasted code into the current suit only; press Save or Apply when ready.", 14, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(18f, 54f, 724f, 48f), Color.white);
+
+        _designCodeInput = CreateAnchoredInputField(dialog.transform, "DesignCodeInput", string.Empty, new Rect(18f, 112f, 724f, 194f));
+        _designCodeInput.lineType = InputField.LineType.MultiLineNewline;
+        _designCodeInput.contentType = InputField.ContentType.Standard;
+        _designCodeInput.textComponent.alignment = TextAnchor.UpperLeft;
+        _designCodeInput.textComponent.fontSize = 12;
+        _designCodeInput.textComponent.horizontalOverflow = HorizontalWrapMode.Wrap;
+        _designCodeInput.textComponent.verticalOverflow = VerticalWrapMode.Overflow;
+
+        CreateAnchoredButton(dialog.transform, "Copy Current", new Rect(18f, 320f, 132f, 34f), CopyCurrentDesignCode);
+        CreateAnchoredButton(dialog.transform, "Paste", new Rect(160f, 320f, 90f, 34f), PasteDesignCodeFromClipboard);
+        CreateAnchoredButton(dialog.transform, "Import", new Rect(260f, 320f, 98f, 34f), ImportDesignCodeFromField);
+        CreateAnchoredButton(dialog.transform, "Close", new Rect(644f, 320f, 98f, 34f), CloseDesignCodePanel);
+
+        _designCodeStatusLabel = CreateAnchoredText(dialog.transform, "DesignCodeStatus", string.Empty, 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(18f, 366f, 724f, 46f), new Color(1f, 0.74f, 0.42f, 1f));
+        _designCodePanelObject.SetActive(false);
+        DrawableSuitsDiagnostics.Info("DesignCodePanel built.");
+    }
+
     private void BuildFallbackDiagnosticsCanvas(Exception originalException)
     {
         _bootstrapShell = true;
@@ -2822,6 +2878,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         SetInteractable(_mirrorButton, _canPaint && hasEditableTexture);
         SetInteractable(_applyButton, _canPaint && hasEditableTexture);
         SetInteractable(_saveButton, hasEditableTexture);
+        SetInteractable(_exportCodeButton, hasEditableTexture);
+        SetInteractable(_importCodeButton, hasEditableTexture);
         SetInteractable(_resetButton, hasEditableTexture);
         SetInteractable(_loadButton, hasEditableTexture && _selectedDesignIndex >= 0);
         SetButtonLabel(_uvFallbackButton, _uvFallbackMode ? "Use Third Person" : "Use UV Fallback");
@@ -4898,6 +4956,16 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
+        if (_designCodePanelObject != null && _designCodePanelObject.activeInHierarchy)
+        {
+            _strokeActive = false;
+            _decalStampArmed = true;
+            _suppressPaintInputUntilRelease = false;
+            _suppressDecalPreviewUntilRelease = false;
+            HideDecalPlacementPreview("design code panel open", false);
+            return;
+        }
+
         if (!_canPaint)
         {
             _strokeActive = false;
@@ -5282,6 +5350,13 @@ internal sealed class SuitEditorController : MonoBehaviour
     }
     private bool IsCursorOverEditorPanel()
     {
+        if (_designCodePanelObject != null
+            && _designCodePanelObject.activeInHierarchy
+            && RectTransformUtility.RectangleContainsScreenPoint(_designCodePanelObject.GetComponent<RectTransform>(), _cursor, null))
+        {
+            return true;
+        }
+
         return _panelRect != null && RectTransformUtility.RectangleContainsScreenPoint(_panelRect, _cursor, null);
     }
 
@@ -6077,6 +6152,139 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         return -1;
+    }
+
+    private void OpenDesignCodePanel(bool exportCurrent)
+    {
+        if (_designCodePanelObject == null)
+        {
+            return;
+        }
+
+        _designCodePanelObject.SetActive(true);
+        if (_designCodeStatusLabel != null)
+        {
+            _designCodeStatusLabel.text = exportCurrent
+                ? "Generating code for the current editable texture..."
+                : "Paste a DSUIT1 code, then press Import.";
+        }
+
+        if (!exportCurrent && _designCodeInput != null)
+        {
+            var clipboard = GUIUtility.systemCopyBuffer;
+            _designCodeInput.text = !string.IsNullOrWhiteSpace(clipboard) && clipboard.TrimStart().StartsWith(DrawableSuitDesignCode.Prefix, StringComparison.Ordinal)
+                ? clipboard
+                : string.Empty;
+        }
+
+        if (exportCurrent)
+        {
+            CopyCurrentDesignCode();
+        }
+
+        RebuildSelectableNavigation();
+        DrawableSuitsDiagnostics.Info($"DesignCodePanel opened. exportCurrent={exportCurrent}; selectedSuitId={_selectedSuitId}; designName={_designName}");
+    }
+
+    private void CloseDesignCodePanel()
+    {
+        if (_designCodePanelObject != null)
+        {
+            _designCodePanelObject.SetActive(false);
+        }
+    }
+
+    private void CopyCurrentDesignCode()
+    {
+        DrawableSuitsDiagnostics.Info($"DesignCodeExportRequested: selectedSuitId={_selectedSuitId}; designName={_designName}");
+        if (!DrawableSuitsPlugin.Registry.TryExportDesignCode(_selectedSuitId, _designName, out var code, out var info, out var failureReason))
+        {
+            SetDesignCodeStatus($"Export failed: {failureReason}");
+            DrawableSuitsDiagnostics.Warn($"DesignCodeExportFailed: selectedSuitId={_selectedSuitId}; designName={_designName}; reason={failureReason}");
+            return;
+        }
+
+        if (_designCodeInput != null)
+        {
+            _designCodeInput.text = code;
+        }
+
+        GUIUtility.systemCopyBuffer = code;
+        SetDesignCodeStatus($"Code copied. Length {info.CodeLength:n0} chars.");
+        DrawableSuitsDiagnostics.Info($"DesignCodeExported: format={info.FormatVersion}; designName={info.DesignName}; baseSuit={info.BaseSuitName}; sourceSuitId={info.SourceSuitId}; texture={info.Width}x{info.Height}; pngBytes={info.PngBytes}; jsonBytes={info.JsonBytes}; compressedBytes={info.CompressedBytes}; codeLength={info.CodeLength}");
+    }
+
+    private void PasteDesignCodeFromClipboard()
+    {
+        var clipboard = GUIUtility.systemCopyBuffer ?? string.Empty;
+        if (_designCodeInput != null)
+        {
+            _designCodeInput.text = clipboard;
+        }
+
+        SetDesignCodeStatus(string.IsNullOrWhiteSpace(clipboard)
+            ? "Clipboard is empty."
+            : $"Pasted {clipboard.Length:n0} characters.");
+        DrawableSuitsDiagnostics.Info($"DesignCodePastedFromClipboard: clipboardLength={clipboard.Length}; hasPrefix={clipboard.TrimStart().StartsWith(DrawableSuitDesignCode.Prefix, StringComparison.Ordinal)}");
+    }
+
+    private void ImportDesignCodeFromField()
+    {
+        var code = _designCodeInput != null ? _designCodeInput.text : string.Empty;
+        DrawableSuitsDiagnostics.Info($"DesignCodeImportRequested: selectedSuitId={_selectedSuitId}; codeLength={(code?.Length ?? 0)}; hasPrefix={!string.IsNullOrWhiteSpace(code) && code.TrimStart().StartsWith(DrawableSuitDesignCode.Prefix, StringComparison.Ordinal)}");
+        if (!DrawableSuitDesignCode.TryDecode(code, DrawableSuitsPlugin.ModConfig.MaxTextureSize.Value, out var payload, out var texture, out var info, out var failureReason))
+        {
+            SetDesignCodeStatus($"Import failed: {failureReason}");
+            DrawableSuitsDiagnostics.Warn($"DesignCodeImportFailed: stage=decode; selectedSuitId={_selectedSuitId}; codeLength={(code?.Length ?? 0)}; reason={failureReason}");
+            return;
+        }
+
+        try
+        {
+            SaveUndo();
+            if (!DrawableSuitsPlugin.Registry.ImportDecodedDesignCode(_selectedSuitId, payload, texture, out var importedDesignName, out failureReason))
+            {
+                SetDesignCodeStatus($"Import failed: {failureReason}");
+                DrawableSuitsDiagnostics.Warn($"DesignCodeImportFailed: stage=apply; selectedSuitId={_selectedSuitId}; format={info.FormatVersion}; designName={info.DesignName}; sourceSuitId={info.SourceSuitId}; texture={info.Width}x{info.Height}; pngBytes={info.PngBytes}; compressedBytes={info.CompressedBytes}; codeLength={info.CodeLength}; reason={failureReason}");
+                return;
+            }
+
+            _designName = importedDesignName;
+            if (_designNameInput != null)
+            {
+                _designNameInput.text = _designName;
+            }
+
+            _redo.Clear();
+            InvalidateDecalPreview("design code import");
+            InvalidateMirrorSurfaceMap("design code import");
+            TryRebuildPreviewForCurrentReadiness("ImportDesignCode");
+            RefreshEditorReadiness("after design code import");
+            UpdateUiState();
+            SetStatus("Design code imported. Press Save or Apply when ready.", false);
+            SetDesignCodeStatus($"Imported {importedDesignName}. Press Save or Apply when ready.");
+            DrawableSuitsDiagnostics.Info($"DesignCodeImported: format={info.FormatVersion}; designName={importedDesignName}; baseSuit={info.BaseSuitName}; sourceSuitId={info.SourceSuitId}; targetSuitId={_selectedSuitId}; texture={info.Width}x{info.Height}; pngBytes={info.PngBytes}; jsonBytes={info.JsonBytes}; compressedBytes={info.CompressedBytes}; codeLength={info.CodeLength}; broadcast=False");
+        }
+        finally
+        {
+            if (texture != null)
+            {
+                Destroy(texture);
+            }
+        }
+    }
+
+    private void SetDesignCodeStatus(string message)
+    {
+        if (_designCodeStatusLabel != null)
+        {
+            _designCodeStatusLabel.text = message ?? string.Empty;
+        }
+
+        if (!string.IsNullOrWhiteSpace(message))
+        {
+            SetStatus(message, false);
+        }
     }
 
     private void ImportDecalFromDialog()

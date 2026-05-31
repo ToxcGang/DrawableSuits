@@ -347,6 +347,58 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
         }
     }
 
+    public bool TryExportDesignCode(int suitId, string designName, out string code, out DrawableSuitDesignCode.CodeInfo info, out string failureReason)
+    {
+        var state = GetOrCreateState(suitId);
+        if (state == null)
+        {
+            code = string.Empty;
+            info = default;
+            failureReason = "Selected suit is not editable.";
+            return false;
+        }
+
+        return DrawableSuitDesignCode.TryExport(state, designName, out code, out info, out failureReason);
+    }
+
+    public bool ImportDecodedDesignCode(int suitId, DrawableSuitDesignCode.Payload payload, Texture2D texture, out string importedDesignName, out string failureReason)
+    {
+        importedDesignName = string.Empty;
+        failureReason = string.Empty;
+
+        var state = GetOrCreateState(suitId);
+        if (state == null)
+        {
+            failureReason = "Selected suit is not editable.";
+            return false;
+        }
+
+        if (payload == null)
+        {
+            failureReason = "Design code payload is missing.";
+            return false;
+        }
+
+        if (texture == null)
+        {
+            failureReason = "Design code texture is missing.";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(payload.designName))
+        {
+            failureReason = "Design code is missing a design name.";
+            return false;
+        }
+
+        importedDesignName = TextureTools.SanitizeFileName(payload.designName);
+        TextureTools.CopyInto(state.EditableTexture, texture);
+        state.RuntimeMaterial.mainTexture = state.EditableTexture;
+        state.ActiveDesignName = importedDesignName;
+        ApplyStateToOwner(state);
+        return true;
+    }
+
     public void ApplyStateToWorld(SuitTextureState state)
     {
         ApplyStateToOwner(state);

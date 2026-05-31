@@ -5,7 +5,7 @@ DrawableSuits is a Lethal Company v81 BepInEx mod that lets players draw on suit
 ## Features
 
 - Default third-person paint editor: opening DrawableSuits switches to an editor camera around the local player so you can paint directly on the visible suit.
-- Compact side overlay with Paint, Erase, Decal, Text, Eyedropper, a UI-only Mirror toggle, brush sliders, a hue/SV color picker, decal/text controls, design name, visible decal rows, visible saved-design rows, Undo, Redo, Reset, Apply, Save, Load, and Close.
+- Compact side overlay with Paint, Erase, Decal, Text, Eyedropper, a UI-only Mirror toggle, brush sliders, a hue/SV color picker, decal/text controls, design name, visible decal rows, visible saved-design rows, share-code import/export, Undo, Redo, Reset, Apply, Save, Load, and Close.
 - Mirror painting duplicates Paint, Erase, Decal, and Text edits onto the opposite suit surface using the editor's baked avatar mesh, without adding keyboard or controller shortcuts.
 - Decal placement preview: Decal mode shows a translucent live preview before stamping, then places one decal per click or right-trigger press.
 - Text stamping: Text mode previews typed single-line text on the suit as a transparent alpha-mask stamp, then bakes it into the texture once per click or right-trigger press. In third-person mode, text is projected onto the visible suit surface instead of stamped as a flat UV rectangle.
@@ -17,6 +17,7 @@ DrawableSuits is a Lethal Company v81 BepInEx mod that lets players draw on suit
 - UV fallback mode: press `Use UV Fallback` if third-person setup fails; it shows the full editable suit texture.
 - PNG/JPG decals from `BepInEx/config/DrawableSuits/Decals`. The in-game OS file dialog is disabled for stability in Gale/Unity.
 - Reusable saved designs stored as JSON metadata plus PNG texture files.
+- Shareable `DSUIT1:` design codes for copy/paste import and export between profiles or players.
 - Apply/save multiplayer sync for other players who also have DrawableSuits installed, keyed per player so two players wearing the same suit can have different edits.
 - Vanilla and modded suit support as long as the suit exposes a normal suit material and texture.
 
@@ -37,6 +38,7 @@ Keyboard and mouse:
 - Text: click the `Text` UI button, type up to 64 characters, then left-click the suit to stamp it. Text uses the current brush color and opacity.
 - Eyedropper: click the `Eyedropper` UI button, then left-click the suit to sample that texture color. It returns to the previous tool after one successful sample.
 - Mirror: click the `Mirror` UI button to duplicate paint, erase, decal stamps, and text stamps onto the opposite suit surface.
+- Export Code / Import Code: use the design code panel to copy the current editable texture as a `DSUIT1:` code or paste a shared code into the current suit.
 - Right mouse: orbit the third-person editor camera.
 - Mouse wheel: zoom the third-person camera.
 - Ctrl + mouse wheel: change brush size.
@@ -50,6 +52,7 @@ Controller:
 - Text: move the virtual cursor over the `Text` UI button and press `A`, type text with the UI field, then aim at the suit and press right trigger once to stamp it.
 - Eyedropper: move the virtual cursor over the `Eyedropper` UI button, press `A`, then aim at the suit and press right trigger once to sample a color. It returns to the previous tool after one successful sample.
 - Mirror: move the virtual cursor over the `Mirror` UI button and press `A`; there is no controller shortcut for this modifier.
+- Export Code / Import Code: use `A` on the design code UI buttons. There are no shortcuts for import/export.
 - Right trigger: paint/erase continuously; in Decal or Text mode, stamp one preview at the cursor location.
 - Right stick or bumpers: orbit the third-person editor camera.
 - D-pad up/down: zoom the third-person editor camera.
@@ -75,6 +78,8 @@ Edited suits update locally while painting. Other mod users receive your player-
 Players without DrawableSuits can still join normally, but they will see the original suit textures.
 
 DrawableSuits no longer replaces every rack/player using the same base suit when one player edits their suit. Saved designs are reusable, but active in-session edits are applied to the selected player only.
+
+Share codes embed a PNG copy of the current editable texture plus metadata. Importing a code loads it into the currently selected suit editor texture only. It creates one undo entry, does not auto-save, and does not sync to multiplayer until you press `Apply` or `Save`.
 
 ## Modded Suits
 
@@ -106,7 +111,7 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.12 behavior:
+Expected 0.5.13 behavior:
 
 - Opening the editor shows a compact side overlay and a third-person camera view of the local player.
 - The diagnostics text should show `Preview mode: WorldThirdPerson` when the default path succeeds.
@@ -131,6 +136,7 @@ Expected 0.5.12 behavior:
 - Third-person Text should read left-to-right from the editor camera. Mirrored Text should only appear when the UI-only `Mirror` button is enabled.
 - UV fallback keeps direct flat UV Text stamping for texture-layout editing.
 - Text is baked into the suit texture after stamping. It is not an editable layer after placement.
+- `Export Code` copies a shareable `DSUIT1:` code to the clipboard and fills the design code field. `Import Code` validates a pasted code and loads it into the current suit without auto-saving or broadcasting.
 - UV fallback mode shows a non-interactive rotated decal preview over the texture panel.
 - The `Mirror` button is a UI-only modifier. When it is orange, paint, erase, decal stamps, and text stamps use a surface-map mirror target on the opposite side of the baked suit mesh in one undo action.
 - Mirrored decal previews show both the primary and mirrored decal. The mirrored decal is horizontally flipped and uses inverse rotation.
@@ -165,6 +171,7 @@ Troubleshooting:
 - If Text stamps with a black rectangle, confirm the installed package is 0.5.10 or newer. `TextStampRendered` should report `alphaMode=luminance`, glyph bounds, and a trimmed final texture size.
 - If third-person Text drops side letters, confirm the installed package is 0.5.11 or newer and check `TextSurfacePreviewUpdated`, `TextSurfaceStampCommitted`, or `TextSurfaceStampSkipped` for written and skipped glyph-pixel counts.
 - If third-person Text appears backwards, confirm the installed package is 0.5.12 or newer and check `TextProjectionFrameBuilt` for camera-right alignment and sample order diagnostics.
+- If a design code does not import, confirm it starts with `DSUIT1:` and check `DesignCodeImportFailed` diagnostics for prefix, Base64Url, decompression, JSON, PNG, or texture-size validation errors. DrawableSuits never logs the full code.
 - If decals or saved designs do not appear, check `RefreshFileLists complete` and `ListRowsUpdated` entries.
 - If scan, inventory scroll, or item use still happen while the editor is open, check for `Global gameplay actions locked` and `Blocked PlayerControllerB` entries.
 - If keyboard or controller shortcuts do not open the editor, use the pause-menu `DrawableSuits` button.
@@ -179,6 +186,7 @@ Troubleshooting:
 - Mirror mode uses a mesh surface map, so unusual or asymmetric meshes may skip the mirrored edit when no reliable opposite surface can be found.
 - Text stamps use Unity's built-in Arial font only in this version and are baked as tinted transparent alpha masks. Third-person Text projection can still skip letters that physically land off the visible suit surface.
 - Cross-suit loading depends on UV compatibility.
+- Share codes can be long because they embed PNG image data.
 - Very large decal images are resized to the configured maximum texture size.
 - Multiplayer sync is designed for applied designs, not every brush stroke.
 - The old UV fallback view remains available for debugging and edge cases.
