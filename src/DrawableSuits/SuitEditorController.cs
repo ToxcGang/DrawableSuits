@@ -200,12 +200,17 @@ internal sealed class SuitEditorController : MonoBehaviour
     private string _mirrorSurfaceMapKey = string.Empty;
 
     private GameObject _editorCanvasObject;
+    private GameObject _cursorCanvasObject;
     private RectTransform _canvasRect;
+    private RectTransform _cursorCanvasRect;
     private RectTransform _panelRect;
     private RectTransform _previewViewportRect;
     private RectTransform _brushIndicator;
     private Image _brushIndicatorImage;
     private RectTransform _cursorMarker;
+    private RectTransform _cursorBackRect;
+    private RectTransform _cursorFrontRect;
+    private Image _cursorBackImage;
     private Image _cursorImage;
     private Sprite _cursorDotSprite;
     private Sprite _cursorRingSprite;
@@ -1434,6 +1439,17 @@ internal sealed class SuitEditorController : MonoBehaviour
             Destroy(_editorCanvasObject);
             _editorCanvasObject = null;
         }
+        if (_cursorCanvasObject != null)
+        {
+            Destroy(_cursorCanvasObject);
+            _cursorCanvasObject = null;
+            _cursorCanvasRect = null;
+            _cursorMarker = null;
+            _cursorBackRect = null;
+            _cursorFrontRect = null;
+            _cursorBackImage = null;
+            _cursorImage = null;
+        }
 
         if (_editorEventSystemObject != null)
         {
@@ -1519,6 +1535,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         CaptureAndLockPlayerInput();
         _isOpen = true;
         _editorCanvasObject.SetActive(true);
+        EnsureCursorCanvas();
+        SetCursorCanvasVisible(true, $"open from {source}");
         InitializePointerForOpen(source);
         RefreshFileLists();
         _uvFallbackMode = DrawableSuitsPlugin.ModConfig.StartInUvFallbackMode.Value;
@@ -1600,6 +1618,12 @@ internal sealed class SuitEditorController : MonoBehaviour
             repaired++;
         }
 
+        if (_cursorCanvasObject != null && _cursorCanvasObject.activeSelf)
+        {
+            SetCursorCanvasVisible(false, $"repair closed state {reason}");
+            repaired++;
+        }
+
         if (_rendererRestoreStates.Count > 0)
         {
             RestorePlayerRenderers();
@@ -1635,6 +1659,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             _editorCanvasObject.SetActive(false);
         }
+        SetCursorCanvasVisible(false, $"close {reason}");
 
         DestroyPreview();
         _strokeActive = false;
@@ -1982,8 +2007,6 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         BuildDesignCodePanel();
 
-        CreateDynamicCursorMarker(_editorCanvasObject.transform);
-
         _editorCanvasObject.SetActive(false);
         RefreshListButtons();
         UpdateUiState();
@@ -2083,27 +2106,92 @@ internal sealed class SuitEditorController : MonoBehaviour
         _fallbackDiagnosticsLabel.verticalOverflow = VerticalWrapMode.Overflow;
         _fallbackDiagnosticsLabel.text = $"DrawableSuits diagnostics fallback\nFull editor build failed: {originalException.GetType().Name}: {originalException.Message}";
 
-        CreateDynamicCursorMarker(_editorCanvasObject.transform);
         _editorCanvasObject.SetActive(false);
         DrawableSuitsDiagnostics.Info("Fallback diagnostics canvas built.");
     }
 
+    private void EnsureCursorCanvas()
+    {
+        if (_cursorCanvasObject != null && _cursorCanvasRect != null && _cursorMarker != null && _cursorBackImage != null && _cursorImage != null)
+        {
+            return;
+        }
+
+        if (_cursorCanvasObject != null)
+        {
+            Destroy(_cursorCanvasObject);
+        }
+
+        _cursorCanvasObject = new GameObject("DrawableSuitsCursorCanvas", typeof(RectTransform), typeof(Canvas));
+        DontDestroyOnLoad(_cursorCanvasObject);
+        _cursorCanvasRect = _cursorCanvasObject.GetComponent<RectTransform>();
+        _cursorCanvasRect.anchorMin = Vector2.zero;
+        _cursorCanvasRect.anchorMax = Vector2.one;
+        _cursorCanvasRect.offsetMin = Vector2.zero;
+        _cursorCanvasRect.offsetMax = Vector2.zero;
+
+        var canvas = _cursorCanvasObject.GetComponent<Canvas>();
+        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        canvas.sortingOrder = 32768;
+
+        CreateDynamicCursorMarker(_cursorCanvasObject.transform);
+        _cursorCanvasObject.SetActive(false);
+        LogCursorCanvasState("created");
+    }
+
     private void CreateDynamicCursorMarker(Transform parent)
     {
-        var cursorObject = CreateUiObject("DrawableSuitsCursor", parent, typeof(RectTransform), typeof(Image));
+        var cursorObject = CreateUiObject("DrawableSuitsCursor", parent, typeof(RectTransform));
         _cursorMarker = cursorObject.GetComponent<RectTransform>();
-        _cursorMarker.anchorMin = new Vector2(0.5f, 0.5f);
-        _cursorMarker.anchorMax = new Vector2(0.5f, 0.5f);
+        _cursorMarker.anchorMin = Vector2.zero;
+        _cursorMarker.anchorMax = Vector2.zero;
         _cursorMarker.pivot = new Vector2(0.5f, 0.5f);
-        _cursorMarker.sizeDelta = new Vector2(7f, 7f);
+        _cursorMarker.sizeDelta = new Vector2(13f, 13f);
 
-        _cursorImage = cursorObject.GetComponent<Image>();
+        _cursorBackRect = CreateUiObject("CursorBack", _cursorMarker, typeof(RectTransform), typeof(Image)).GetComponent<RectTransform>();
+        _cursorBackRect.anchorMin = new Vector2(0.5f, 0.5f);
+        _cursorBackRect.anchorMax = new Vector2(0.5f, 0.5f);
+        _cursorBackRect.pivot = new Vector2(0.5f, 0.5f);
+        _cursorBackRect.anchoredPosition = Vector2.zero;
+        _cursorBackRect.sizeDelta = new Vector2(11f, 11f);
+        _cursorBackImage = _cursorBackRect.GetComponent<Image>();
+        _cursorBackImage.sprite = EnsureCursorDotSprite();
+        _cursorBackImage.color = new Color(0f, 0f, 0f, 0.85f);
+        _cursorBackImage.raycastTarget = false;
+        _cursorBackImage.preserveAspect = true;
+        _cursorBackImage.type = Image.Type.Simple;
+
+        _cursorFrontRect = CreateUiObject("CursorFront", _cursorMarker, typeof(RectTransform), typeof(Image)).GetComponent<RectTransform>();
+        _cursorFrontRect.anchorMin = new Vector2(0.5f, 0.5f);
+        _cursorFrontRect.anchorMax = new Vector2(0.5f, 0.5f);
+        _cursorFrontRect.pivot = new Vector2(0.5f, 0.5f);
+        _cursorFrontRect.anchoredPosition = Vector2.zero;
+        _cursorFrontRect.sizeDelta = new Vector2(6f, 6f);
+        _cursorImage = _cursorFrontRect.GetComponent<Image>();
         _cursorImage.sprite = EnsureCursorDotSprite();
         _cursorImage.color = Color.white;
         _cursorImage.raycastTarget = false;
         _cursorImage.preserveAspect = true;
         _cursorImage.type = Image.Type.Simple;
-        _cursorMarker.SetAsLastSibling();
+    }
+
+    private void SetCursorCanvasVisible(bool visible, string context)
+    {
+        if (visible)
+        {
+            EnsureCursorCanvas();
+        }
+
+        if (_cursorCanvasObject == null)
+        {
+            return;
+        }
+
+        if (_cursorCanvasObject.activeSelf != visible)
+        {
+            _cursorCanvasObject.SetActive(visible);
+            LogCursorCanvasState(context);
+        }
     }
 
     private static GameObject CreateUiObject(string name, Transform parent, params Type[] components)
@@ -3621,21 +3709,21 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void UpdateCursorMarker()
     {
-        if (_cursorMarker == null || _canvasRect == null || _cursorImage == null)
+        EnsureCursorCanvas();
+        if (_cursorCanvasObject == null || _cursorMarker == null || _cursorBackImage == null || _cursorImage == null)
         {
             return;
         }
 
-        if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(_canvasRect, _cursor, null, out var localPoint))
+        if (!_cursorCanvasObject.activeSelf)
         {
-            _cursorMarker.gameObject.SetActive(false);
-            return;
+            _cursorCanvasObject.SetActive(true);
+            LogCursorCanvasState("auto-show while open");
         }
 
         _cursorMarker.gameObject.SetActive(true);
-        _cursorMarker.anchoredPosition = localPoint;
+        _cursorMarker.anchoredPosition = new Vector2(Mathf.Clamp(_cursor.x, -64f, Screen.width + 64f), Mathf.Clamp(_cursor.y, -64f, Screen.height + 64f));
         ApplyDynamicCursorVisual();
-        _cursorMarker.SetAsLastSibling();
     }
 
     private void ApplyDynamicCursorVisual()
@@ -3655,18 +3743,38 @@ internal sealed class SuitEditorController : MonoBehaviour
             color = brushColor;
         }
 
-        var sprite = mode == CursorVisualMode.BrushRing ? EnsureCursorRingSprite() : EnsureCursorDotSprite();
-        if (_cursorImage.sprite != sprite)
+        var frontSprite = mode == CursorVisualMode.BrushRing ? EnsureCursorRingSprite() : EnsureCursorDotSprite();
+        var backSprite = frontSprite;
+        if (_cursorImage.sprite != frontSprite)
         {
-            _cursorImage.sprite = sprite;
+            _cursorImage.sprite = frontSprite;
+        }
+        if (_cursorBackImage.sprite != backSprite)
+        {
+            _cursorBackImage.sprite = backSprite;
         }
 
+        _cursorBackImage.color = mode == CursorVisualMode.BrushRing
+            ? new Color(0f, 0f, 0f, 0.95f)
+            : new Color(0f, 0f, 0f, 0.85f);
         _cursorImage.color = color;
+        _cursorBackImage.raycastTarget = false;
         _cursorImage.raycastTarget = false;
         var canvasDiameter = mode == CursorVisualMode.BrushRing
             ? ClampCursorDiameter(diameter)
             : 7f;
-        _cursorMarker.sizeDelta = new Vector2(canvasDiameter, canvasDiameter);
+        if (mode == CursorVisualMode.BrushRing)
+        {
+            _cursorMarker.sizeDelta = new Vector2(canvasDiameter + 8f, canvasDiameter + 8f);
+            _cursorBackRect.sizeDelta = new Vector2(canvasDiameter + 6f, canvasDiameter + 6f);
+            _cursorFrontRect.sizeDelta = new Vector2(canvasDiameter, canvasDiameter);
+        }
+        else
+        {
+            _cursorMarker.sizeDelta = new Vector2(13f, 13f);
+            _cursorBackRect.sizeDelta = new Vector2(11f, 11f);
+            _cursorFrontRect.sizeDelta = new Vector2(6f, 6f);
+        }
         LogDynamicCursorUpdated(mode, targetMode, canvasDiameter, triangleIndex, uv, fallbackReason);
     }
 
@@ -3753,15 +3861,29 @@ internal sealed class SuitEditorController : MonoBehaviour
             return 18f;
         }
 
-        var rect = _previewViewportRect.rect;
-        if (rect.width <= 0f || rect.height <= 0f)
+        var screenSize = GetRectTransformScreenSize(_previewViewportRect);
+        if (screenSize.x <= 0f || screenSize.y <= 0f)
         {
             return 18f;
         }
 
-        var scaleX = rect.width / Mathf.Max(1f, texture.width);
-        var scaleY = rect.height / Mathf.Max(1f, texture.height);
+        var scaleX = screenSize.x / Mathf.Max(1f, texture.width);
+        var scaleY = screenSize.y / Mathf.Max(1f, texture.height);
         return _brushSize * 2f * Mathf.Max(scaleX, scaleY);
+    }
+
+    private static Vector2 GetRectTransformScreenSize(RectTransform rectTransform)
+    {
+        if (rectTransform == null)
+        {
+            return Vector2.zero;
+        }
+
+        var corners = new Vector3[4];
+        rectTransform.GetWorldCorners(corners);
+        var bottomLeft = RectTransformUtility.WorldToScreenPoint(null, corners[0]);
+        var topRight = RectTransformUtility.WorldToScreenPoint(null, corners[2]);
+        return new Vector2(Mathf.Abs(topRight.x - bottomLeft.x), Mathf.Abs(topRight.y - bottomLeft.y));
     }
 
     private bool TryComputeWorldBrushCursorDiameter(RaycastHit hit, Texture2D texture, out float diameter, out string fallbackReason)
@@ -3889,9 +4011,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private float ScreenPixelsToCanvasUnits(float screenPixels)
     {
-        var canvas = _editorCanvasObject != null ? _editorCanvasObject.GetComponent<Canvas>() : null;
-        var scale = canvas != null ? Mathf.Max(0.01f, canvas.scaleFactor) : 1f;
-        return screenPixels / scale;
+        return screenPixels;
     }
 
     private static float ClampCursorDiameter(float diameter)
@@ -4006,7 +4126,13 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         _lastDynamicCursorLogTime = Time.unscaledTime;
         _lastDynamicCursorLogKey = key;
-        DrawableSuitsDiagnostics.Info($"DynamicCursorUpdated: {key}; canPaint={_canPaint}; overPanel={IsCursorOverEditorPanel()}; overPreview={IsCursorOverPreviewViewport()}; cursor={_cursor}; previewMode={_previewMode}");
+        DrawableSuitsDiagnostics.Info($"DynamicCursorUpdated: {key}; canPaint={_canPaint}; overPanel={IsCursorOverEditorPanel()}; overPreview={IsCursorOverPreviewViewport()}; screenCursor={_cursor}; anchored={(_cursorMarker != null ? _cursorMarker.anchoredPosition.ToString() : "null")}; rootSize={(_cursorMarker != null ? _cursorMarker.sizeDelta.ToString() : "null")}; frontSize={(_cursorFrontRect != null ? _cursorFrontRect.sizeDelta.ToString() : "null")}; backSize={(_cursorBackRect != null ? _cursorBackRect.sizeDelta.ToString() : "null")}; frontSprite={_cursorImage?.sprite?.name ?? "null"}; backSprite={_cursorBackImage?.sprite?.name ?? "null"}; cursorCanvasActive={_cursorCanvasObject?.activeSelf.ToString() ?? "null"}; cursorCanvasOrder={_cursorCanvasObject?.GetComponent<Canvas>()?.sortingOrder.ToString() ?? "null"}; previewMode={_previewMode}");
+    }
+
+    private void LogCursorCanvasState(string context)
+    {
+        var canvas = _cursorCanvasObject != null ? _cursorCanvasObject.GetComponent<Canvas>() : null;
+        DrawableSuitsDiagnostics.Info($"CursorCanvasState[{context}]: canvasObject={DrawableSuitsPlugin.DescribeUnityObject(_cursorCanvasObject)}; active={_cursorCanvasObject?.activeSelf.ToString() ?? "null"}; renderMode={canvas?.renderMode.ToString() ?? "null"}; sortingOrder={canvas?.sortingOrder.ToString() ?? "null"}; hasRaycaster={(_cursorCanvasObject != null && _cursorCanvasObject.GetComponent<GraphicRaycaster>() != null)}; screen={Screen.width}x{Screen.height}; cursor={_cursor}; marker={DrawableSuitsPlugin.DescribeUnityObject(_cursorMarker)}; markerActive={_cursorMarker?.gameObject.activeSelf.ToString() ?? "null"}; markerPos={(_cursorMarker != null ? _cursorMarker.anchoredPosition.ToString() : "null")}; frontImage={DrawableSuitsPlugin.DescribeUnityObject(_cursorImage)}; backImage={DrawableSuitsPlugin.DescribeUnityObject(_cursorBackImage)}");
     }
 
     private void UpdateBrushIndicator()

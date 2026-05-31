@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.17
+
+- Fixed the missing dynamic cursor by moving it to a dedicated topmost `DrawableSuitsCursorCanvas`.
+- Rebuilt cursor visuals as layered non-raycastable dot/ring images with a dark backing for contrast.
+- Kept Paint and Erase brush rings dynamic while UI hover, invalid targets, Decal, Text, Eyedropper, and normal navigation use a small dot.
+- Added `CursorCanvasState` diagnostics and expanded `DynamicCursorUpdated` cursor visibility details.
+
 ## 0.5.16
 
 - Replaced the fixed square editor cursor with a dynamic UGUI cursor.
