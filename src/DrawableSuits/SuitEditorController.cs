@@ -176,6 +176,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private string _lastDecalPreviewKey = string.Empty;
     private string _lastDecalPreviewLogKey = string.Empty;
     private float _lastDecalPreviewLogTime;
+    private string _lastDecalCoverageWarningKey = string.Empty;
+    private float _lastDecalCoverageWarningTime;
     private string _lastTextPreviewLogKey = string.Empty;
     private float _lastTextPreviewLogTime;
     private string _lastTextProjectionFrameLogKey = string.Empty;
@@ -335,6 +337,11 @@ internal sealed class SuitEditorController : MonoBehaviour
         internal int AlphaPixels;
         internal int WrittenPixels;
         internal int SkippedPixels;
+        internal int ProjectionSamples;
+        internal int SurfaceHits;
+        internal int RasterizedCells;
+        internal int SeamSkippedCells;
+        internal int OffSuitSamples;
         internal float WorldWidth;
         internal float WorldHeight;
         internal bool Mirrored;
@@ -344,6 +351,14 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         internal Color Color;
         internal float Alpha;
+    }
+
+    private struct SurfaceStampGridSample
+    {
+        internal bool Valid;
+        internal Vector2 StampUv;
+        internal Vector2 SurfaceUv;
+        internal Vector2 Pixel;
     }
 
     private sealed class MirrorSurfaceMap
@@ -4157,7 +4172,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         var pixel = TexturePixel(texture, hit.textureCoord);
-        var key = $"surfacePreview|pixel={pixel.x},{pixel.y}|mirror={DescribeMirrorTarget(texture, mirrorTarget)}|decal={CurrentDecalName()}|size={Mathf.RoundToInt(_decalSize)}|rotation={Mathf.RoundToInt(_decalRotation)}|opacity={_brushOpacity:0.##}|stampTexture={stampTexture.width}x{stampTexture.height}|primaryWritten={primaryStats.WrittenPixels}|mirrorWritten={mirrorStats.WrittenPixels}";
+        var key = $"surfacePreview|pixel={pixel.x},{pixel.y}|mirror={DescribeMirrorTarget(texture, mirrorTarget)}|decal={CurrentDecalName()}|size={Mathf.RoundToInt(_decalSize)}|rotation={Mathf.RoundToInt(_decalRotation)}|opacity={_brushOpacity:0.##}|stampTexture={stampTexture.width}x{stampTexture.height}|primaryWritten={primaryStats.WrittenPixels}|mirrorWritten={mirrorStats.WrittenPixels}|primaryCells={primaryStats.RasterizedCells}|mirrorCells={mirrorStats.RasterizedCells}|primarySeams={primaryStats.SeamSkippedCells}|mirrorSeams={mirrorStats.SeamSkippedCells}";
         if (Time.unscaledTime - _lastDecalPreviewLogTime < 0.5f && string.Equals(key, _lastDecalPreviewLogKey, StringComparison.Ordinal))
         {
             return;
@@ -4165,7 +4180,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         _lastDecalPreviewLogTime = Time.unscaledTime;
         _lastDecalPreviewLogKey = key;
-        DrawableSuitsDiagnostics.Info($"DecalSurfacePreviewUpdated: {key}; hitPoint={hit.point}; hitNormal={hit.normal}; primaryAlpha={primaryStats.AlphaPixels}; primarySkipped={primaryStats.SkippedPixels}; primaryWorldSize={primaryStats.WorldWidth:0.###}x{primaryStats.WorldHeight:0.###}; mirrorAlpha={mirrorStats.AlphaPixels}; mirrorSkipped={mirrorStats.SkippedPixels}; mirrorWorldSize={mirrorStats.WorldWidth:0.###}x{mirrorStats.WorldHeight:0.###}; pointerSource={_pointerSource}; cursor={_cursor}");
+        DrawableSuitsDiagnostics.Info($"DecalSurfacePreviewUpdated: {key}; hitPoint={hit.point}; hitNormal={hit.normal}; primarySamples={primaryStats.ProjectionSamples}; primaryHits={primaryStats.SurfaceHits}; primaryAlpha={primaryStats.AlphaPixels}; primarySkipped={primaryStats.SkippedPixels}; primaryOffSuit={primaryStats.OffSuitSamples}; primaryWorldSize={primaryStats.WorldWidth:0.###}x{primaryStats.WorldHeight:0.###}; mirrorSamples={mirrorStats.ProjectionSamples}; mirrorHits={mirrorStats.SurfaceHits}; mirrorAlpha={mirrorStats.AlphaPixels}; mirrorSkipped={mirrorStats.SkippedPixels}; mirrorOffSuit={mirrorStats.OffSuitSamples}; mirrorWorldSize={mirrorStats.WorldWidth:0.###}x{mirrorStats.WorldHeight:0.###}; pointerSource={_pointerSource}; cursor={_cursor}");
     }
 
     private void LogDecalSurfacePreviewSkipped(Texture2D texture, RaycastHit hit, MirrorPaintTarget mirrorTarget, Texture2D stampTexture, TextSurfaceStampStats primaryStats, TextSurfaceStampStats mirrorStats)
@@ -4176,7 +4191,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         var pixel = TexturePixel(texture, hit.textureCoord);
-        var key = $"surfacePreviewSkipped|pixel={pixel.x},{pixel.y}|mirror={DescribeMirrorTarget(texture, mirrorTarget)}|decal={CurrentDecalName()}|stampTexture={stampTexture?.width ?? 0}x{stampTexture?.height ?? 0}|primarySkipped={primaryStats.SkippedPixels}|mirrorSkipped={mirrorStats.SkippedPixels}";
+        var key = $"surfacePreviewSkipped|pixel={pixel.x},{pixel.y}|mirror={DescribeMirrorTarget(texture, mirrorTarget)}|decal={CurrentDecalName()}|stampTexture={stampTexture?.width ?? 0}x{stampTexture?.height ?? 0}|primarySkipped={primaryStats.SkippedPixels}|mirrorSkipped={mirrorStats.SkippedPixels}|primaryCells={primaryStats.RasterizedCells}|mirrorCells={mirrorStats.RasterizedCells}";
         if (Time.unscaledTime - _lastDecalPreviewLogTime < 0.75f && string.Equals(key, _lastDecalPreviewLogKey, StringComparison.Ordinal))
         {
             return;
@@ -4184,7 +4199,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         _lastDecalPreviewLogTime = Time.unscaledTime;
         _lastDecalPreviewLogKey = key;
-        DrawableSuitsDiagnostics.Info($"DecalSurfacePreviewSkipped: {key}; hitPoint={hit.point}; hitNormal={hit.normal}; pointerSource={_pointerSource}; cursor={_cursor}");
+        DrawableSuitsDiagnostics.Info($"DecalSurfacePreviewSkipped: {key}; hitPoint={hit.point}; hitNormal={hit.normal}; primarySamples={primaryStats.ProjectionSamples}; primaryHits={primaryStats.SurfaceHits}; primaryOffSuit={primaryStats.OffSuitSamples}; primarySeams={primaryStats.SeamSkippedCells}; mirrorSamples={mirrorStats.ProjectionSamples}; mirrorHits={mirrorStats.SurfaceHits}; mirrorOffSuit={mirrorStats.OffSuitSamples}; mirrorSeams={mirrorStats.SeamSkippedCells}; pointerSource={_pointerSource}; cursor={_cursor}");
     }
 
     private void LogTextPreviewUpdated(string mode, Texture2D texture, Vector2 uv, MirrorPaintTarget mirrorTarget, Texture2D stampTexture, bool force)
@@ -4303,13 +4318,13 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         var pixel = TexturePixel(texture, hit.textureCoord);
-        DrawableSuitsDiagnostics.Info($"DecalSurfaceStampCommitted: mode=WorldThirdPerson; pointerSource={_pointerSource}; uv={hit.textureCoord}; pixel={pixel.x},{pixel.y}; {DescribeMirrorTarget(texture, mirrorTarget)}; decal={CurrentDecalName()}; size={Mathf.RoundToInt(_decalSize)}; rotation={Mathf.RoundToInt(_decalRotation)}; opacity={_brushOpacity:0.##}; stampTexture={stampTexture?.width ?? 0}x{stampTexture?.height ?? 0}; hitPoint={hit.point}; hitNormal={hit.normal}; primaryWritten={primaryStats.WrittenPixels}; primarySkipped={primaryStats.SkippedPixels}; primaryAlpha={primaryStats.AlphaPixels}; primaryWorldSize={primaryStats.WorldWidth:0.###}x{primaryStats.WorldHeight:0.###}; mirrorWritten={mirrorStats.WrittenPixels}; mirrorSkipped={mirrorStats.SkippedPixels}; mirrorAlpha={mirrorStats.AlphaPixels}; mirrorWorldSize={mirrorStats.WorldWidth:0.###}x{mirrorStats.WorldHeight:0.###}");
+        DrawableSuitsDiagnostics.Info($"DecalSurfaceStampCommitted: mode=WorldThirdPerson; pointerSource={_pointerSource}; uv={hit.textureCoord}; pixel={pixel.x},{pixel.y}; {DescribeMirrorTarget(texture, mirrorTarget)}; decal={CurrentDecalName()}; size={Mathf.RoundToInt(_decalSize)}; rotation={Mathf.RoundToInt(_decalRotation)}; opacity={_brushOpacity:0.##}; stampTexture={stampTexture?.width ?? 0}x{stampTexture?.height ?? 0}; hitPoint={hit.point}; hitNormal={hit.normal}; primarySamples={primaryStats.ProjectionSamples}; primaryHits={primaryStats.SurfaceHits}; primaryCells={primaryStats.RasterizedCells}; primarySeams={primaryStats.SeamSkippedCells}; primaryWritten={primaryStats.WrittenPixels}; primarySkipped={primaryStats.SkippedPixels}; primaryOffSuit={primaryStats.OffSuitSamples}; primaryAlpha={primaryStats.AlphaPixels}; primaryWorldSize={primaryStats.WorldWidth:0.###}x{primaryStats.WorldHeight:0.###}; mirrorSamples={mirrorStats.ProjectionSamples}; mirrorHits={mirrorStats.SurfaceHits}; mirrorCells={mirrorStats.RasterizedCells}; mirrorSeams={mirrorStats.SeamSkippedCells}; mirrorWritten={mirrorStats.WrittenPixels}; mirrorSkipped={mirrorStats.SkippedPixels}; mirrorOffSuit={mirrorStats.OffSuitSamples}; mirrorAlpha={mirrorStats.AlphaPixels}; mirrorWorldSize={mirrorStats.WorldWidth:0.###}x{mirrorStats.WorldHeight:0.###}");
     }
 
     private void LogDecalSurfaceStampSkipped(string mode, string reason, Texture2D texture, RaycastHit hit, MirrorPaintTarget mirrorTarget, Texture2D stampTexture, TextSurfaceStampStats primaryStats, TextSurfaceStampStats mirrorStats)
     {
         var pixel = texture != null ? TexturePixel(texture, hit.textureCoord) : new Vector2Int(-1, -1);
-        var key = $"surfaceStampSkipped|mode={mode}|reason={reason}|pixel={pixel.x},{pixel.y}|mirror={DescribeMirrorTarget(texture, mirrorTarget)}|decal={CurrentDecalName()}|stampTexture={stampTexture?.width ?? 0}x{stampTexture?.height ?? 0}|primaryWritten={primaryStats.WrittenPixels}|mirrorWritten={mirrorStats.WrittenPixels}";
+        var key = $"surfaceStampSkipped|mode={mode}|reason={reason}|pixel={pixel.x},{pixel.y}|mirror={DescribeMirrorTarget(texture, mirrorTarget)}|decal={CurrentDecalName()}|stampTexture={stampTexture?.width ?? 0}x{stampTexture?.height ?? 0}|primaryWritten={primaryStats.WrittenPixels}|mirrorWritten={mirrorStats.WrittenPixels}|primaryCells={primaryStats.RasterizedCells}|mirrorCells={mirrorStats.RasterizedCells}";
         if (Time.unscaledTime - _lastDecalPreviewLogTime < 0.75f && string.Equals(key, _lastDecalPreviewLogKey, StringComparison.Ordinal))
         {
             return;
@@ -4317,7 +4332,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         _lastDecalPreviewLogTime = Time.unscaledTime;
         _lastDecalPreviewLogKey = key;
-        DrawableSuitsDiagnostics.Info($"DecalSurfaceStampSkipped: {key}; hitPoint={hit.point}; hitNormal={hit.normal}; primarySkipped={primaryStats.SkippedPixels}; mirrorSkipped={mirrorStats.SkippedPixels}; pointerSource={_pointerSource}; cursor={_cursor}");
+        DrawableSuitsDiagnostics.Info($"DecalSurfaceStampSkipped: {key}; hitPoint={hit.point}; hitNormal={hit.normal}; primarySamples={primaryStats.ProjectionSamples}; primaryHits={primaryStats.SurfaceHits}; primarySkipped={primaryStats.SkippedPixels}; primaryOffSuit={primaryStats.OffSuitSamples}; primarySeams={primaryStats.SeamSkippedCells}; mirrorSamples={mirrorStats.ProjectionSamples}; mirrorHits={mirrorStats.SurfaceHits}; mirrorSkipped={mirrorStats.SkippedPixels}; mirrorOffSuit={mirrorStats.OffSuitSamples}; mirrorSeams={mirrorStats.SeamSkippedCells}; pointerSource={_pointerSource}; cursor={_cursor}");
     }
 
     private void LogTextStampCommitted(string mode, Texture2D texture, Vector2 uv, MirrorPaintTarget mirrorTarget, Texture2D stampTexture)
@@ -5729,10 +5744,230 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private bool CompositeDecalSurfaceStamp(Texture2D target, Texture2D stamp, Vector3 center, Vector3 normal, float rotation, bool mirrored, float opacity, HashSet<int> touchedPixels, out TextSurfaceStampStats stats)
     {
-        var sampleHeight = Mathf.Clamp(Mathf.RoundToInt(_decalSize), 8, 256);
+        var sampleHeight = Mathf.Clamp(Mathf.RoundToInt(_decalSize), 12, 160);
         var aspect = stamp != null ? stamp.width / Mathf.Max(1f, (float)stamp.height) : 1f;
-        var sampleWidth = Mathf.Clamp(Mathf.RoundToInt(sampleHeight * aspect), 8, 384);
-        return CompositeSurfaceStamp(target, stamp, center, normal, rotation, CalculateDecalWorldHeight(), mirrored, opacity, touchedPixels, false, out stats, sampleWidth, sampleHeight);
+        var sampleWidth = Mathf.Clamp(Mathf.RoundToInt(sampleHeight * aspect), 12, 256);
+        return CompositeDecalSurfaceCoverageStamp(target, stamp, center, normal, rotation, CalculateDecalWorldHeight(), mirrored, opacity, touchedPixels, sampleWidth, sampleHeight, out stats);
+    }
+
+    private bool CompositeDecalSurfaceCoverageStamp(Texture2D target, Texture2D stamp, Vector3 center, Vector3 normal, float rotation, float worldHeight, bool mirrored, float opacity, HashSet<int> touchedPixels, int sampleWidth, int sampleHeight, out TextSurfaceStampStats stats)
+    {
+        stats = default;
+        stats.Mirrored = mirrored;
+        if (target == null || stamp == null || _worldPaintCollider == null || _worldPaintProxyObject == null)
+        {
+            return false;
+        }
+
+        if (!TryBuildProjectionFrame(center, normal, rotation, stamp, worldHeight, mirrored, out var frame))
+        {
+            stats.SkippedPixels = Mathf.Max(1, sampleWidth) * Mathf.Max(1, sampleHeight);
+            return false;
+        }
+
+        stats.WorldWidth = frame.WorldWidth;
+        stats.WorldHeight = frame.WorldHeight;
+        var gridWidth = Mathf.Max(2, sampleWidth + 1);
+        var gridHeight = Mathf.Max(2, sampleHeight + 1);
+        var grid = new SurfaceStampGridSample[gridWidth * gridHeight];
+        var rayOffset = Mathf.Max(0.08f, frame.WorldHeight * 2.5f);
+        var rayDistance = rayOffset * 2.5f;
+        var projectedSamples = new Dictionary<int, SurfaceStampSample>();
+        var seamThreshold = GetDecalProjectionSeamThreshold(target);
+        var opacity01 = Mathf.Clamp01(opacity);
+
+        for (var gy = 0; gy < gridHeight; gy++)
+        {
+            var v = gy / Mathf.Max(1f, sampleHeight);
+            var localY = (v - 0.5f) * frame.WorldHeight;
+            for (var gx = 0; gx < gridWidth; gx++)
+            {
+                var u = gx / Mathf.Max(1f, sampleWidth);
+                var stampU = mirrored ? 1f - u : u;
+                var planePoint = frame.Center + (frame.Right * ((u - 0.5f) * frame.WorldWidth)) + (frame.Up * localY);
+                stats.ProjectionSamples++;
+                if (!TryRaycastSurfaceStampPoint(planePoint, frame.Normal, rayOffset, rayDistance, out var surfaceHit))
+                {
+                    stats.OffSuitSamples++;
+                    stats.SkippedPixels++;
+                    continue;
+                }
+
+                var pixel = TexturePixel(target, surfaceHit.textureCoord);
+                if (pixel.x < 0 || pixel.y < 0 || pixel.x >= target.width || pixel.y >= target.height)
+                {
+                    stats.OffSuitSamples++;
+                    stats.SkippedPixels++;
+                    continue;
+                }
+
+                var sample = new SurfaceStampGridSample
+                {
+                    Valid = true,
+                    StampUv = new Vector2(Mathf.Clamp01(stampU), Mathf.Clamp01(v)),
+                    SurfaceUv = surfaceHit.textureCoord,
+                    Pixel = new Vector2(
+                        surfaceHit.textureCoord.x * (target.width - 1),
+                        surfaceHit.textureCoord.y * (target.height - 1))
+                };
+                grid[GridIndex(gx, gy, gridWidth)] = sample;
+                stats.SurfaceHits++;
+                AddProjectedStampPixel(target, stamp, sample.StampUv, sample.Pixel, opacity01, projectedSamples, ref stats);
+            }
+        }
+
+        for (var y = 0; y < sampleHeight; y++)
+        {
+            for (var x = 0; x < sampleWidth; x++)
+            {
+                var s00 = grid[GridIndex(x, y, gridWidth)];
+                var s10 = grid[GridIndex(x + 1, y, gridWidth)];
+                var s01 = grid[GridIndex(x, y + 1, gridWidth)];
+                var s11 = grid[GridIndex(x + 1, y + 1, gridWidth)];
+                if (!s00.Valid || !s10.Valid || !s01.Valid || !s11.Valid)
+                {
+                    continue;
+                }
+
+                if (CellCrossesProjectionSeam(s00, s10, s01, s11, seamThreshold))
+                {
+                    stats.SeamSkippedCells++;
+                    continue;
+                }
+
+                stats.RasterizedCells++;
+                RasterizeProjectedDecalTriangle(target, stamp, s00, s10, s01, opacity01, projectedSamples, ref stats);
+                RasterizeProjectedDecalTriangle(target, stamp, s10, s11, s01, opacity01, projectedSamples, ref stats);
+            }
+        }
+
+        foreach (var pair in projectedSamples)
+        {
+            var x = pair.Key % target.width;
+            var y = pair.Key / target.width;
+            if (!TryMarkTouchedPixel(target, x, y, touchedPixels))
+            {
+                continue;
+            }
+
+            var existing = target.GetPixel(x, y);
+            var targetColor = new Color(pair.Value.Color.r, pair.Value.Color.g, pair.Value.Color.b, existing.a);
+            target.SetPixel(x, y, Color.Lerp(existing, targetColor, pair.Value.Alpha));
+            stats.WrittenPixels++;
+        }
+
+        LogDecalProjectionCoverageWarning(stats, mirrored, sampleWidth, sampleHeight, seamThreshold);
+        return stats.WrittenPixels > 0;
+    }
+
+    private static int GridIndex(int x, int y, int width)
+    {
+        return (y * width) + x;
+    }
+
+    private static float GetDecalProjectionSeamThreshold(Texture2D target)
+    {
+        if (target == null)
+        {
+            return 24f;
+        }
+
+        return Mathf.Clamp(Mathf.Max(target.width, target.height) / 32f, 18f, 64f);
+    }
+
+    private static bool CellCrossesProjectionSeam(SurfaceStampGridSample s00, SurfaceStampGridSample s10, SurfaceStampGridSample s01, SurfaceStampGridSample s11, float seamThreshold)
+    {
+        var edgeThreshold = Mathf.Max(1f, seamThreshold);
+        var diagonalThreshold = edgeThreshold * 1.75f;
+        return Vector2.Distance(s00.Pixel, s10.Pixel) > edgeThreshold
+            || Vector2.Distance(s10.Pixel, s11.Pixel) > edgeThreshold
+            || Vector2.Distance(s11.Pixel, s01.Pixel) > edgeThreshold
+            || Vector2.Distance(s01.Pixel, s00.Pixel) > edgeThreshold
+            || Vector2.Distance(s00.Pixel, s11.Pixel) > diagonalThreshold
+            || Vector2.Distance(s10.Pixel, s01.Pixel) > diagonalThreshold;
+    }
+
+    private static void RasterizeProjectedDecalTriangle(Texture2D target, Texture2D stamp, SurfaceStampGridSample a, SurfaceStampGridSample b, SurfaceStampGridSample c, float opacity, Dictionary<int, SurfaceStampSample> projectedSamples, ref TextSurfaceStampStats stats)
+    {
+        var minX = Mathf.Max(0, Mathf.FloorToInt(Mathf.Min(a.Pixel.x, Mathf.Min(b.Pixel.x, c.Pixel.x))));
+        var maxX = Mathf.Min(target.width - 1, Mathf.CeilToInt(Mathf.Max(a.Pixel.x, Mathf.Max(b.Pixel.x, c.Pixel.x))));
+        var minY = Mathf.Max(0, Mathf.FloorToInt(Mathf.Min(a.Pixel.y, Mathf.Min(b.Pixel.y, c.Pixel.y))));
+        var maxY = Mathf.Min(target.height - 1, Mathf.CeilToInt(Mathf.Max(a.Pixel.y, Mathf.Max(b.Pixel.y, c.Pixel.y))));
+        if (maxX < minX || maxY < minY)
+        {
+            return;
+        }
+
+        for (var y = minY; y <= maxY; y++)
+        {
+            for (var x = minX; x <= maxX; x++)
+            {
+                var point = new Vector2(x + 0.5f, y + 0.5f);
+                if (!TryBarycentric2D(point, a.Pixel, b.Pixel, c.Pixel, out var barycentric, 0.001f))
+                {
+                    continue;
+                }
+
+                var stampUv = (a.StampUv * barycentric.x) + (b.StampUv * barycentric.y) + (c.StampUv * barycentric.z);
+                AddProjectedStampPixel(target, stamp, stampUv, new Vector2(x, y), opacity, projectedSamples, ref stats);
+            }
+        }
+    }
+
+    private static void AddProjectedStampPixel(Texture2D target, Texture2D stamp, Vector2 stampUv, Vector2 pixel, float opacity, Dictionary<int, SurfaceStampSample> projectedSamples, ref TextSurfaceStampStats stats)
+    {
+        if (target == null || stamp == null || projectedSamples == null)
+        {
+            return;
+        }
+
+        var x = Mathf.Clamp(Mathf.RoundToInt(pixel.x), 0, target.width - 1);
+        var y = Mathf.Clamp(Mathf.RoundToInt(pixel.y), 0, target.height - 1);
+        var sample = stamp.GetPixelBilinear(Mathf.Clamp01(stampUv.x), Mathf.Clamp01(stampUv.y));
+        if (sample.a <= 0.01f)
+        {
+            return;
+        }
+
+        stats.AlphaPixels++;
+        var effectiveAlpha = sample.a * Mathf.Clamp01(opacity);
+        var index = (y * target.width) + x;
+        var projected = new SurfaceStampSample
+        {
+            Color = sample,
+            Alpha = effectiveAlpha
+        };
+
+        if (projectedSamples.TryGetValue(index, out var existingSample))
+        {
+            if (effectiveAlpha > existingSample.Alpha)
+            {
+                projectedSamples[index] = projected;
+            }
+        }
+        else
+        {
+            projectedSamples[index] = projected;
+        }
+    }
+
+    private void LogDecalProjectionCoverageWarning(TextSurfaceStampStats stats, bool mirrored, int sampleWidth, int sampleHeight, float seamThreshold)
+    {
+        var totalCells = stats.RasterizedCells + stats.SeamSkippedCells;
+        if (stats.SeamSkippedCells < 6 || totalCells <= 0 || stats.SeamSkippedCells < totalCells * 0.12f)
+        {
+            return;
+        }
+
+        var key = $"mirrored={mirrored}|sample={sampleWidth}x{sampleHeight}|seam={stats.SeamSkippedCells}|cells={stats.RasterizedCells}|threshold={Mathf.RoundToInt(seamThreshold)}|decal={CurrentDecalName()}";
+        if (Time.unscaledTime - _lastDecalCoverageWarningTime < 2f && string.Equals(key, _lastDecalCoverageWarningKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastDecalCoverageWarningTime = Time.unscaledTime;
+        _lastDecalCoverageWarningKey = key;
+        DrawableSuitsDiagnostics.Warn($"DecalProjectionCoverageWarning: {key}; projectionSamples={stats.ProjectionSamples}; surfaceHits={stats.SurfaceHits}; offSuit={stats.OffSuitSamples}; written={stats.WrittenPixels}; skipped={stats.SkippedPixels}; pointerSource={_pointerSource}");
     }
 
     private bool CompositeSurfaceStamp(Texture2D target, Texture2D stamp, Vector3 center, Vector3 normal, float rotation, float worldHeight, bool mirrored, float opacity, HashSet<int> touchedPixels, bool tintWithBrushColor, out TextSurfaceStampStats stats, int sampleWidth = 0, int sampleHeight = 0)

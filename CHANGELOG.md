@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.15
+
+- Fixed third-person decal tearing by rasterizing projected decal coverage between valid surface samples instead of writing only individual projected points.
+- Added seam guards so projected decals skip cells that jump across UV islands instead of bleeding into unrelated atlas regions.
+- Expanded decal projection diagnostics with sample, hit, rasterized-cell, seam-skip, off-suit, and written-pixel counts.
+
 ## 0.5.14
 
 - Added compact lossless `DSUIT2:` share codes while keeping legacy `DSUIT1:` import compatibility.
