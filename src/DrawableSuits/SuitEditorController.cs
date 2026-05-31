@@ -340,6 +340,12 @@ internal sealed class SuitEditorController : MonoBehaviour
         internal bool Mirrored;
     }
 
+    private struct SurfaceStampSample
+    {
+        internal Color Color;
+        internal float Alpha;
+    }
+
     private sealed class MirrorSurfaceMap
     {
         private readonly MirrorTriangle[] _triangles;
@@ -1982,7 +1988,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         dialogImage.raycastTarget = true;
 
         CreateAnchoredText(dialog.transform, "DesignCodeTitle", "Design Code Import / Export", 22, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(18f, 14f, 560f, 34f), new Color(1f, 0.62f, 0.25f, 1f));
-        CreateAnchoredText(dialog.transform, "DesignCodeHelp", "Export creates a shareable DSUIT1 code for the current editable texture. Import loads a pasted code into the current suit only; press Save or Apply when ready.", 14, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(18f, 54f, 724f, 48f), Color.white);
+        CreateAnchoredText(dialog.transform, "DesignCodeHelp", "Export creates a compact shareable DSUIT2 code for the current editable texture. Import accepts DSUIT2 or legacy DSUIT1 codes into the current suit only; press Save or Apply when ready.", 14, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(18f, 54f, 724f, 48f), Color.white);
 
         _designCodeInput = CreateAnchoredInputField(dialog.transform, "DesignCodeInput", string.Empty, new Rect(18f, 112f, 724f, 194f));
         _designCodeInput.lineType = InputField.LineType.MultiLineNewline;
@@ -3637,7 +3643,7 @@ internal sealed class SuitEditorController : MonoBehaviour
                 return;
             }
 
-            ShowWorldPlacementPreview(texture, hit.textureCoord, mirrorTarget, stampTexture);
+            ShowWorldPlacementPreview(texture, hit, mirrorTarget, stampTexture);
             return;
         }
 
@@ -3681,9 +3687,9 @@ internal sealed class SuitEditorController : MonoBehaviour
         return false;
     }
 
-    private void ShowWorldPlacementPreview(Texture2D sourceTexture, Vector2 uv, MirrorPaintTarget mirrorTarget, Texture2D stampTexture)
+    private void ShowWorldPlacementPreview(Texture2D sourceTexture, RaycastHit hit, MirrorPaintTarget mirrorTarget, Texture2D stampTexture)
     {
-        if (_worldAvatarRenderer == null || _worldSourceRenderer == null || sourceTexture == null || stampTexture == null)
+        if (_worldAvatarRenderer == null || _worldSourceRenderer == null || sourceTexture == null || stampTexture == null || _worldPaintCollider == null)
         {
             HideDecalPlacementPreview("world dependencies missing", false);
             return;
@@ -3695,18 +3701,31 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        var key = BuildDecalPreviewKey("WorldThirdPerson", sourceTexture, uv, mirrorTarget);
+        var key = BuildSurfacePlacementPreviewKey("WorldThirdPersonSurfaceDecal", sourceTexture, hit, mirrorTarget);
+        TextSurfaceStampStats primaryStats = default;
+        TextSurfaceStampStats mirrorStats = default;
+        var previewRebuilt = false;
         if (!string.Equals(key, _lastDecalPreviewKey, StringComparison.Ordinal))
         {
             _decalPreviewTexture.SetPixels32(sourceTexture.GetPixels32());
             var touchedPixels = mirrorTarget.Enabled && mirrorTarget.Available ? new HashSet<int>() : null;
-            CompositePlacementStamp(_decalPreviewTexture, stampTexture, uv, CurrentPlacementSize(), CurrentPlacementRotation(), Mathf.Clamp01(_brushOpacity * 0.62f), false, touchedPixels, _tool == EditorTool.Text);
-            if (ShouldApplyMirror(sourceTexture, uv, mirrorTarget))
+            var primaryChanged = CompositeDecalSurfaceStamp(_decalPreviewTexture, stampTexture, hit.point, hit.normal, _decalRotation, false, Mathf.Clamp01(_brushOpacity * 0.62f), touchedPixels, out primaryStats);
+            var mirrorChanged = false;
+            if (ShouldApplyMirror(sourceTexture, hit.textureCoord, mirrorTarget) && TryGetMirrorWorldPlacement(mirrorTarget, out var mirrorPoint, out var mirrorNormal))
             {
-                CompositePlacementStamp(_decalPreviewTexture, stampTexture, mirrorTarget.Uv, CurrentPlacementSize(), -CurrentPlacementRotation(), Mathf.Clamp01(_brushOpacity * 0.62f), true, touchedPixels, _tool == EditorTool.Text);
+                mirrorChanged = CompositeDecalSurfaceStamp(_decalPreviewTexture, stampTexture, mirrorPoint, mirrorNormal, -_decalRotation, true, Mathf.Clamp01(_brushOpacity * 0.62f), touchedPixels, out mirrorStats);
             }
+
+            if (!primaryChanged && !mirrorChanged)
+            {
+                HideDecalPlacementPreview("decal surface preview projected no pixels", false);
+                LogDecalSurfacePreviewSkipped(sourceTexture, hit, mirrorTarget, stampTexture, primaryStats, mirrorStats);
+                return;
+            }
+
             _decalPreviewTexture.Apply(false, false);
             _lastDecalPreviewKey = key;
+            previewRebuilt = true;
         }
 
         var previewMaterial = EnsureWorldDecalPreviewMaterial(sourceTexture);
@@ -3738,7 +3757,10 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         SetPlacementPreviewStatus(mirrorTarget);
-        LogPlacementPreviewUpdated("WorldThirdPerson", sourceTexture, uv, mirrorTarget, stampTexture, false);
+        if (previewRebuilt)
+        {
+            LogDecalSurfacePreviewUpdated(sourceTexture, hit, mirrorTarget, stampTexture, primaryStats, mirrorStats);
+        }
     }
 
     private void ShowWorldTextPlacementPreview(Texture2D sourceTexture, RaycastHit hit, MirrorPaintTarget mirrorTarget, Texture2D stampTexture)
@@ -3755,7 +3777,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        var key = BuildDecalPreviewKey("WorldThirdPersonSurfaceText", sourceTexture, hit.textureCoord, mirrorTarget);
+        var key = BuildSurfacePlacementPreviewKey("WorldThirdPersonSurfaceText", sourceTexture, hit, mirrorTarget);
         TextSurfaceStampStats primaryStats = default;
         TextSurfaceStampStats mirrorStats = default;
         var previewRebuilt = false;
@@ -3765,7 +3787,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             var touchedPixels = mirrorTarget.Enabled && mirrorTarget.Available ? new HashSet<int>() : null;
             var primaryChanged = CompositeTextSurfaceStamp(_decalPreviewTexture, stampTexture, hit.point, hit.normal, _textRotation, false, Mathf.Clamp01(_brushOpacity * 0.62f), touchedPixels, out primaryStats);
             var mirrorChanged = false;
-            if (ShouldApplyMirror(sourceTexture, hit.textureCoord, mirrorTarget) && TryGetMirrorWorldTextPlacement(mirrorTarget, out var mirrorPoint, out var mirrorNormal))
+            if (ShouldApplyMirror(sourceTexture, hit.textureCoord, mirrorTarget) && TryGetMirrorWorldPlacement(mirrorTarget, out var mirrorPoint, out var mirrorNormal))
             {
                 mirrorChanged = CompositeTextSurfaceStamp(_decalPreviewTexture, stampTexture, mirrorPoint, mirrorNormal, -_textRotation, true, Mathf.Clamp01(_brushOpacity * 0.62f), touchedPixels, out mirrorStats);
             }
@@ -4016,6 +4038,15 @@ internal sealed class SuitEditorController : MonoBehaviour
         return $"{_decalPreviewSerial}|{mode}|tool={_tool}|suit={_selectedSuitId}|pixel={px},{py}|mirror={DescribeMirrorTarget(sourceTexture, mirrorTarget)}|size={Mathf.RoundToInt(CurrentPlacementSize())}|rot={Mathf.RoundToInt(CurrentPlacementRotation() * 10f)}|opacity={Mathf.RoundToInt(_brushOpacity * 1000f)}|stamp={CurrentPlacementName()}|stampKey={_textStampTextureKey}|color={ColorToHex(_brushColor)}|texture={sourceTexture?.width ?? 0}x{sourceTexture?.height ?? 0}";
     }
 
+    private string BuildSurfacePlacementPreviewKey(string mode, Texture2D sourceTexture, RaycastHit hit, MirrorPaintTarget mirrorTarget)
+    {
+        var px = sourceTexture != null ? Mathf.RoundToInt(hit.textureCoord.x * (sourceTexture.width - 1)) : -1;
+        var py = sourceTexture != null ? Mathf.RoundToInt(hit.textureCoord.y * (sourceTexture.height - 1)) : -1;
+        var pointKey = $"{Mathf.RoundToInt(hit.point.x * 1000f)},{Mathf.RoundToInt(hit.point.y * 1000f)},{Mathf.RoundToInt(hit.point.z * 1000f)}";
+        var normalKey = $"{Mathf.RoundToInt(hit.normal.x * 1000f)},{Mathf.RoundToInt(hit.normal.y * 1000f)},{Mathf.RoundToInt(hit.normal.z * 1000f)}";
+        return $"{_decalPreviewSerial}|{mode}|tool={_tool}|suit={_selectedSuitId}|pixel={px},{py}|point={pointKey}|normal={normalKey}|mirror={DescribeMirrorTarget(sourceTexture, mirrorTarget)}|size={Mathf.RoundToInt(CurrentPlacementSize())}|rot={Mathf.RoundToInt(CurrentPlacementRotation() * 10f)}|opacity={Mathf.RoundToInt(_brushOpacity * 1000f)}|stamp={CurrentPlacementName()}|stampKey={_textStampTextureKey}|color={ColorToHex(_brushColor)}|texture={sourceTexture?.width ?? 0}x{sourceTexture?.height ?? 0}";
+    }
+
     private void SetPlacementPreviewStatus(MirrorPaintTarget mirrorTarget)
     {
         var noun = _tool == EditorTool.Text ? "text" : "decal";
@@ -4116,6 +4147,44 @@ internal sealed class SuitEditorController : MonoBehaviour
         _lastDecalPreviewLogTime = Time.unscaledTime;
         _lastDecalPreviewLogKey = key;
         DrawableSuitsDiagnostics.Info($"DecalPreviewUpdated: {key}; uv={uv}; pointerSource={_pointerSource}; cursor={_cursor}");
+    }
+
+    private void LogDecalSurfacePreviewUpdated(Texture2D texture, RaycastHit hit, MirrorPaintTarget mirrorTarget, Texture2D stampTexture, TextSurfaceStampStats primaryStats, TextSurfaceStampStats mirrorStats)
+    {
+        if (texture == null || stampTexture == null)
+        {
+            return;
+        }
+
+        var pixel = TexturePixel(texture, hit.textureCoord);
+        var key = $"surfacePreview|pixel={pixel.x},{pixel.y}|mirror={DescribeMirrorTarget(texture, mirrorTarget)}|decal={CurrentDecalName()}|size={Mathf.RoundToInt(_decalSize)}|rotation={Mathf.RoundToInt(_decalRotation)}|opacity={_brushOpacity:0.##}|stampTexture={stampTexture.width}x{stampTexture.height}|primaryWritten={primaryStats.WrittenPixels}|mirrorWritten={mirrorStats.WrittenPixels}";
+        if (Time.unscaledTime - _lastDecalPreviewLogTime < 0.5f && string.Equals(key, _lastDecalPreviewLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastDecalPreviewLogTime = Time.unscaledTime;
+        _lastDecalPreviewLogKey = key;
+        DrawableSuitsDiagnostics.Info($"DecalSurfacePreviewUpdated: {key}; hitPoint={hit.point}; hitNormal={hit.normal}; primaryAlpha={primaryStats.AlphaPixels}; primarySkipped={primaryStats.SkippedPixels}; primaryWorldSize={primaryStats.WorldWidth:0.###}x{primaryStats.WorldHeight:0.###}; mirrorAlpha={mirrorStats.AlphaPixels}; mirrorSkipped={mirrorStats.SkippedPixels}; mirrorWorldSize={mirrorStats.WorldWidth:0.###}x{mirrorStats.WorldHeight:0.###}; pointerSource={_pointerSource}; cursor={_cursor}");
+    }
+
+    private void LogDecalSurfacePreviewSkipped(Texture2D texture, RaycastHit hit, MirrorPaintTarget mirrorTarget, Texture2D stampTexture, TextSurfaceStampStats primaryStats, TextSurfaceStampStats mirrorStats)
+    {
+        if (texture == null)
+        {
+            return;
+        }
+
+        var pixel = TexturePixel(texture, hit.textureCoord);
+        var key = $"surfacePreviewSkipped|pixel={pixel.x},{pixel.y}|mirror={DescribeMirrorTarget(texture, mirrorTarget)}|decal={CurrentDecalName()}|stampTexture={stampTexture?.width ?? 0}x{stampTexture?.height ?? 0}|primarySkipped={primaryStats.SkippedPixels}|mirrorSkipped={mirrorStats.SkippedPixels}";
+        if (Time.unscaledTime - _lastDecalPreviewLogTime < 0.75f && string.Equals(key, _lastDecalPreviewLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastDecalPreviewLogTime = Time.unscaledTime;
+        _lastDecalPreviewLogKey = key;
+        DrawableSuitsDiagnostics.Info($"DecalSurfacePreviewSkipped: {key}; hitPoint={hit.point}; hitNormal={hit.normal}; pointerSource={_pointerSource}; cursor={_cursor}");
     }
 
     private void LogTextPreviewUpdated(string mode, Texture2D texture, Vector2 uv, MirrorPaintTarget mirrorTarget, Texture2D stampTexture, bool force)
@@ -4224,6 +4293,31 @@ internal sealed class SuitEditorController : MonoBehaviour
         var px = Mathf.RoundToInt(uv.x * (texture.width - 1));
         var py = Mathf.RoundToInt(uv.y * (texture.height - 1));
         DrawableSuitsDiagnostics.Info($"DecalStampCommitted: mode={mode}; pointerSource={_pointerSource}; uv={uv}; pixel={px},{py}; {DescribeMirrorTarget(texture, mirrorTarget)}; decal={CurrentDecalName()}; size={Mathf.RoundToInt(_decalSize)}; rotation={Mathf.RoundToInt(_decalRotation)}; opacity={_brushOpacity:0.##}; previewTexture={_decalPreviewTexture?.width ?? 0}x{_decalPreviewTexture?.height ?? 0}");
+    }
+
+    private void LogDecalSurfaceStampCommitted(Texture2D texture, RaycastHit hit, MirrorPaintTarget mirrorTarget, Texture2D stampTexture, TextSurfaceStampStats primaryStats, TextSurfaceStampStats mirrorStats)
+    {
+        if (texture == null)
+        {
+            return;
+        }
+
+        var pixel = TexturePixel(texture, hit.textureCoord);
+        DrawableSuitsDiagnostics.Info($"DecalSurfaceStampCommitted: mode=WorldThirdPerson; pointerSource={_pointerSource}; uv={hit.textureCoord}; pixel={pixel.x},{pixel.y}; {DescribeMirrorTarget(texture, mirrorTarget)}; decal={CurrentDecalName()}; size={Mathf.RoundToInt(_decalSize)}; rotation={Mathf.RoundToInt(_decalRotation)}; opacity={_brushOpacity:0.##}; stampTexture={stampTexture?.width ?? 0}x{stampTexture?.height ?? 0}; hitPoint={hit.point}; hitNormal={hit.normal}; primaryWritten={primaryStats.WrittenPixels}; primarySkipped={primaryStats.SkippedPixels}; primaryAlpha={primaryStats.AlphaPixels}; primaryWorldSize={primaryStats.WorldWidth:0.###}x{primaryStats.WorldHeight:0.###}; mirrorWritten={mirrorStats.WrittenPixels}; mirrorSkipped={mirrorStats.SkippedPixels}; mirrorAlpha={mirrorStats.AlphaPixels}; mirrorWorldSize={mirrorStats.WorldWidth:0.###}x{mirrorStats.WorldHeight:0.###}");
+    }
+
+    private void LogDecalSurfaceStampSkipped(string mode, string reason, Texture2D texture, RaycastHit hit, MirrorPaintTarget mirrorTarget, Texture2D stampTexture, TextSurfaceStampStats primaryStats, TextSurfaceStampStats mirrorStats)
+    {
+        var pixel = texture != null ? TexturePixel(texture, hit.textureCoord) : new Vector2Int(-1, -1);
+        var key = $"surfaceStampSkipped|mode={mode}|reason={reason}|pixel={pixel.x},{pixel.y}|mirror={DescribeMirrorTarget(texture, mirrorTarget)}|decal={CurrentDecalName()}|stampTexture={stampTexture?.width ?? 0}x{stampTexture?.height ?? 0}|primaryWritten={primaryStats.WrittenPixels}|mirrorWritten={mirrorStats.WrittenPixels}";
+        if (Time.unscaledTime - _lastDecalPreviewLogTime < 0.75f && string.Equals(key, _lastDecalPreviewLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastDecalPreviewLogTime = Time.unscaledTime;
+        _lastDecalPreviewLogKey = key;
+        DrawableSuitsDiagnostics.Info($"DecalSurfaceStampSkipped: {key}; hitPoint={hit.point}; hitNormal={hit.normal}; primarySkipped={primaryStats.SkippedPixels}; mirrorSkipped={mirrorStats.SkippedPixels}; pointerSource={_pointerSource}; cursor={_cursor}");
     }
 
     private void LogTextStampCommitted(string mode, Texture2D texture, Vector2 uv, MirrorPaintTarget mirrorTarget, Texture2D stampTexture)
@@ -5084,7 +5178,7 @@ internal sealed class SuitEditorController : MonoBehaviour
                 return;
             }
 
-            HandleSinglePlacementStampInput(texture, hitAvailable, uv, mirrorTarget, "WorldThirdPerson");
+            HandleWorldDecalStampInput(texture, hitAvailable, hit, mirrorTarget);
             return;
         }
 
@@ -5256,6 +5350,62 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
     }
 
+    private void HandleWorldDecalStampInput(Texture2D texture, bool targetAvailable, RaycastHit hit, MirrorPaintTarget mirrorTarget)
+    {
+        _strokeActive = false;
+        if (!_decalStampArmed)
+        {
+            return;
+        }
+
+        _decalStampArmed = false;
+        _suppressDecalPreviewUntilRelease = true;
+        HideDecalPlacementPreview("decal stamp input", false);
+
+        if (!targetAvailable || texture == null)
+        {
+            SetStatus("Aim at your visible suit to stamp the decal.", false);
+            LogDecalSurfaceStampSkipped("WorldThirdPerson", "cursor miss", texture, hit, mirrorTarget, null, default, default);
+            return;
+        }
+
+        if (_loadedDecal == null)
+        {
+            WarnMissingDecal("WorldThirdPerson surface stamp");
+            _tool = EditorTool.Paint;
+            UpdateToolButtons();
+            return;
+        }
+
+        SaveUndo();
+        _redo.Clear();
+        var touchedPixels = mirrorTarget.Enabled && mirrorTarget.Available ? new HashSet<int>() : null;
+        var primaryChanged = CompositeDecalSurfaceStamp(texture, _loadedDecal, hit.point, hit.normal, _decalRotation, false, _brushOpacity, touchedPixels, out var primaryStats);
+        var mirrorChanged = false;
+        TextSurfaceStampStats mirrorStats = default;
+        if (ShouldApplyMirror(texture, hit.textureCoord, mirrorTarget) && TryGetMirrorWorldPlacement(mirrorTarget, out var mirrorPoint, out var mirrorNormal))
+        {
+            mirrorChanged = CompositeDecalSurfaceStamp(texture, _loadedDecal, mirrorPoint, mirrorNormal, -_decalRotation, true, _brushOpacity, touchedPixels, out mirrorStats);
+        }
+
+        if (!primaryChanged && !mirrorChanged)
+        {
+            LogDecalSurfaceStampSkipped("WorldThirdPerson", "surface projection wrote no pixels", texture, hit, mirrorTarget, _loadedDecal, primaryStats, mirrorStats);
+            return;
+        }
+
+        texture.Apply(false, false);
+        InvalidateDecalPreview("texture changed by decal surface stamp");
+        DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, false);
+        if (_mirrorEnabled && !mirrorTarget.Available)
+        {
+            SetStatus("Mirror target not found; applied primary only.", false);
+        }
+        LogDecalSurfaceStampCommitted(texture, hit, mirrorTarget, _loadedDecal, primaryStats, mirrorStats);
+        LogPaintApplied(texture, hit.textureCoord, mirrorTarget);
+        UpdateBrushIndicator();
+    }
+
     private void HandleWorldTextStampInput(Texture2D texture, bool targetAvailable, RaycastHit hit, MirrorPaintTarget mirrorTarget)
     {
         _strokeActive = false;
@@ -5288,7 +5438,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         var primaryChanged = CompositeTextSurfaceStamp(texture, stampTexture, hit.point, hit.normal, _textRotation, false, _brushOpacity, touchedPixels, out var primaryStats);
         var mirrorChanged = false;
         TextSurfaceStampStats mirrorStats = default;
-        if (ShouldApplyMirror(texture, hit.textureCoord, mirrorTarget) && TryGetMirrorWorldTextPlacement(mirrorTarget, out var mirrorPoint, out var mirrorNormal))
+        if (ShouldApplyMirror(texture, hit.textureCoord, mirrorTarget) && TryGetMirrorWorldPlacement(mirrorTarget, out var mirrorPoint, out var mirrorNormal))
         {
             mirrorChanged = CompositeTextSurfaceStamp(texture, stampTexture, mirrorPoint, mirrorNormal, -_textRotation, true, _brushOpacity, touchedPixels, out mirrorStats);
         }
@@ -5574,6 +5724,19 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private bool CompositeTextSurfaceStamp(Texture2D target, Texture2D stamp, Vector3 center, Vector3 normal, float rotation, bool mirrored, float opacity, HashSet<int> touchedPixels, out TextSurfaceStampStats stats)
     {
+        return CompositeSurfaceStamp(target, stamp, center, normal, rotation, CalculateTextWorldHeight(), mirrored, opacity, touchedPixels, true, out stats);
+    }
+
+    private bool CompositeDecalSurfaceStamp(Texture2D target, Texture2D stamp, Vector3 center, Vector3 normal, float rotation, bool mirrored, float opacity, HashSet<int> touchedPixels, out TextSurfaceStampStats stats)
+    {
+        var sampleHeight = Mathf.Clamp(Mathf.RoundToInt(_decalSize), 8, 256);
+        var aspect = stamp != null ? stamp.width / Mathf.Max(1f, (float)stamp.height) : 1f;
+        var sampleWidth = Mathf.Clamp(Mathf.RoundToInt(sampleHeight * aspect), 8, 384);
+        return CompositeSurfaceStamp(target, stamp, center, normal, rotation, CalculateDecalWorldHeight(), mirrored, opacity, touchedPixels, false, out stats, sampleWidth, sampleHeight);
+    }
+
+    private bool CompositeSurfaceStamp(Texture2D target, Texture2D stamp, Vector3 center, Vector3 normal, float rotation, float worldHeight, bool mirrored, float opacity, HashSet<int> touchedPixels, bool tintWithBrushColor, out TextSurfaceStampStats stats, int sampleWidth = 0, int sampleHeight = 0)
+    {
         stats = default;
         stats.Mirrored = mirrored;
         if (target == null || stamp == null || _worldPaintCollider == null || _worldPaintProxyObject == null)
@@ -5581,36 +5744,38 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
-        if (!TryBuildTextProjectionFrame(center, normal, rotation, stamp, mirrored, out var frame))
+        if (!TryBuildProjectionFrame(center, normal, rotation, stamp, worldHeight, mirrored, out var frame))
         {
-            stats.SkippedPixels = stamp.width * stamp.height;
+            stats.SkippedPixels = Mathf.Max(1, sampleWidth > 0 ? sampleWidth : stamp.width) * Mathf.Max(1, sampleHeight > 0 ? sampleHeight : stamp.height);
             return false;
         }
 
         stats.WorldWidth = frame.WorldWidth;
         stats.WorldHeight = frame.WorldHeight;
-        var projectedAlpha = new Dictionary<int, float>();
+        var projectedSamples = new Dictionary<int, SurfaceStampSample>();
         var rayOffset = Mathf.Max(0.08f, frame.WorldHeight * 2.5f);
         var rayDistance = rayOffset * 2.5f;
+        var drawWidth = Mathf.Max(1, sampleWidth > 0 ? sampleWidth : stamp.width);
+        var drawHeight = Mathf.Max(1, sampleHeight > 0 ? sampleHeight : stamp.height);
 
-        for (var y = 0; y < stamp.height; y++)
+        for (var y = 0; y < drawHeight; y++)
         {
-            var v = (y + 0.5f) / Mathf.Max(1f, stamp.height);
+            var v = (y + 0.5f) / Mathf.Max(1f, drawHeight);
             var localY = (v - 0.5f) * frame.WorldHeight;
-            for (var x = 0; x < stamp.width; x++)
+            for (var x = 0; x < drawWidth; x++)
             {
-                var sampleX = mirrored ? stamp.width - 1 - x : x;
-                var sample = stamp.GetPixel(sampleX, y);
+                var u = (x + 0.5f) / Mathf.Max(1f, drawWidth);
+                var sampleU = mirrored ? 1f - u : u;
+                var sample = stamp.GetPixelBilinear(Mathf.Clamp01(sampleU), Mathf.Clamp01(v));
                 if (sample.a <= 0.01f)
                 {
                     continue;
                 }
 
                 stats.AlphaPixels++;
-                var u = (x + 0.5f) / Mathf.Max(1f, stamp.width);
                 var localX = (u - 0.5f) * frame.WorldWidth;
                 var planePoint = frame.Center + (frame.Right * localX) + (frame.Up * localY);
-                if (!TryRaycastTextSurfacePoint(planePoint, frame.Normal, rayOffset, rayDistance, out var surfaceHit))
+                if (!TryRaycastSurfaceStampPoint(planePoint, frame.Normal, rayOffset, rayDistance, out var surfaceHit))
                 {
                     stats.SkippedPixels++;
                     continue;
@@ -5624,21 +5789,30 @@ internal sealed class SuitEditorController : MonoBehaviour
                 }
 
                 var index = (pixel.y * target.width) + pixel.x;
-                if (projectedAlpha.TryGetValue(index, out var existingAlpha))
+                var effectiveAlpha = sample.a * Mathf.Clamp01(opacity);
+                var projected = new SurfaceStampSample
                 {
-                    if (sample.a > existingAlpha)
+                    Color = tintWithBrushColor
+                        ? new Color(_brushColor.r, _brushColor.g, _brushColor.b, 1f)
+                        : sample,
+                    Alpha = effectiveAlpha
+                };
+
+                if (projectedSamples.TryGetValue(index, out var existingSample))
+                {
+                    if (effectiveAlpha > existingSample.Alpha)
                     {
-                        projectedAlpha[index] = sample.a;
+                        projectedSamples[index] = projected;
                     }
                 }
                 else
                 {
-                    projectedAlpha[index] = sample.a;
+                    projectedSamples[index] = projected;
                 }
             }
         }
 
-        foreach (var pair in projectedAlpha)
+        foreach (var pair in projectedSamples)
         {
             var x = pair.Key % target.width;
             var y = pair.Key / target.width;
@@ -5648,15 +5822,15 @@ internal sealed class SuitEditorController : MonoBehaviour
             }
 
             var existing = target.GetPixel(x, y);
-            var targetColor = new Color(_brushColor.r, _brushColor.g, _brushColor.b, existing.a);
-            target.SetPixel(x, y, Color.Lerp(existing, targetColor, pair.Value * Mathf.Clamp01(opacity)));
+            var targetColor = new Color(pair.Value.Color.r, pair.Value.Color.g, pair.Value.Color.b, existing.a);
+            target.SetPixel(x, y, Color.Lerp(existing, targetColor, pair.Value.Alpha));
             stats.WrittenPixels++;
         }
 
         return stats.WrittenPixels > 0;
     }
 
-    private bool TryBuildTextProjectionFrame(Vector3 center, Vector3 normal, float rotation, Texture2D stamp, bool mirrored, out TextProjectionFrame frame)
+    private bool TryBuildProjectionFrame(Vector3 center, Vector3 normal, float rotation, Texture2D stamp, float worldHeight, bool mirrored, out TextProjectionFrame frame)
     {
         frame = default;
         if (stamp == null || _worldEditorCamera == null)
@@ -5712,7 +5886,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         right = rotationQuat * right;
         up = rotationQuat * up;
 
-        var worldHeight = CalculateTextWorldHeight();
         var aspect = stamp.width / Mathf.Max(1f, (float)stamp.height);
         frame = new TextProjectionFrame
         {
@@ -5764,7 +5937,18 @@ internal sealed class SuitEditorController : MonoBehaviour
         return Mathf.Clamp((_textSize / 512f) * boundsHeight, boundsHeight * 0.012f, boundsHeight * 0.45f);
     }
 
-    private bool TryRaycastTextSurfacePoint(Vector3 planePoint, Vector3 normal, float offset, float distance, out RaycastHit hit)
+    private float CalculateDecalWorldHeight()
+    {
+        var boundsHeight = _worldAvatarRenderer != null ? _worldAvatarRenderer.bounds.size.y : 1.8f;
+        if (boundsHeight <= 0.01f)
+        {
+            boundsHeight = 1.8f;
+        }
+
+        return Mathf.Clamp((_decalSize / 512f) * boundsHeight, boundsHeight * 0.012f, boundsHeight * 0.55f);
+    }
+
+    private bool TryRaycastSurfaceStampPoint(Vector3 planePoint, Vector3 normal, float offset, float distance, out RaycastHit hit)
     {
         hit = default;
         if (_worldPaintCollider == null)
@@ -5782,7 +5966,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         return _worldPaintCollider.Raycast(ray, out hit, distance);
     }
 
-    private bool TryGetMirrorWorldTextPlacement(MirrorPaintTarget mirrorTarget, out Vector3 point, out Vector3 normal)
+    private bool TryGetMirrorWorldPlacement(MirrorPaintTarget mirrorTarget, out Vector3 point, out Vector3 normal)
     {
         point = default;
         normal = default;
@@ -6166,13 +6350,13 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             _designCodeStatusLabel.text = exportCurrent
                 ? "Generating code for the current editable texture..."
-                : "Paste a DSUIT1 code, then press Import.";
+                : "Paste a DSUIT2 or DSUIT1 code, then press Import.";
         }
 
         if (!exportCurrent && _designCodeInput != null)
         {
             var clipboard = GUIUtility.systemCopyBuffer;
-            _designCodeInput.text = !string.IsNullOrWhiteSpace(clipboard) && clipboard.TrimStart().StartsWith(DrawableSuitDesignCode.Prefix, StringComparison.Ordinal)
+            _designCodeInput.text = DrawableSuitDesignCode.HasSupportedPrefix(clipboard)
                 ? clipboard
                 : string.Empty;
         }
@@ -6211,7 +6395,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         GUIUtility.systemCopyBuffer = code;
         SetDesignCodeStatus($"Code copied. Length {info.CodeLength:n0} chars.");
-        DrawableSuitsDiagnostics.Info($"DesignCodeExported: format={info.FormatVersion}; designName={info.DesignName}; baseSuit={info.BaseSuitName}; sourceSuitId={info.SourceSuitId}; texture={info.Width}x{info.Height}; pngBytes={info.PngBytes}; jsonBytes={info.JsonBytes}; compressedBytes={info.CompressedBytes}; codeLength={info.CodeLength}");
+        DrawableSuitsDiagnostics.Info($"DesignCodeExported: format={info.FormatVersion}; designName={info.DesignName}; baseSuit={info.BaseSuitName}; sourceSuitId={info.SourceSuitId}; texture={info.Width}x{info.Height}; pngBytes={info.PngBytes}; payloadBytes={info.PayloadBytes}; jsonBytes={info.JsonBytes}; compressedBytes={info.CompressedBytes}; codeLength={info.CodeLength}");
     }
 
     private void PasteDesignCodeFromClipboard()
@@ -6225,13 +6409,13 @@ internal sealed class SuitEditorController : MonoBehaviour
         SetDesignCodeStatus(string.IsNullOrWhiteSpace(clipboard)
             ? "Clipboard is empty."
             : $"Pasted {clipboard.Length:n0} characters.");
-        DrawableSuitsDiagnostics.Info($"DesignCodePastedFromClipboard: clipboardLength={clipboard.Length}; hasPrefix={clipboard.TrimStart().StartsWith(DrawableSuitDesignCode.Prefix, StringComparison.Ordinal)}");
+        DrawableSuitsDiagnostics.Info($"DesignCodePastedFromClipboard: clipboardLength={clipboard.Length}; hasPrefix={DrawableSuitDesignCode.HasSupportedPrefix(clipboard)}");
     }
 
     private void ImportDesignCodeFromField()
     {
         var code = _designCodeInput != null ? _designCodeInput.text : string.Empty;
-        DrawableSuitsDiagnostics.Info($"DesignCodeImportRequested: selectedSuitId={_selectedSuitId}; codeLength={(code?.Length ?? 0)}; hasPrefix={!string.IsNullOrWhiteSpace(code) && code.TrimStart().StartsWith(DrawableSuitDesignCode.Prefix, StringComparison.Ordinal)}");
+        DrawableSuitsDiagnostics.Info($"DesignCodeImportRequested: selectedSuitId={_selectedSuitId}; codeLength={(code?.Length ?? 0)}; hasPrefix={DrawableSuitDesignCode.HasSupportedPrefix(code)}; cameraBefore={_worldCameraYaw:0.##},{_worldCameraPitch:0.##},{_worldCameraDistance:0.##}");
         if (!DrawableSuitDesignCode.TryDecode(code, DrawableSuitsPlugin.ModConfig.MaxTextureSize.Value, out var payload, out var texture, out var info, out var failureReason))
         {
             SetDesignCodeStatus($"Import failed: {failureReason}");
@@ -6263,7 +6447,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             UpdateUiState();
             SetStatus("Design code imported. Press Save or Apply when ready.", false);
             SetDesignCodeStatus($"Imported {importedDesignName}. Press Save or Apply when ready.");
-            DrawableSuitsDiagnostics.Info($"DesignCodeImported: format={info.FormatVersion}; designName={importedDesignName}; baseSuit={info.BaseSuitName}; sourceSuitId={info.SourceSuitId}; targetSuitId={_selectedSuitId}; texture={info.Width}x{info.Height}; pngBytes={info.PngBytes}; jsonBytes={info.JsonBytes}; compressedBytes={info.CompressedBytes}; codeLength={info.CodeLength}; broadcast=False");
+            DrawableSuitsDiagnostics.Info($"DesignCodeImported: format={info.FormatVersion}; designName={importedDesignName}; baseSuit={info.BaseSuitName}; sourceSuitId={info.SourceSuitId}; targetSuitId={_selectedSuitId}; texture={info.Width}x{info.Height}; pngBytes={info.PngBytes}; payloadBytes={info.PayloadBytes}; jsonBytes={info.JsonBytes}; compressedBytes={info.CompressedBytes}; codeLength={info.CodeLength}; broadcast=False; cameraAfter={_worldCameraYaw:0.##},{_worldCameraPitch:0.##},{_worldCameraDistance:0.##}");
         }
         finally
         {
@@ -6385,7 +6569,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         return context.IndexOf("LoadSelectedDesign", StringComparison.OrdinalIgnoreCase) >= 0
-            || context.IndexOf("SelectSuit", StringComparison.OrdinalIgnoreCase) >= 0;
+            || context.IndexOf("SelectSuit", StringComparison.OrdinalIgnoreCase) >= 0
+            || context.IndexOf("ImportDesignCode", StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
     private void ToggleUvFallback()

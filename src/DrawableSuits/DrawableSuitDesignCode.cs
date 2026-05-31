@@ -8,9 +8,14 @@ namespace DrawableSuits;
 
 internal static class DrawableSuitDesignCode
 {
-    internal const string Prefix = "DSUIT1:";
-    private const int FormatVersion = 1;
+    internal const string PrefixV1 = "DSUIT1:";
+    internal const string PrefixV2 = "DSUIT2:";
+    internal const string Prefix = PrefixV2;
+
+    private const int FormatVersionV1 = 1;
+    private const int FormatVersionV2 = 2;
     private const int MaxDecodedJsonBytes = 24 * 1024 * 1024;
+    private const int MaxDecodedBinaryBytes = 18 * 1024 * 1024;
     private const int MaxPngBytes = 16 * 1024 * 1024;
 
     [Serializable]
@@ -37,8 +42,21 @@ internal static class DrawableSuitDesignCode
         internal int Height;
         internal int PngBytes;
         internal int JsonBytes;
+        internal int PayloadBytes;
         internal int CompressedBytes;
         internal int CodeLength;
+    }
+
+    internal static bool HasSupportedPrefix(string code)
+    {
+        if (string.IsNullOrWhiteSpace(code))
+        {
+            return false;
+        }
+
+        var trimmed = code.TrimStart();
+        return trimmed.StartsWith(PrefixV2, StringComparison.Ordinal)
+            || trimmed.StartsWith(PrefixV1, StringComparison.Ordinal);
     }
 
     internal static bool TryExport(SuitTextureState state, string designName, out string code, out CodeInfo info, out string failureReason)
@@ -73,34 +91,28 @@ internal static class DrawableSuitDesignCode
             return false;
         }
 
-        var payload = new Payload
-        {
-            formatVersion = FormatVersion,
-            modVersion = PluginInfo.Version,
-            designName = safeName,
-            baseSuitName = state.SuitName ?? string.Empty,
-            sourceSuitId = state.SuitId,
-            width = state.EditableTexture.width,
-            height = state.EditableTexture.height,
-            exportedUtc = DateTime.UtcNow.ToString("o"),
-            pngBase64 = Convert.ToBase64String(pngBytes)
-        };
-
-        var json = JsonUtility.ToJson(payload, false);
-        var jsonBytes = Encoding.UTF8.GetBytes(json);
-        var compressed = Compress(jsonBytes);
-        code = Prefix + ToBase64Url(compressed);
+        var payloadBytes = BuildV2PayloadBytes(
+            safeName,
+            state.SuitName ?? string.Empty,
+            state.SuitId,
+            state.EditableTexture.width,
+            state.EditableTexture.height,
+            DateTime.UtcNow.ToString("o"),
+            pngBytes);
+        var compressed = Compress(payloadBytes);
+        code = PrefixV2 + ToBase64Url(compressed);
 
         info = new CodeInfo
         {
-            FormatVersion = FormatVersion,
+            FormatVersion = FormatVersionV2,
             DesignName = safeName,
-            BaseSuitName = payload.baseSuitName,
+            BaseSuitName = state.SuitName ?? string.Empty,
             SourceSuitId = state.SuitId,
             Width = state.EditableTexture.width,
             Height = state.EditableTexture.height,
             PngBytes = pngBytes.Length,
-            JsonBytes = jsonBytes.Length,
+            JsonBytes = 0,
+            PayloadBytes = payloadBytes.Length,
             CompressedBytes = compressed.Length,
             CodeLength = code.Length
         };
@@ -121,16 +133,154 @@ internal static class DrawableSuitDesignCode
         }
 
         code = code.Trim();
-        if (!code.StartsWith(Prefix, StringComparison.Ordinal))
+        if (code.StartsWith(PrefixV2, StringComparison.Ordinal))
         {
-            failureReason = $"Design code must start with {Prefix}";
-            return false;
+            return TryDecodeV2(code, maxTextureSize, out payload, out texture, out info, out failureReason);
         }
+
+        if (code.StartsWith(PrefixV1, StringComparison.Ordinal))
+        {
+            return TryDecodeV1(code, maxTextureSize, out payload, out texture, out info, out failureReason);
+        }
+
+        failureReason = $"Design code must start with {PrefixV2} or {PrefixV1}";
+        return false;
+    }
+
+    private static byte[] BuildV2PayloadBytes(string designName, string baseSuitName, int sourceSuitId, int width, int height, string exportedUtc, byte[] pngBytes)
+    {
+        using var output = new MemoryStream();
+        using (var writer = new BinaryWriter(output, Encoding.UTF8, true))
+        {
+            writer.Write(FormatVersionV2);
+            writer.Write(PluginInfo.Version ?? string.Empty);
+            writer.Write(designName ?? string.Empty);
+            writer.Write(baseSuitName ?? string.Empty);
+            writer.Write(sourceSuitId);
+            writer.Write(width);
+            writer.Write(height);
+            writer.Write(exportedUtc ?? string.Empty);
+            writer.Write(pngBytes?.Length ?? 0);
+            if (pngBytes != null && pngBytes.Length > 0)
+            {
+                writer.Write(pngBytes);
+            }
+        }
+
+        return output.ToArray();
+    }
+
+    private static bool TryDecodeV2(string code, int maxTextureSize, out Payload payload, out Texture2D texture, out CodeInfo info, out string failureReason)
+    {
+        payload = null;
+        texture = null;
+        info = default;
+        failureReason = string.Empty;
 
         byte[] compressed;
         try
         {
-            compressed = FromBase64Url(RemoveWhitespace(code.Substring(Prefix.Length)));
+            compressed = FromBase64Url(RemoveWhitespace(code.Substring(PrefixV2.Length)));
+        }
+        catch (Exception ex)
+        {
+            failureReason = $"Design code is not valid Base64Url data ({ex.GetType().Name}).";
+            return false;
+        }
+
+        byte[] payloadBytes;
+        try
+        {
+            payloadBytes = Decompress(compressed, MaxDecodedBinaryBytes);
+        }
+        catch (Exception ex)
+        {
+            failureReason = $"Design code payload could not be decompressed ({ex.GetType().Name}).";
+            return false;
+        }
+
+        byte[] pngBytes;
+        try
+        {
+            using var input = new MemoryStream(payloadBytes);
+            using var reader = new BinaryReader(input, Encoding.UTF8);
+            var formatVersion = reader.ReadInt32();
+            if (formatVersion != FormatVersionV2)
+            {
+                failureReason = $"Unsupported design code format {formatVersion}.";
+                return false;
+            }
+
+            payload = new Payload
+            {
+                formatVersion = formatVersion,
+                modVersion = reader.ReadString(),
+                designName = reader.ReadString(),
+                baseSuitName = reader.ReadString(),
+                sourceSuitId = reader.ReadInt32(),
+                width = reader.ReadInt32(),
+                height = reader.ReadInt32(),
+                exportedUtc = reader.ReadString(),
+                pngBase64 = string.Empty
+            };
+
+            var pngLength = reader.ReadInt32();
+            if (pngLength <= 0)
+            {
+                failureReason = "Design code PNG data is empty.";
+                return false;
+            }
+
+            if (pngLength > MaxPngBytes)
+            {
+                failureReason = $"Design code PNG data is too large ({pngLength} bytes).";
+                return false;
+            }
+
+            if (input.Length - input.Position < pngLength)
+            {
+                failureReason = "Design code PNG data is truncated.";
+                return false;
+            }
+
+            pngBytes = reader.ReadBytes(pngLength);
+            if (pngBytes.Length != pngLength)
+            {
+                failureReason = "Design code PNG data is truncated.";
+                return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            payload = null;
+            failureReason = $"Design code binary payload could not be parsed ({ex.GetType().Name}).";
+            return false;
+        }
+
+        return TryLoadDecodedTexture(
+            code,
+            maxTextureSize,
+            payload,
+            pngBytes,
+            payloadBytes.Length,
+            0,
+            compressed.Length,
+            out texture,
+            out info,
+            out failureReason);
+    }
+
+    private static bool TryDecodeV1(string code, int maxTextureSize, out Payload payload, out Texture2D texture, out CodeInfo info, out string failureReason)
+    {
+        payload = null;
+        texture = null;
+        info = default;
+        failureReason = string.Empty;
+
+        byte[] compressed;
+        try
+        {
+            compressed = FromBase64Url(RemoveWhitespace(code.Substring(PrefixV1.Length)));
         }
         catch (Exception ex)
         {
@@ -165,9 +315,61 @@ internal static class DrawableSuitDesignCode
             return false;
         }
 
-        if (payload.formatVersion != FormatVersion)
+        if (payload.formatVersion != FormatVersionV1)
         {
             failureReason = $"Unsupported design code format {payload.formatVersion}.";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(payload.pngBase64))
+        {
+            failureReason = "Design code is missing PNG data.";
+            return false;
+        }
+
+        byte[] pngBytes;
+        try
+        {
+            pngBytes = Convert.FromBase64String(payload.pngBase64);
+        }
+        catch (Exception ex)
+        {
+            failureReason = $"Design code PNG data is invalid ({ex.GetType().Name}).";
+            return false;
+        }
+
+        return TryLoadDecodedTexture(
+            code,
+            maxTextureSize,
+            payload,
+            pngBytes,
+            0,
+            jsonBytes.Length,
+            compressed.Length,
+            out texture,
+            out info,
+            out failureReason);
+    }
+
+    private static bool TryLoadDecodedTexture(
+        string code,
+        int maxTextureSize,
+        Payload payload,
+        byte[] pngBytes,
+        int payloadBytes,
+        int jsonBytes,
+        int compressedBytes,
+        out Texture2D texture,
+        out CodeInfo info,
+        out string failureReason)
+    {
+        texture = null;
+        info = default;
+        failureReason = string.Empty;
+
+        if (payload == null)
+        {
+            failureReason = "Design code payload is missing.";
             return false;
         }
 
@@ -189,24 +391,7 @@ internal static class DrawableSuitDesignCode
             return false;
         }
 
-        if (string.IsNullOrWhiteSpace(payload.pngBase64))
-        {
-            failureReason = "Design code is missing PNG data.";
-            return false;
-        }
-
-        byte[] pngBytes;
-        try
-        {
-            pngBytes = Convert.FromBase64String(payload.pngBase64);
-        }
-        catch (Exception ex)
-        {
-            failureReason = $"Design code PNG data is invalid ({ex.GetType().Name}).";
-            return false;
-        }
-
-        if (pngBytes.Length == 0)
+        if (pngBytes == null || pngBytes.Length == 0)
         {
             failureReason = "Design code PNG data is empty.";
             return false;
@@ -237,15 +422,16 @@ internal static class DrawableSuitDesignCode
 
         info = new CodeInfo
         {
-            FormatVersion = FormatVersion,
+            FormatVersion = payload.formatVersion,
             DesignName = payload.designName,
             BaseSuitName = payload.baseSuitName,
             SourceSuitId = payload.sourceSuitId,
             Width = texture.width,
             Height = texture.height,
             PngBytes = pngBytes.Length,
-            JsonBytes = jsonBytes.Length,
-            CompressedBytes = compressed.Length,
+            JsonBytes = jsonBytes,
+            PayloadBytes = payloadBytes,
+            CompressedBytes = compressedBytes,
             CodeLength = code.Length
         };
         return true;

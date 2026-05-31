@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.14
+
+- Added compact lossless `DSUIT2:` share codes while keeping legacy `DSUIT1:` import compatibility.
+- Preserved third-person camera yaw, pitch, and zoom when importing a design code.
+- Changed third-person Decal preview and stamping to project onto the visible suit surface, matching the Text projection path and avoiding UV island clipping/rotation issues.
+- Added `DecalSurfacePreviewUpdated`, `DecalSurfaceStampCommitted`, and expanded design-code diagnostics for payload and code lengths.
+
 ## 0.5.13
 
 - Added shareable `DSUIT1:` design codes that export the current editable suit texture and metadata into a copy/paste code.
