@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.18
+
+- Fixed the invisible dynamic cursor caused by assigning the cursor canvas sorting order above Unity's safe signed range.
+- Moved the editor canvas below the cursor canvas and kept the cursor canvas at `sortingOrder=32767` with override sorting enabled.
+- Slightly increased dot cursor contrast/size and expanded cursor diagnostics with requested versus actual canvas order.
+
 ## 0.5.17
 
 - Fixed the missing dynamic cursor by moving it to a dedicated topmost `DrawableSuitsCursorCanvas`.

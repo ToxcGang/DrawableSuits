@@ -39,6 +39,12 @@ internal sealed class SuitEditorController : MonoBehaviour
         BrushRing
     }
 
+    private const int EditorCanvasSortingOrder = 32760;
+    private const int CursorCanvasSortingOrder = 32767;
+    private const float DotCursorRootSize = 17f;
+    private const float DotCursorBackSize = 15f;
+    private const float DotCursorFrontSize = 9f;
+
     private readonly Stack<Color32[]> _undo = new();
     private readonly Stack<Color32[]> _redo = new();
     private readonly List<string> _designFiles = new();
@@ -1829,7 +1835,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         var canvas = _editorCanvasObject.GetComponent<Canvas>();
         canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-        canvas.sortingOrder = 32767;
+        canvas.sortingOrder = EditorCanvasSortingOrder;
 
         var scaler = _editorCanvasObject.GetComponent<CanvasScaler>();
         scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
@@ -2072,7 +2078,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         var canvas = _editorCanvasObject.GetComponent<Canvas>();
         canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-        canvas.sortingOrder = 32767;
+        canvas.sortingOrder = EditorCanvasSortingOrder;
 
         var scaler = _editorCanvasObject.GetComponent<CanvasScaler>();
         scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
@@ -2132,7 +2138,12 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         var canvas = _cursorCanvasObject.GetComponent<Canvas>();
         canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-        canvas.sortingOrder = 32768;
+        canvas.overrideSorting = true;
+        canvas.sortingOrder = CursorCanvasSortingOrder;
+        if (canvas.sortingOrder != CursorCanvasSortingOrder || canvas.sortingOrder <= EditorCanvasSortingOrder)
+        {
+            DrawableSuitsDiagnostics.Warn($"Cursor canvas sorting order invalid after assignment. requested={CursorCanvasSortingOrder}; actual={canvas.sortingOrder}; editorOrder={EditorCanvasSortingOrder}");
+        }
 
         CreateDynamicCursorMarker(_cursorCanvasObject.transform);
         _cursorCanvasObject.SetActive(false);
@@ -2146,14 +2157,14 @@ internal sealed class SuitEditorController : MonoBehaviour
         _cursorMarker.anchorMin = Vector2.zero;
         _cursorMarker.anchorMax = Vector2.zero;
         _cursorMarker.pivot = new Vector2(0.5f, 0.5f);
-        _cursorMarker.sizeDelta = new Vector2(13f, 13f);
+        _cursorMarker.sizeDelta = new Vector2(DotCursorRootSize, DotCursorRootSize);
 
         _cursorBackRect = CreateUiObject("CursorBack", _cursorMarker, typeof(RectTransform), typeof(Image)).GetComponent<RectTransform>();
         _cursorBackRect.anchorMin = new Vector2(0.5f, 0.5f);
         _cursorBackRect.anchorMax = new Vector2(0.5f, 0.5f);
         _cursorBackRect.pivot = new Vector2(0.5f, 0.5f);
         _cursorBackRect.anchoredPosition = Vector2.zero;
-        _cursorBackRect.sizeDelta = new Vector2(11f, 11f);
+        _cursorBackRect.sizeDelta = new Vector2(DotCursorBackSize, DotCursorBackSize);
         _cursorBackImage = _cursorBackRect.GetComponent<Image>();
         _cursorBackImage.sprite = EnsureCursorDotSprite();
         _cursorBackImage.color = new Color(0f, 0f, 0f, 0.85f);
@@ -2166,7 +2177,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         _cursorFrontRect.anchorMax = new Vector2(0.5f, 0.5f);
         _cursorFrontRect.pivot = new Vector2(0.5f, 0.5f);
         _cursorFrontRect.anchoredPosition = Vector2.zero;
-        _cursorFrontRect.sizeDelta = new Vector2(6f, 6f);
+        _cursorFrontRect.sizeDelta = new Vector2(DotCursorFrontSize, DotCursorFrontSize);
         _cursorImage = _cursorFrontRect.GetComponent<Image>();
         _cursorImage.sprite = EnsureCursorDotSprite();
         _cursorImage.color = Color.white;
@@ -3771,9 +3782,9 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
         else
         {
-            _cursorMarker.sizeDelta = new Vector2(13f, 13f);
-            _cursorBackRect.sizeDelta = new Vector2(11f, 11f);
-            _cursorFrontRect.sizeDelta = new Vector2(6f, 6f);
+            _cursorMarker.sizeDelta = new Vector2(DotCursorRootSize, DotCursorRootSize);
+            _cursorBackRect.sizeDelta = new Vector2(DotCursorBackSize, DotCursorBackSize);
+            _cursorFrontRect.sizeDelta = new Vector2(DotCursorFrontSize, DotCursorFrontSize);
         }
         LogDynamicCursorUpdated(mode, targetMode, canvasDiameter, triangleIndex, uv, fallbackReason);
     }
@@ -4126,13 +4137,14 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         _lastDynamicCursorLogTime = Time.unscaledTime;
         _lastDynamicCursorLogKey = key;
-        DrawableSuitsDiagnostics.Info($"DynamicCursorUpdated: {key}; canPaint={_canPaint}; overPanel={IsCursorOverEditorPanel()}; overPreview={IsCursorOverPreviewViewport()}; screenCursor={_cursor}; anchored={(_cursorMarker != null ? _cursorMarker.anchoredPosition.ToString() : "null")}; rootSize={(_cursorMarker != null ? _cursorMarker.sizeDelta.ToString() : "null")}; frontSize={(_cursorFrontRect != null ? _cursorFrontRect.sizeDelta.ToString() : "null")}; backSize={(_cursorBackRect != null ? _cursorBackRect.sizeDelta.ToString() : "null")}; frontSprite={_cursorImage?.sprite?.name ?? "null"}; backSprite={_cursorBackImage?.sprite?.name ?? "null"}; cursorCanvasActive={_cursorCanvasObject?.activeSelf.ToString() ?? "null"}; cursorCanvasOrder={_cursorCanvasObject?.GetComponent<Canvas>()?.sortingOrder.ToString() ?? "null"}; previewMode={_previewMode}");
+        var cursorCanvas = _cursorCanvasObject != null ? _cursorCanvasObject.GetComponent<Canvas>() : null;
+        DrawableSuitsDiagnostics.Info($"DynamicCursorUpdated: {key}; canPaint={_canPaint}; overPanel={IsCursorOverEditorPanel()}; overPreview={IsCursorOverPreviewViewport()}; screenCursor={_cursor}; anchored={(_cursorMarker != null ? _cursorMarker.anchoredPosition.ToString() : "null")}; rootSize={(_cursorMarker != null ? _cursorMarker.sizeDelta.ToString() : "null")}; frontSize={(_cursorFrontRect != null ? _cursorFrontRect.sizeDelta.ToString() : "null")}; backSize={(_cursorBackRect != null ? _cursorBackRect.sizeDelta.ToString() : "null")}; frontSprite={_cursorImage?.sprite?.name ?? "null"}; backSprite={_cursorBackImage?.sprite?.name ?? "null"}; cursorCanvasActive={_cursorCanvasObject?.activeSelf.ToString() ?? "null"}; cursorCanvasRequestedOrder={CursorCanvasSortingOrder}; cursorCanvasOrder={cursorCanvas?.sortingOrder.ToString() ?? "null"}; cursorCanvasOverrideSorting={cursorCanvas?.overrideSorting.ToString() ?? "null"}; editorCanvasOrder={EditorCanvasSortingOrder}; previewMode={_previewMode}");
     }
 
     private void LogCursorCanvasState(string context)
     {
         var canvas = _cursorCanvasObject != null ? _cursorCanvasObject.GetComponent<Canvas>() : null;
-        DrawableSuitsDiagnostics.Info($"CursorCanvasState[{context}]: canvasObject={DrawableSuitsPlugin.DescribeUnityObject(_cursorCanvasObject)}; active={_cursorCanvasObject?.activeSelf.ToString() ?? "null"}; renderMode={canvas?.renderMode.ToString() ?? "null"}; sortingOrder={canvas?.sortingOrder.ToString() ?? "null"}; hasRaycaster={(_cursorCanvasObject != null && _cursorCanvasObject.GetComponent<GraphicRaycaster>() != null)}; screen={Screen.width}x{Screen.height}; cursor={_cursor}; marker={DrawableSuitsPlugin.DescribeUnityObject(_cursorMarker)}; markerActive={_cursorMarker?.gameObject.activeSelf.ToString() ?? "null"}; markerPos={(_cursorMarker != null ? _cursorMarker.anchoredPosition.ToString() : "null")}; frontImage={DrawableSuitsPlugin.DescribeUnityObject(_cursorImage)}; backImage={DrawableSuitsPlugin.DescribeUnityObject(_cursorBackImage)}");
+        DrawableSuitsDiagnostics.Info($"CursorCanvasState[{context}]: canvasObject={DrawableSuitsPlugin.DescribeUnityObject(_cursorCanvasObject)}; active={_cursorCanvasObject?.activeSelf.ToString() ?? "null"}; renderMode={canvas?.renderMode.ToString() ?? "null"}; requestedSortingOrder={CursorCanvasSortingOrder}; sortingOrder={canvas?.sortingOrder.ToString() ?? "null"}; editorCanvasOrder={EditorCanvasSortingOrder}; overrideSorting={canvas?.overrideSorting.ToString() ?? "null"}; hasRaycaster={(_cursorCanvasObject != null && _cursorCanvasObject.GetComponent<GraphicRaycaster>() != null)}; screen={Screen.width}x{Screen.height}; cursor={_cursor}; marker={DrawableSuitsPlugin.DescribeUnityObject(_cursorMarker)}; markerActive={_cursorMarker?.gameObject.activeSelf.ToString() ?? "null"}; markerPos={(_cursorMarker != null ? _cursorMarker.anchoredPosition.ToString() : "null")}; frontImage={DrawableSuitsPlugin.DescribeUnityObject(_cursorImage)}; backImage={DrawableSuitsPlugin.DescribeUnityObject(_cursorBackImage)}");
     }
 
     private void UpdateBrushIndicator()
