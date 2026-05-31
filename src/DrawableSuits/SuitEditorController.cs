@@ -33,6 +33,12 @@ internal sealed class SuitEditorController : MonoBehaviour
         Text
     }
 
+    private enum CursorVisualMode
+    {
+        Dot,
+        BrushRing
+    }
+
     private readonly Stack<Color32[]> _undo = new();
     private readonly Stack<Color32[]> _redo = new();
     private readonly List<string> _designFiles = new();
@@ -200,6 +206,13 @@ internal sealed class SuitEditorController : MonoBehaviour
     private RectTransform _brushIndicator;
     private Image _brushIndicatorImage;
     private RectTransform _cursorMarker;
+    private Image _cursorImage;
+    private Sprite _cursorDotSprite;
+    private Sprite _cursorRingSprite;
+    private Texture2D _cursorDotTexture;
+    private Texture2D _cursorRingTexture;
+    private string _lastDynamicCursorLogKey = string.Empty;
+    private float _lastDynamicCursorLogTime;
     private RectTransform _designListContent;
     private RectTransform _decalListContent;
     private Text _designEmptyLabel;
@@ -1408,6 +1421,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             Destroy(_checkerTexture);
             _checkerTexture = null;
         }
+        DestroyCursorGraphics();
         if (_textStampRenderer != null)
         {
             _textStampRenderer.Destroy();
@@ -1451,13 +1465,16 @@ internal sealed class SuitEditorController : MonoBehaviour
         ReapplyPlayerInputLock();
         EnsureCursorUnlockedWhileOpen();
         HandleControllerCursor();
+        if (IsWorldThirdPersonMode)
+        {
+            UpdateWorldPaintProxy(false);
+            UpdateWorldEditorCamera(false);
+        }
         UpdateCursorMarker();
         HandleVirtualCursorClick();
         HandleEditorShortcuts();
         if (IsWorldThirdPersonMode)
         {
-            UpdateWorldPaintProxy(false);
-            UpdateWorldEditorCamera(false);
             UpdateWorldBrushMarker();
         }
         else
@@ -1965,11 +1982,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         BuildDesignCodePanel();
 
-        _cursorMarker = CreateUiObject("DrawableSuitsCursor", _editorCanvasObject.transform, typeof(Image)).GetComponent<RectTransform>();
-        _cursorMarker.sizeDelta = new Vector2(14f, 14f);
-        var cursorImage = _cursorMarker.GetComponent<Image>();
-        cursorImage.color = Color.white;
-        cursorImage.raycastTarget = false;
+        CreateDynamicCursorMarker(_editorCanvasObject.transform);
 
         _editorCanvasObject.SetActive(false);
         RefreshListButtons();
@@ -2070,14 +2083,27 @@ internal sealed class SuitEditorController : MonoBehaviour
         _fallbackDiagnosticsLabel.verticalOverflow = VerticalWrapMode.Overflow;
         _fallbackDiagnosticsLabel.text = $"DrawableSuits diagnostics fallback\nFull editor build failed: {originalException.GetType().Name}: {originalException.Message}";
 
-        _cursorMarker = new GameObject("DrawableSuitsCursor", typeof(RectTransform), typeof(Image)).GetComponent<RectTransform>();
-        _cursorMarker.transform.SetParent(_editorCanvasObject.transform, false);
-        _cursorMarker.sizeDelta = new Vector2(14f, 14f);
-        var cursorImage = _cursorMarker.GetComponent<Image>();
-        cursorImage.color = Color.white;
-        cursorImage.raycastTarget = false;
+        CreateDynamicCursorMarker(_editorCanvasObject.transform);
         _editorCanvasObject.SetActive(false);
         DrawableSuitsDiagnostics.Info("Fallback diagnostics canvas built.");
+    }
+
+    private void CreateDynamicCursorMarker(Transform parent)
+    {
+        var cursorObject = CreateUiObject("DrawableSuitsCursor", parent, typeof(RectTransform), typeof(Image));
+        _cursorMarker = cursorObject.GetComponent<RectTransform>();
+        _cursorMarker.anchorMin = new Vector2(0.5f, 0.5f);
+        _cursorMarker.anchorMax = new Vector2(0.5f, 0.5f);
+        _cursorMarker.pivot = new Vector2(0.5f, 0.5f);
+        _cursorMarker.sizeDelta = new Vector2(7f, 7f);
+
+        _cursorImage = cursorObject.GetComponent<Image>();
+        _cursorImage.sprite = EnsureCursorDotSprite();
+        _cursorImage.color = Color.white;
+        _cursorImage.raycastTarget = false;
+        _cursorImage.preserveAspect = true;
+        _cursorImage.type = Image.Type.Simple;
+        _cursorMarker.SetAsLastSibling();
     }
 
     private static GameObject CreateUiObject(string name, Transform parent, params Type[] components)
@@ -3595,15 +3621,392 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void UpdateCursorMarker()
     {
-        if (_cursorMarker == null || _canvasRect == null)
+        if (_cursorMarker == null || _canvasRect == null || _cursorImage == null)
         {
             return;
         }
 
-        if (RectTransformUtility.ScreenPointToLocalPointInRectangle(_canvasRect, _cursor, null, out var localPoint))
+        if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(_canvasRect, _cursor, null, out var localPoint))
         {
-            _cursorMarker.anchoredPosition = localPoint;
+            _cursorMarker.gameObject.SetActive(false);
+            return;
         }
+
+        _cursorMarker.gameObject.SetActive(true);
+        _cursorMarker.anchoredPosition = localPoint;
+        ApplyDynamicCursorVisual();
+        _cursorMarker.SetAsLastSibling();
+    }
+
+    private void ApplyDynamicCursorVisual()
+    {
+        var mode = CursorVisualMode.Dot;
+        var diameter = 7f;
+        var color = Color.white;
+        var targetMode = "Navigation";
+        var triangleIndex = -1;
+        var uv = Vector2.zero;
+        var fallbackReason = string.Empty;
+
+        if (TryResolveBrushCursor(out var brushDiameter, out var brushColor, out targetMode, out triangleIndex, out uv, out fallbackReason))
+        {
+            mode = CursorVisualMode.BrushRing;
+            diameter = brushDiameter;
+            color = brushColor;
+        }
+
+        var sprite = mode == CursorVisualMode.BrushRing ? EnsureCursorRingSprite() : EnsureCursorDotSprite();
+        if (_cursorImage.sprite != sprite)
+        {
+            _cursorImage.sprite = sprite;
+        }
+
+        _cursorImage.color = color;
+        _cursorImage.raycastTarget = false;
+        var canvasDiameter = mode == CursorVisualMode.BrushRing
+            ? ClampCursorDiameter(diameter)
+            : 7f;
+        _cursorMarker.sizeDelta = new Vector2(canvasDiameter, canvasDiameter);
+        LogDynamicCursorUpdated(mode, targetMode, canvasDiameter, triangleIndex, uv, fallbackReason);
+    }
+
+    private bool TryResolveBrushCursor(out float diameter, out Color color, out string targetMode, out int triangleIndex, out Vector2 uv, out string fallbackReason)
+    {
+        diameter = 7f;
+        color = Color.white;
+        targetMode = "Navigation";
+        triangleIndex = -1;
+        uv = Vector2.zero;
+        fallbackReason = string.Empty;
+
+        if (_tool != EditorTool.Paint && _tool != EditorTool.Erase)
+        {
+            targetMode = _tool.ToString();
+            return false;
+        }
+
+        color = _tool == EditorTool.Erase
+            ? new Color(0.65f, 0.85f, 1f, 0.95f)
+            : new Color(_brushColor.r, _brushColor.g, _brushColor.b, 0.95f);
+
+        if (!_canPaint)
+        {
+            targetMode = "Invalid";
+            fallbackReason = "canPaint false";
+            return false;
+        }
+
+        if (IsDesignCodePanelOpen())
+        {
+            targetMode = "DesignCodePanel";
+            return false;
+        }
+
+        var texture = _selectedSuitId >= 0 ? DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId) : null;
+        if (texture == null)
+        {
+            targetMode = "Invalid";
+            fallbackReason = "no editable texture";
+            return false;
+        }
+
+        if (IsWorldThirdPersonMode)
+        {
+            targetMode = "WorldThirdPerson";
+            if (IsCursorOverEditorPanel())
+            {
+                targetMode = "EditorPanel";
+                return false;
+            }
+
+            if (!TryGetWorldPaintHit(out var hit, false))
+            {
+                fallbackReason = "world miss";
+                return false;
+            }
+
+            uv = hit.textureCoord;
+            triangleIndex = hit.triangleIndex;
+            if (!TryComputeWorldBrushCursorDiameter(hit, texture, out diameter, out fallbackReason))
+            {
+                diameter = EstimateWorldBrushCursorDiameter(hit, texture);
+            }
+
+            return true;
+        }
+
+        targetMode = "TextureFallback";
+        if (!IsCursorOverPreviewViewport() || !TryGetTexturePreviewUv(_cursor, out uv))
+        {
+            fallbackReason = "uv miss";
+            return false;
+        }
+
+        diameter = ComputeUvFallbackBrushDiameter(texture);
+        return true;
+    }
+
+    private float ComputeUvFallbackBrushDiameter(Texture2D texture)
+    {
+        if (texture == null || _previewViewportRect == null)
+        {
+            return 18f;
+        }
+
+        var rect = _previewViewportRect.rect;
+        if (rect.width <= 0f || rect.height <= 0f)
+        {
+            return 18f;
+        }
+
+        var scaleX = rect.width / Mathf.Max(1f, texture.width);
+        var scaleY = rect.height / Mathf.Max(1f, texture.height);
+        return _brushSize * 2f * Mathf.Max(scaleX, scaleY);
+    }
+
+    private bool TryComputeWorldBrushCursorDiameter(RaycastHit hit, Texture2D texture, out float diameter, out string fallbackReason)
+    {
+        diameter = 0f;
+        fallbackReason = string.Empty;
+        if (_worldEditorCamera == null || _worldPaintProxyObject == null || _worldPaintMesh == null || texture == null)
+        {
+            fallbackReason = "world cursor dependencies missing";
+            return false;
+        }
+
+        if (hit.triangleIndex < 0)
+        {
+            fallbackReason = $"invalid triangle {hit.triangleIndex}";
+            return false;
+        }
+
+        var triangles = _worldPaintMesh.triangles;
+        var vertices = _worldPaintMesh.vertices;
+        var uvs = _worldPaintMesh.uv;
+        var triangleOffset = hit.triangleIndex * 3;
+        if (triangles == null || vertices == null || uvs == null
+            || triangleOffset < 0 || triangleOffset + 2 >= triangles.Length)
+        {
+            fallbackReason = $"triangle array unavailable index={hit.triangleIndex}";
+            return false;
+        }
+
+        var i0 = triangles[triangleOffset];
+        var i1 = triangles[triangleOffset + 1];
+        var i2 = triangles[triangleOffset + 2];
+        if (i0 < 0 || i1 < 0 || i2 < 0
+            || i0 >= vertices.Length || i1 >= vertices.Length || i2 >= vertices.Length
+            || i0 >= uvs.Length || i1 >= uvs.Length || i2 >= uvs.Length)
+        {
+            fallbackReason = $"triangle vertex out of range index={hit.triangleIndex}";
+            return false;
+        }
+
+        var v0 = vertices[i0];
+        var v1 = vertices[i1];
+        var v2 = vertices[i2];
+        var uv0 = uvs[i0];
+        var uv1 = uvs[i1];
+        var uv2 = uvs[i2];
+        var edge1 = v1 - v0;
+        var edge2 = v2 - v0;
+        var duv1 = uv1 - uv0;
+        var duv2 = uv2 - uv0;
+        var determinant = duv1.x * duv2.y - duv1.y * duv2.x;
+        if (Mathf.Abs(determinant) < 0.000001f)
+        {
+            fallbackReason = $"degenerate uv triangle {hit.triangleIndex}";
+            return false;
+        }
+
+        var inverse = 1f / determinant;
+        var dPdu = (edge1 * duv2.y - edge2 * duv1.y) * inverse;
+        var dPdv = (edge2 * duv1.x - edge1 * duv2.x) * inverse;
+        var localCenter = _worldPaintProxyObject.transform.InverseTransformPoint(hit.point);
+        var du = _brushSize / Mathf.Max(1f, texture.width);
+        var dv = _brushSize / Mathf.Max(1f, texture.height);
+        var transform = _worldPaintProxyObject.transform;
+        var uPlus = ProjectToScreen(transform.TransformPoint(localCenter + dPdu * du));
+        var uMinus = ProjectToScreen(transform.TransformPoint(localCenter - dPdu * du));
+        var vPlus = ProjectToScreen(transform.TransformPoint(localCenter + dPdv * dv));
+        var vMinus = ProjectToScreen(transform.TransformPoint(localCenter - dPdv * dv));
+        if (!uPlus.HasValue || !uMinus.HasValue || !vPlus.HasValue || !vMinus.HasValue)
+        {
+            fallbackReason = $"projection failed triangle={hit.triangleIndex}";
+            return false;
+        }
+
+        var uDiameter = Vector2.Distance(uPlus.Value, uMinus.Value);
+        var vDiameter = Vector2.Distance(vPlus.Value, vMinus.Value);
+        var screenDiameter = Mathf.Max(uDiameter, vDiameter);
+        if (float.IsNaN(screenDiameter) || float.IsInfinity(screenDiameter) || screenDiameter <= 0.5f)
+        {
+            fallbackReason = $"invalid projected diameter {screenDiameter:0.###}";
+            return false;
+        }
+
+        diameter = ScreenPixelsToCanvasUnits(screenDiameter);
+        return true;
+    }
+
+    private Vector2? ProjectToScreen(Vector3 worldPoint)
+    {
+        if (_worldEditorCamera == null)
+        {
+            return null;
+        }
+
+        var screenPoint = _worldEditorCamera.WorldToScreenPoint(worldPoint);
+        if (screenPoint.z <= Mathf.Max(0.001f, _worldEditorCamera.nearClipPlane))
+        {
+            return null;
+        }
+
+        return new Vector2(screenPoint.x, screenPoint.y);
+    }
+
+    private float EstimateWorldBrushCursorDiameter(RaycastHit hit, Texture2D texture)
+    {
+        if (_worldEditorCamera == null || texture == null)
+        {
+            return ClampCursorDiameter(_brushSize * 1.25f);
+        }
+
+        var maxBounds = _worldPaintMesh != null
+            ? Mathf.Max(0.05f, Mathf.Max(_worldPaintMesh.bounds.size.x, Mathf.Max(_worldPaintMesh.bounds.size.y, _worldPaintMesh.bounds.size.z)))
+            : 1.8f;
+        var worldDiameter = _brushSize * 2f * maxBounds / Mathf.Max(1, Mathf.Max(texture.width, texture.height));
+        var axis = _worldEditorCamera.transform.right;
+        var center = ProjectToScreen(hit.point);
+        var edge = ProjectToScreen(hit.point + axis * (worldDiameter * 0.5f));
+        if (!center.HasValue || !edge.HasValue)
+        {
+            return ClampCursorDiameter(_brushSize * 1.25f);
+        }
+
+        return ScreenPixelsToCanvasUnits(Vector2.Distance(center.Value, edge.Value) * 2f);
+    }
+
+    private float ScreenPixelsToCanvasUnits(float screenPixels)
+    {
+        var canvas = _editorCanvasObject != null ? _editorCanvasObject.GetComponent<Canvas>() : null;
+        var scale = canvas != null ? Mathf.Max(0.01f, canvas.scaleFactor) : 1f;
+        return screenPixels / scale;
+    }
+
+    private static float ClampCursorDiameter(float diameter)
+    {
+        return Mathf.Clamp(diameter, 18f, 280f);
+    }
+
+    private bool IsDesignCodePanelOpen()
+    {
+        return _designCodePanelObject != null && _designCodePanelObject.activeInHierarchy;
+    }
+
+    private Sprite EnsureCursorDotSprite()
+    {
+        if (_cursorDotSprite != null)
+        {
+            return _cursorDotSprite;
+        }
+
+        _cursorDotTexture = CreateCursorTexture("DrawableSuitsCursorDot", 32, true);
+        _cursorDotSprite = Sprite.Create(_cursorDotTexture, new Rect(0f, 0f, _cursorDotTexture.width, _cursorDotTexture.height), new Vector2(0.5f, 0.5f), 100f);
+        _cursorDotSprite.name = "DrawableSuitsCursorDotSprite";
+        return _cursorDotSprite;
+    }
+
+    private Sprite EnsureCursorRingSprite()
+    {
+        if (_cursorRingSprite != null)
+        {
+            return _cursorRingSprite;
+        }
+
+        _cursorRingTexture = CreateCursorTexture("DrawableSuitsCursorRing", 128, false);
+        _cursorRingSprite = Sprite.Create(_cursorRingTexture, new Rect(0f, 0f, _cursorRingTexture.width, _cursorRingTexture.height), new Vector2(0.5f, 0.5f), 100f);
+        _cursorRingSprite.name = "DrawableSuitsCursorRingSprite";
+        return _cursorRingSprite;
+    }
+
+    private static Texture2D CreateCursorTexture(string name, int size, bool filled)
+    {
+        var texture = new Texture2D(size, size, TextureFormat.RGBA32, false)
+        {
+            name = name,
+            wrapMode = TextureWrapMode.Clamp,
+            filterMode = FilterMode.Bilinear
+        };
+
+        var pixels = new Color32[size * size];
+        var center = (size - 1) * 0.5f;
+        var outer = size * 0.46f;
+        var inner = filled ? 0f : size * 0.36f;
+        var edge = Mathf.Max(1f, size * 0.035f);
+        for (var y = 0; y < size; y++)
+        {
+            for (var x = 0; x < size; x++)
+            {
+                var dx = x - center;
+                var dy = y - center;
+                var distance = Mathf.Sqrt(dx * dx + dy * dy);
+                float alpha;
+                if (filled)
+                {
+                    alpha = 1f - Mathf.SmoothStep(outer - edge, outer + edge, distance);
+                }
+                else
+                {
+                    var outerAlpha = 1f - Mathf.SmoothStep(outer - edge, outer + edge, distance);
+                    var innerAlpha = Mathf.SmoothStep(inner - edge, inner + edge, distance);
+                    alpha = outerAlpha * innerAlpha;
+                }
+
+                pixels[y * size + x] = new Color32(255, 255, 255, (byte)Mathf.RoundToInt(Mathf.Clamp01(alpha) * 255f));
+            }
+        }
+
+        texture.SetPixels32(pixels);
+        texture.Apply(false, false);
+        return texture;
+    }
+
+    private void DestroyCursorGraphics()
+    {
+        if (_cursorDotSprite != null)
+        {
+            Destroy(_cursorDotSprite);
+            _cursorDotSprite = null;
+        }
+        if (_cursorRingSprite != null)
+        {
+            Destroy(_cursorRingSprite);
+            _cursorRingSprite = null;
+        }
+        if (_cursorDotTexture != null)
+        {
+            Destroy(_cursorDotTexture);
+            _cursorDotTexture = null;
+        }
+        if (_cursorRingTexture != null)
+        {
+            Destroy(_cursorRingTexture);
+            _cursorRingTexture = null;
+        }
+    }
+
+    private void LogDynamicCursorUpdated(CursorVisualMode mode, string targetMode, float diameter, int triangleIndex, Vector2 uv, string fallbackReason)
+    {
+        var key = $"mode={mode}|tool={_tool}|source={_pointerSource}|target={targetMode}|brush={Mathf.RoundToInt(_brushSize)}|diameter={diameter:0.#}|tri={triangleIndex}|uv={uv.x:0.###},{uv.y:0.###}|fallback={fallbackReason}";
+        if (Time.unscaledTime - _lastDynamicCursorLogTime < 0.75f && string.Equals(key, _lastDynamicCursorLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastDynamicCursorLogTime = Time.unscaledTime;
+        _lastDynamicCursorLogKey = key;
+        DrawableSuitsDiagnostics.Info($"DynamicCursorUpdated: {key}; canPaint={_canPaint}; overPanel={IsCursorOverEditorPanel()}; overPreview={IsCursorOverPreviewViewport()}; cursor={_cursor}; previewMode={_previewMode}");
     }
 
     private void UpdateBrushIndicator()
@@ -7611,29 +8014,9 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        if (_tool == EditorTool.Decal && _loadedDecal != null)
-        {
-            _worldBrushMarker.SetActive(false);
-            return;
-        }
-
-        if (!IsWorldThirdPersonMode || !_canPaint || !TryGetWorldPaintHit(out var hit, false))
-        {
-            _worldBrushMarker.SetActive(false);
-            return;
-        }
-
-        _worldBrushMarker.SetActive(true);
-        _worldBrushMarker.transform.position = hit.point + hit.normal * 0.015f;
-        _worldBrushMarker.transform.rotation = Quaternion.LookRotation(hit.normal, Vector3.up);
-        var scale = Mathf.Clamp(_brushSize / 180f, 0.035f, 0.45f);
-        _worldBrushMarker.transform.localScale = new Vector3(scale, scale, scale);
-        if (_worldBrushMarkerMaterial != null)
-        {
-            _worldBrushMarkerMaterial.color = _tool == EditorTool.Erase
-                ? new Color(0.65f, 0.85f, 1f, 0.85f)
-                : new Color(_brushColor.r, _brushColor.g, _brushColor.b, 0.85f);
-        }
+        // The dynamic UGUI cursor is the authoritative paint/erase preview now.
+        // Keep the old world-space sphere hidden so it cannot look like an extra brush blob.
+        _worldBrushMarker.SetActive(false);
     }
 
     private void DestroyWorldThirdPersonPreview(bool restoreRenderers)

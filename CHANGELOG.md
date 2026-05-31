@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.16
+
+- Replaced the fixed square editor cursor with a dynamic UGUI cursor.
+- Added hollow Paint and Erase brush rings that scale to the active brush radius in third-person and UV fallback modes.
+- Changed non-paint tools, invalid targets, and UI hover to use a small dot cursor while keeping the old filled brush indicator and world sphere marker hidden.
+- Added rate-limited `DynamicCursorUpdated` diagnostics for cursor mode, target, brush size, computed diameter, UV, triangle, and fallback sizing.
+
 ## 0.5.15
 
 - Fixed third-person decal tearing by rasterizing projected decal coverage between valid surface samples instead of writing only individual projected points.
