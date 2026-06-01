@@ -222,6 +222,15 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Sprite _cursorRingSprite;
     private Texture2D _cursorDotTexture;
     private Texture2D _cursorRingTexture;
+    private Texture2D _nativeCursorTexture;
+    private string _nativeCursorKey = string.Empty;
+    private string _lastNativeCursorLogKey = string.Empty;
+    private float _lastNativeCursorLogTime;
+    private string _lastNativeCursorFailureKey = string.Empty;
+    private float _lastNativeCursorFailureTime;
+    private string _lastNativeCursorWarpKey = string.Empty;
+    private float _lastNativeCursorWarpTime;
+    private float _ignoreMouseInputUntilTime;
     private string _lastDynamicCursorLogKey = string.Empty;
     private float _lastDynamicCursorLogTime;
     private string _lastImmediateCursorSkipLog = string.Empty;
@@ -1434,6 +1443,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             Destroy(_checkerTexture);
             _checkerTexture = null;
         }
+        ResetNativeCursor("plugin destroy");
         DestroyCursorGraphics();
         if (_textStampRenderer != null)
         {
@@ -1482,6 +1492,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         ReapplyPlayerInputLock();
         EnsureCursorUnlockedWhileOpen();
         HandleControllerCursor();
+        UpdateNativeCursor(false, "update");
         if (IsWorldThirdPersonMode)
         {
             UpdateWorldPaintProxy(false);
@@ -1505,16 +1516,6 @@ internal sealed class SuitEditorController : MonoBehaviour
             RenderPreviewFrame();
         }
         LogUiInputDiagnosticsIfNeeded();
-    }
-
-    private void OnGUI()
-    {
-        if (!_isOpen || Event.current == null || Event.current.type != EventType.Repaint)
-        {
-            return;
-        }
-
-        DrawImmediateCursor();
     }
 
     public bool OpenEditor()
@@ -1543,10 +1544,12 @@ internal sealed class SuitEditorController : MonoBehaviour
         RefreshEditorReadiness($"before show ({source})");
         CaptureAndUnlockCursor();
         CaptureAndLockPlayerInput();
+        ResetNativeCursor("open start");
         _isOpen = true;
         _editorCanvasObject.SetActive(true);
         DestroyLegacyCursorCanvas($"open from {source}");
         InitializePointerForOpen(source);
+        UpdateNativeCursor(true, $"open from {source}");
         RefreshFileLists();
         _uvFallbackMode = DrawableSuitsPlugin.ModConfig.StartInUvFallbackMode.Value;
         EnsureValidToolForCurrentState($"open from {source}");
@@ -1631,6 +1634,11 @@ internal sealed class SuitEditorController : MonoBehaviour
             DestroyLegacyCursorCanvas($"repair closed state {reason}");
             repaired++;
         }
+        if (!string.IsNullOrEmpty(_nativeCursorKey) || _nativeCursorTexture != null)
+        {
+            ResetNativeCursor($"repair closed state {reason}");
+            repaired++;
+        }
 
         if (_rendererRestoreStates.Count > 0)
         {
@@ -1668,6 +1676,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             _editorCanvasObject.SetActive(false);
         }
         DestroyLegacyCursorCanvas($"close {reason}");
+        ResetNativeCursor($"close {reason}");
 
         DestroyPreview();
         _strokeActive = false;
@@ -2659,10 +2668,10 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        if (Cursor.visible || Cursor.lockState != CursorLockMode.None)
+        if (!Cursor.visible || Cursor.lockState != CursorLockMode.None)
         {
             DrawableSuitsDiagnostics.Warn($"Editor cursor was recaptured while open; unlocking again. visibleBefore={Cursor.visible}; lockBefore={Cursor.lockState}; pointerSource={_pointerSource}");
-            Cursor.visible = false;
+            Cursor.visible = true;
             Cursor.lockState = CursorLockMode.None;
         }
     }
@@ -2675,9 +2684,9 @@ internal sealed class SuitEditorController : MonoBehaviour
             _cursorStateCaptured = true;
         }
 
-        Cursor.visible = false;
+        Cursor.visible = true;
         Cursor.lockState = CursorLockMode.None;
-        DrawableSuitsDiagnostics.Info($"Cursor unlocked for editor immediate cursor. previousVisible={_previousCursorVisible}; previousLock={_previousCursorLockState}; currentVisible={Cursor.visible}; currentLock={Cursor.lockState}");
+        DrawableSuitsDiagnostics.Info($"Cursor unlocked for editor native cursor. previousVisible={_previousCursorVisible}; previousLock={_previousCursorLockState}; currentVisible={Cursor.visible}; currentLock={Cursor.lockState}");
     }
 
     private void SetStatus(string message, bool warn)
@@ -3770,6 +3779,223 @@ internal sealed class SuitEditorController : MonoBehaviour
         LogImmediateCursorUpdated(mode, targetMode, diameter, triangleIndex, uv, fallbackReason, frontRect, texture);
     }
 
+    private void UpdateNativeCursor(bool force, string context)
+    {
+        if (!_isOpen)
+        {
+            return;
+        }
+
+        var mode = CursorVisualMode.Dot;
+        var diameter = DotCursorBackSize;
+        var color = Color.white;
+        var targetMode = "Navigation";
+        var triangleIndex = -1;
+        var uv = Vector2.zero;
+        var fallbackReason = string.Empty;
+        if (TryResolveBrushCursor(out var brushDiameter, out var brushColor, out targetMode, out triangleIndex, out uv, out fallbackReason))
+        {
+            mode = CursorVisualMode.BrushRing;
+            diameter = ClampCursorDiameter(brushDiameter);
+            color = brushColor;
+        }
+
+        var roundedDiameter = mode == CursorVisualMode.BrushRing
+            ? Mathf.RoundToInt(diameter)
+            : Mathf.RoundToInt(DotCursorBackSize);
+        var textureSize = mode == CursorVisualMode.BrushRing
+            ? Mathf.Clamp(NextPowerOfTwo(roundedDiameter + 12), 32, 512)
+            : 32;
+        var hotspot = new Vector2(textureSize * 0.5f, textureSize * 0.5f);
+        var key = $"mode={mode}|tool={_tool}|target={targetMode}|diameter={roundedDiameter}|color={ColorToHex(color)}|size={textureSize}";
+
+        if (force || !string.Equals(key, _nativeCursorKey, StringComparison.Ordinal) || _nativeCursorTexture == null)
+        {
+            SetNativeCursorTexture(mode, textureSize, roundedDiameter, color, hotspot, key, context, targetMode, triangleIndex, uv, fallbackReason);
+        }
+
+        if (!Cursor.visible || Cursor.lockState != CursorLockMode.None)
+        {
+            Cursor.visible = true;
+            Cursor.lockState = CursorLockMode.None;
+        }
+
+        WarpNativeCursorIfNeeded(context);
+    }
+
+    private void SetNativeCursorTexture(CursorVisualMode mode, int textureSize, int diameter, Color color, Vector2 hotspot, string key, string context, string targetMode, int triangleIndex, Vector2 uv, string fallbackReason)
+    {
+        try
+        {
+            if (_nativeCursorTexture != null)
+            {
+                Cursor.SetCursor(null, Vector2.zero, CursorMode.Auto);
+                Destroy(_nativeCursorTexture);
+                _nativeCursorTexture = null;
+            }
+
+            _nativeCursorTexture = CreateNativeCursorTexture(mode, textureSize, diameter, color);
+            Cursor.SetCursor(_nativeCursorTexture, hotspot, CursorMode.ForceSoftware);
+            _nativeCursorKey = key;
+            LogNativeCursorUpdated(mode, targetMode, diameter, triangleIndex, uv, fallbackReason, textureSize, hotspot, context);
+        }
+        catch (Exception ex)
+        {
+            LogNativeCursorSetFailed(key, context, ex);
+        }
+    }
+
+    private static Texture2D CreateNativeCursorTexture(CursorVisualMode mode, int size, int diameter, Color color)
+    {
+        var texture = new Texture2D(size, size, TextureFormat.RGBA32, false)
+        {
+            name = mode == CursorVisualMode.BrushRing ? "DrawableSuitsNativeBrushCursor" : "DrawableSuitsNativeDotCursor",
+            wrapMode = TextureWrapMode.Clamp,
+            filterMode = FilterMode.Bilinear
+        };
+
+        var pixels = new Color32[size * size];
+        var center = (size - 1) * 0.5f;
+        if (mode == CursorVisualMode.Dot)
+        {
+            WriteNativeDotCursorPixels(pixels, size, center);
+        }
+        else
+        {
+            WriteNativeBrushCursorPixels(pixels, size, center, diameter, color);
+        }
+
+        texture.SetPixels32(pixels);
+        texture.Apply(false, false);
+        return texture;
+    }
+
+    private static void WriteNativeDotCursorPixels(Color32[] pixels, int size, float center)
+    {
+        var outer = 7.5f;
+        var inner = 4.25f;
+        for (var y = 0; y < size; y++)
+        {
+            for (var x = 0; x < size; x++)
+            {
+                var distance = Vector2.Distance(new Vector2(x, y), new Vector2(center, center));
+                var blackAlpha = 1f - Mathf.SmoothStep(outer - 1f, outer + 1f, distance);
+                var whiteAlpha = 1f - Mathf.SmoothStep(inner - 1f, inner + 1f, distance);
+                var mixed = CompositeCursorPixel(new Color(0f, 0f, 0f, blackAlpha * 0.95f), new Color(1f, 1f, 1f, whiteAlpha));
+                pixels[y * size + x] = mixed;
+            }
+        }
+    }
+
+    private static void WriteNativeBrushCursorPixels(Color32[] pixels, int size, float center, int diameter, Color color)
+    {
+        var radius = diameter * 0.5f;
+        var backThickness = Mathf.Clamp(diameter * 0.14f, 4f, 10f);
+        var frontThickness = Mathf.Clamp(diameter * 0.07f, 2f, 6f);
+        for (var y = 0; y < size; y++)
+        {
+            for (var x = 0; x < size; x++)
+            {
+                var distance = Vector2.Distance(new Vector2(x, y), new Vector2(center, center));
+                var blackAlpha = RingAlpha(distance, radius, backThickness) * 0.95f;
+                var colorAlpha = RingAlpha(distance, radius, frontThickness) * Mathf.Clamp01(color.a);
+                var mixed = CompositeCursorPixel(new Color(0f, 0f, 0f, blackAlpha), new Color(color.r, color.g, color.b, colorAlpha));
+                pixels[y * size + x] = mixed;
+            }
+        }
+    }
+
+    private static float RingAlpha(float distance, float radius, float thickness)
+    {
+        var half = thickness * 0.5f;
+        var inner = radius - half;
+        var outer = radius + half;
+        var outerAlpha = 1f - Mathf.SmoothStep(outer - 1f, outer + 1f, distance);
+        var innerAlpha = Mathf.SmoothStep(inner - 1f, inner + 1f, distance);
+        return Mathf.Clamp01(outerAlpha * innerAlpha);
+    }
+
+    private static Color32 CompositeCursorPixel(Color background, Color foreground)
+    {
+        var outAlpha = foreground.a + background.a * (1f - foreground.a);
+        if (outAlpha <= 0.001f)
+        {
+            return new Color32(0, 0, 0, 0);
+        }
+
+        var r = (foreground.r * foreground.a + background.r * background.a * (1f - foreground.a)) / outAlpha;
+        var g = (foreground.g * foreground.a + background.g * background.a * (1f - foreground.a)) / outAlpha;
+        var b = (foreground.b * foreground.a + background.b * background.a * (1f - foreground.a)) / outAlpha;
+        return new Color32(
+            (byte)Mathf.RoundToInt(Mathf.Clamp01(r) * 255f),
+            (byte)Mathf.RoundToInt(Mathf.Clamp01(g) * 255f),
+            (byte)Mathf.RoundToInt(Mathf.Clamp01(b) * 255f),
+            (byte)Mathf.RoundToInt(Mathf.Clamp01(outAlpha) * 255f));
+    }
+
+    private static int NextPowerOfTwo(int value)
+    {
+        var result = 1;
+        while (result < value)
+        {
+            result <<= 1;
+        }
+
+        return result;
+    }
+
+    private void WarpNativeCursorIfNeeded(string context)
+    {
+        if (!string.Equals(_pointerSource, "Gamepad", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var mouse = Mouse.current;
+        if (mouse == null)
+        {
+            return;
+        }
+
+        var target = new Vector2(Mathf.Clamp(_cursor.x, 0f, Screen.width), Mathf.Clamp(_cursor.y, 0f, Screen.height));
+        try
+        {
+            mouse.WarpCursorPosition(target);
+            _lastMousePosition = target;
+            _mousePositionAvailable = true;
+            _ignoreMouseInputUntilTime = Time.unscaledTime + 0.12f;
+            LogNativeCursorWarped(target, context);
+        }
+        catch (Exception ex)
+        {
+            LogNativeCursorSetFailed($"warp|target={target}", context, ex);
+        }
+    }
+
+    private void ResetNativeCursor(string context)
+    {
+        try
+        {
+            Cursor.SetCursor(null, Vector2.zero, CursorMode.Auto);
+            if (!string.IsNullOrEmpty(_nativeCursorKey) || _nativeCursorTexture != null)
+            {
+                DrawableSuitsDiagnostics.Info($"NativeCursorReset: context={context}; previousKey={_nativeCursorKey}; previousTexture={DrawableSuitsPlugin.DescribeUnityObject(_nativeCursorTexture)}");
+            }
+        }
+        catch (Exception ex)
+        {
+            LogNativeCursorSetFailed("reset", context, ex);
+        }
+
+        if (_nativeCursorTexture != null)
+        {
+            Destroy(_nativeCursorTexture);
+            _nativeCursorTexture = null;
+        }
+
+        _nativeCursorKey = string.Empty;
+    }
+
     private static Rect RectFromCenter(Vector2 center, float size)
     {
         return new Rect(center.x - size * 0.5f, center.y - size * 0.5f, size, size);
@@ -4186,6 +4412,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void DestroyCursorGraphics()
     {
+        ResetNativeCursor("destroy cursor graphics");
         if (_cursorDotSprite != null)
         {
             Destroy(_cursorDotSprite);
@@ -4246,6 +4473,45 @@ internal sealed class SuitEditorController : MonoBehaviour
         _lastImmediateCursorSkipLogTime = Time.unscaledTime;
         _lastImmediateCursorSkipLog = key;
         DrawableSuitsDiagnostics.Warn($"ImmediateCursorDrawSkipped: reason={key}; isOpen={_isOpen}; eventType={Event.current?.type.ToString() ?? "null"}; cursor={_cursor}; screen={Screen.width}x{Screen.height}; tool={_tool}; pointerSource={_pointerSource}");
+    }
+
+    private void LogNativeCursorUpdated(CursorVisualMode mode, string targetMode, int diameter, int triangleIndex, Vector2 uv, string fallbackReason, int textureSize, Vector2 hotspot, string context)
+    {
+        var key = $"mode={mode}|tool={_tool}|source={_pointerSource}|target={targetMode}|diameter={diameter}|color={(_nativeCursorTexture != null ? _nativeCursorTexture.name : "null")}|tri={triangleIndex}|uv={uv.x:0.###},{uv.y:0.###}|fallback={fallbackReason}|context={context}";
+        if (Time.unscaledTime - _lastNativeCursorLogTime < 0.5f && string.Equals(key, _lastNativeCursorLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastNativeCursorLogTime = Time.unscaledTime;
+        _lastNativeCursorLogKey = key;
+        DrawableSuitsDiagnostics.Info($"NativeCursorUpdated: {key}; screenCursor={_cursor}; texture={DrawableSuitsPlugin.DescribeUnityObject(_nativeCursorTexture)}; textureSize={textureSize}; hotspot={hotspot}; cursorVisible={Cursor.visible}; cursorLock={Cursor.lockState}; canPaint={_canPaint}; overPanel={IsCursorOverEditorPanel()}; overPreview={IsCursorOverPreviewViewport()}; warpGuardUntil={_ignoreMouseInputUntilTime:0.###}; previewMode={_previewMode}");
+    }
+
+    private void LogNativeCursorWarped(Vector2 target, string context)
+    {
+        var key = $"{context}|{target.x:0.#},{target.y:0.#}|source={_pointerSource}";
+        if (Time.unscaledTime - _lastNativeCursorWarpTime < 0.25f && string.Equals(key, _lastNativeCursorWarpKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastNativeCursorWarpTime = Time.unscaledTime;
+        _lastNativeCursorWarpKey = key;
+        DrawableSuitsDiagnostics.Info($"NativeCursorWarped: context={context}; target={target}; pointerSource={_pointerSource}; ignoreMouseUntil={_ignoreMouseInputUntilTime:0.###}; mouseAvailable={_mousePositionAvailable}; lastMouse={_lastMousePosition}");
+    }
+
+    private void LogNativeCursorSetFailed(string key, string context, Exception ex)
+    {
+        var logKey = $"{context}|{key}|{ex.GetType().Name}:{ex.Message}";
+        if (Time.unscaledTime - _lastNativeCursorFailureTime < 1.5f && string.Equals(logKey, _lastNativeCursorFailureKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastNativeCursorFailureTime = Time.unscaledTime;
+        _lastNativeCursorFailureKey = logKey;
+        DrawableSuitsDiagnostics.Exception($"NativeCursorSetFailed: context={context}; key={key}; cursor={_cursor}; visible={Cursor.visible}; lock={Cursor.lockState}", ex);
     }
 
     private void LogCursorCanvasState(string context)
@@ -5292,7 +5558,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private void HandleControllerCursor()
     {
         _mousePositionAvailable = DrawableSuitsInput.TryGetMousePosition(out _lastMousePosition);
-        var mouseUsed = DrawableSuitsInput.WasMouseUsedThisFrame();
+        var mouseUsed = Time.unscaledTime >= _ignoreMouseInputUntilTime && DrawableSuitsInput.WasMouseUsedThisFrame();
         var gamepad = Gamepad.current;
         _lastGamepadStick = gamepad != null ? gamepad.leftStick.ReadValue() : Vector2.zero;
         var gamepadMoved = gamepad != null && _lastGamepadStick.sqrMagnitude > 0.0324f;

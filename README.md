@@ -113,7 +113,7 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.19 behavior:
+Expected 0.5.20 behavior:
 
 - Opening the editor shows a compact side overlay and a third-person camera view of the local player.
 - The diagnostics text should show `Preview mode: WorldThirdPerson` when the default path succeeds.
@@ -178,9 +178,10 @@ Troubleshooting:
 - If third-person Text appears backwards, confirm the installed package is 0.5.12 or newer and check `TextProjectionFrameBuilt` for camera-right alignment and sample order diagnostics.
 - If decals rotate unexpectedly or get clipped on third-person suit seams, confirm the installed package is 0.5.14 or newer and check `DecalSurfacePreviewUpdated`, `DecalSurfaceStampCommitted`, or `DecalSurfaceStampSkipped` diagnostics for projected written/skipped pixels.
 - If third-person decals show small suit-background cracks through the decal, confirm the installed package is 0.5.15 or newer and check the same decal surface diagnostics for sample, hit, rasterized-cell, seam-skip, off-suit, and written-pixel counts. High seam-skip counts mean DrawableSuits is intentionally avoiding UV island bleeding.
-- If the cursor is missing, confirm the installed package is 0.5.19 or newer and check `ImmediateCursorUpdated` or `ImmediateCursorDrawSkipped` diagnostics. The cursor is drawn through `OnGUI`, so normal cursor output should not depend on `CursorCanvasState`.
-- If the cursor is still a filled square or colored world blob, confirm the installed package is 0.5.19 or newer and check `ImmediateCursorUpdated` diagnostics. Paint and Erase should use `mode=BrushRing`; Decal, Text, Eyedropper, UI hover, and invalid targets should use `mode=Dot`.
-- If the Paint or Erase ring size looks wrong, check `ImmediateCursorUpdated` for `target=WorldThirdPerson` or `target=TextureFallback`, the computed diameter, hit triangle, UV, draw rect, and any fallback reason.
+- If the cursor is missing, confirm the installed package is 0.5.20 or newer and check `NativeCursorUpdated` or `NativeCursorSetFailed` diagnostics. The editor now uses Unity's native software cursor path instead of UGUI or IMGUI cursor rendering.
+- If the cursor is still a filled square or colored world blob, confirm the installed package is 0.5.20 or newer and check `NativeCursorUpdated` diagnostics. Paint and Erase should use `mode=BrushRing`; Decal, Text, Eyedropper, UI hover, and invalid targets should use `mode=Dot`.
+- If the Paint or Erase ring size looks wrong, check `NativeCursorUpdated` for `target=WorldThirdPerson` or `target=TextureFallback`, the computed diameter, hit triangle, UV, cursor texture size, hotspot, and any fallback reason.
+- If the controller cursor does not line up with the visible cursor, check `NativeCursorWarped` diagnostics. In gamepad pointer mode, DrawableSuits warps the native cursor to the virtual cursor position.
 - If importing a design code resets the third-person camera, confirm the installed package is 0.5.14 or newer and check `DesignCodeImported` plus `World camera state preserved` diagnostics.
 - If a design code does not import, confirm it starts with `DSUIT2:` or `DSUIT1:` and check `DesignCodeImportFailed` diagnostics for prefix, Base64Url, decompression, binary/JSON payload, PNG, or texture-size validation errors. DrawableSuits never logs the full code.
 - If decals or saved designs do not appear, check `RefreshFileLists complete` and `ListRowsUpdated` entries.

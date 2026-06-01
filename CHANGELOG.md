@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.20
+
+- Replaced the IMGUI cursor renderer with Unity's native software cursor path using generated cursor textures.
+- Restored visible native cursor handling while the editor is open, including dynamic Paint and Erase brush rings plus dot-mode cursor behavior.
+- Added controller cursor warping so the native cursor follows the virtual cursor during gamepad editing.
+- Added `NativeCursorUpdated`, `NativeCursorWarped`, `NativeCursorReset`, and `NativeCursorSetFailed` diagnostics.
+
 ## 0.5.19
 
 - Replaced the unreliable UGUI cursor canvas with an immediate-mode overlay cursor drawn through `OnGUI`.
