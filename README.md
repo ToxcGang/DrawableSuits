@@ -113,7 +113,7 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.21 behavior:
+Expected 0.5.22 behavior:
 
 - Opening the editor shows a compact side overlay and a third-person camera view of the local player.
 - The diagnostics text should show `Preview mode: WorldThirdPerson` when the default path succeeds.
@@ -149,6 +149,7 @@ Expected 0.5.21 behavior:
 - The `Eyedropper` button is a UI-only one-shot tool. It samples the editable suit texture at the cursor hit point, updates the swatch, color picker, hex field, and brush color, then returns to the previous Paint, Erase, or Decal tool.
 - Eyedropper does not create undo entries and Mirror does not affect sampling.
 - The part picker is removed. Third-person mode always shows the full avatar proxy, and UV fallback always shows the full editable suit texture.
+- Paint and Erase in third-person mode project onto the visible suit surface and fill between valid projected samples, so brush strokes avoid UV-island cutoffs while still guarding against unrelated UV island bleeding. UV fallback keeps direct flat UV brush painting.
 - Paint, erase, decal preview, and decal stamping operate on the full editable texture.
 - Active editor diagnostics report full proxy mesh/collider state through `WorldAvatarProxy updated`; `PartClassifierBuilt` should not appear during normal editor use.
 
@@ -178,6 +179,7 @@ Troubleshooting:
 - If third-person Text appears backwards, confirm the installed package is 0.5.12 or newer and check `TextProjectionFrameBuilt` for camera-right alignment and sample order diagnostics.
 - If decals rotate unexpectedly or get clipped on third-person suit seams, confirm the installed package is 0.5.14 or newer and check `DecalSurfacePreviewUpdated`, `DecalSurfaceStampCommitted`, or `DecalSurfaceStampSkipped` diagnostics for projected written/skipped pixels.
 - If third-person decals show small suit-background cracks through the decal, confirm the installed package is 0.5.15 or newer and check the same decal surface diagnostics for sample, hit, rasterized-cell, seam-skip, off-suit, and written-pixel counts. High seam-skip counts mean DrawableSuits is intentionally avoiding UV island bleeding.
+- If Paint or Erase strokes cut off on third-person suit seams, confirm the installed package is 0.5.22 or newer and check `BrushSurfaceStrokeApplied`, `BrushSurfaceStrokeSkipped`, and `BrushSurfaceProjectionWarning` diagnostics for sample, hit, rasterized-cell, seam-skip, off-suit, and written-pixel counts. High seam-skip counts mean DrawableSuits is intentionally avoiding UV island bleeding.
 - If the cursor is missing, confirm the installed package is 0.5.21 or newer and check `CanvasCursorBuilt`, `CanvasCursorUpdated`, or `CanvasCursorHidden` diagnostics. The editor now draws the cursor directly inside the same UGUI canvas as the visible editor controls.
 - If the cursor is still a filled square or colored world blob, confirm the installed package is 0.5.21 or newer and check `CanvasCursorUpdated` diagnostics. Paint and Erase should use `mode=BrushRing`; Decal, Text, Eyedropper, UI hover, and invalid targets should use `mode=Dot`.
 - If the Paint or Erase ring size looks wrong, check `CanvasCursorUpdated` for `target=WorldThirdPerson` or `target=TextureFallback`, the computed diameter, hit triangle, UV, canvas-local position, and any fallback reason.
@@ -194,7 +196,7 @@ Troubleshooting:
 
 ## Known Limits
 
-- Third-person painting uses the suit mesh UVs from `RaycastHit.textureCoord`; unusual modded suit UV layouts may still make strokes appear somewhere unexpected.
+- Third-person Paint, Erase, Decal, and Text project onto the visible suit surface before resolving to texture UVs. Unusual modded suit UV layouts may still make edits appear somewhere unexpected, and seam guards may skip ambiguous pixels instead of bleeding across unrelated islands.
 - Mirror mode uses a mesh surface map, so unusual or asymmetric meshes may skip the mirrored edit when no reliable opposite surface can be found.
 - Text stamps use Unity's built-in Arial font only in this version and are baked as tinted transparent alpha masks. Third-person Text projection can still skip letters that physically land off the visible suit surface.
 - Cross-suit loading depends on UV compatibility.

@@ -189,6 +189,10 @@ internal sealed class SuitEditorController : MonoBehaviour
     private float _lastDecalPreviewLogTime;
     private string _lastDecalCoverageWarningKey = string.Empty;
     private float _lastDecalCoverageWarningTime;
+    private string _lastBrushSurfaceDiagnosticsKey = string.Empty;
+    private float _lastBrushSurfaceDiagnosticsTime;
+    private string _lastBrushSurfaceWarningKey = string.Empty;
+    private float _lastBrushSurfaceWarningTime;
     private string _lastTextPreviewLogKey = string.Empty;
     private float _lastTextPreviewLogTime;
     private string _lastTextProjectionFrameLogKey = string.Empty;
@@ -400,6 +404,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         internal Vector2 StampUv;
         internal Vector2 SurfaceUv;
         internal Vector2 Pixel;
+        internal float Alpha;
     }
 
     private sealed class MirrorSurfaceMap
@@ -6322,7 +6327,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             _strokeActive = true;
         }
 
-        PaintAtCursor(texture, uv, mirrorTarget);
+        PaintWorldSurfaceBrush(texture, hit, mirrorTarget);
     }
 
     private void HandleEyedropperInput(Texture2D texture, bool targetAvailable, Vector2 uv, string mode)
@@ -6606,6 +6611,40 @@ internal sealed class SuitEditorController : MonoBehaviour
         _lastPaintDiagnosticsKey = key;
         DrawableSuitsDiagnostics.Info($"PaintApplied: {key}; texture={texture.name} {texture.width}x{texture.height}; uv={uv}; pointerSource={_pointerSource}");
     }
+
+    private void LogBrushSurfaceStrokeApplied(Texture2D texture, RaycastHit hit, MirrorPaintTarget mirrorTarget, TextSurfaceStampStats primaryStats, TextSurfaceStampStats mirrorStats, float primaryRadius, float mirrorRadius, string fallbackReason)
+    {
+        if (texture == null)
+        {
+            return;
+        }
+
+        var pixel = TexturePixel(texture, hit.textureCoord);
+        var key = $"applied|tool={_tool}|pixel={pixel.x},{pixel.y}|mirror={DescribeMirrorTarget(texture, mirrorTarget)}|brush={Mathf.RoundToInt(_brushSize)}|opacity={_brushOpacity:0.##}|primaryWritten={primaryStats.WrittenPixels}|mirrorWritten={mirrorStats.WrittenPixels}|primaryCells={primaryStats.RasterizedCells}|mirrorCells={mirrorStats.RasterizedCells}|primarySeams={primaryStats.SeamSkippedCells}|mirrorSeams={mirrorStats.SeamSkippedCells}|radius={primaryRadius:0.####}";
+        if (Time.unscaledTime - _lastBrushSurfaceDiagnosticsTime < 0.5f && string.Equals(key, _lastBrushSurfaceDiagnosticsKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastBrushSurfaceDiagnosticsTime = Time.unscaledTime;
+        _lastBrushSurfaceDiagnosticsKey = key;
+        DrawableSuitsDiagnostics.Info($"BrushSurfaceStrokeApplied: {key}; mode=WorldThirdPerson; pointerSource={_pointerSource}; uv={hit.textureCoord}; hitPoint={hit.point}; hitNormal={hit.normal}; primaryRadius={primaryRadius:0.####}; mirrorRadius={mirrorRadius:0.####}; primarySamples={primaryStats.ProjectionSamples}; primaryHits={primaryStats.SurfaceHits}; primaryAlpha={primaryStats.AlphaPixels}; primarySkipped={primaryStats.SkippedPixels}; primaryOffSuit={primaryStats.OffSuitSamples}; primaryWorldSize={primaryStats.WorldWidth:0.###}x{primaryStats.WorldHeight:0.###}; mirrorSamples={mirrorStats.ProjectionSamples}; mirrorHits={mirrorStats.SurfaceHits}; mirrorAlpha={mirrorStats.AlphaPixels}; mirrorSkipped={mirrorStats.SkippedPixels}; mirrorOffSuit={mirrorStats.OffSuitSamples}; mirrorWorldSize={mirrorStats.WorldWidth:0.###}x{mirrorStats.WorldHeight:0.###}; fallback={fallbackReason}; cursor={_cursor}");
+    }
+
+    private void LogBrushSurfaceStrokeSkipped(string reason, Texture2D texture, RaycastHit hit, MirrorPaintTarget mirrorTarget, TextSurfaceStampStats primaryStats, TextSurfaceStampStats mirrorStats, float primaryRadius, float mirrorRadius, string fallbackReason)
+    {
+        var pixel = texture != null ? TexturePixel(texture, hit.textureCoord) : new Vector2Int(-1, -1);
+        var key = $"skipped|reason={reason}|tool={_tool}|pixel={pixel.x},{pixel.y}|mirror={DescribeMirrorTarget(texture, mirrorTarget)}|brush={Mathf.RoundToInt(_brushSize)}|primaryWritten={primaryStats.WrittenPixels}|mirrorWritten={mirrorStats.WrittenPixels}|primaryCells={primaryStats.RasterizedCells}|mirrorCells={mirrorStats.RasterizedCells}";
+        if (Time.unscaledTime - _lastBrushSurfaceDiagnosticsTime < 0.75f && string.Equals(key, _lastBrushSurfaceDiagnosticsKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastBrushSurfaceDiagnosticsTime = Time.unscaledTime;
+        _lastBrushSurfaceDiagnosticsKey = key;
+        DrawableSuitsDiagnostics.Info($"BrushSurfaceStrokeSkipped: {key}; mode=WorldThirdPerson; pointerSource={_pointerSource}; uv={hit.textureCoord}; hitPoint={hit.point}; hitNormal={hit.normal}; primaryRadius={primaryRadius:0.####}; mirrorRadius={mirrorRadius:0.####}; primarySamples={primaryStats.ProjectionSamples}; primaryHits={primaryStats.SurfaceHits}; primarySkipped={primaryStats.SkippedPixels}; primaryOffSuit={primaryStats.OffSuitSamples}; primarySeams={primaryStats.SeamSkippedCells}; mirrorSamples={mirrorStats.ProjectionSamples}; mirrorHits={mirrorStats.SurfaceHits}; mirrorSkipped={mirrorStats.SkippedPixels}; mirrorOffSuit={mirrorStats.OffSuitSamples}; mirrorSeams={mirrorStats.SeamSkippedCells}; fallback={fallbackReason}; cursor={_cursor}");
+    }
+
     private bool IsCursorOverEditorPanel()
     {
         if (_designCodePanelObject != null
@@ -6730,6 +6769,471 @@ internal sealed class SuitEditorController : MonoBehaviour
         LogPaintApplied(texture, uv, mirrorTarget);
         UpdateBrushIndicator();
         return true;
+    }
+
+    private static string CombineReasons(params string[] reasons)
+    {
+        if (reasons == null || reasons.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        var combined = string.Empty;
+        for (var i = 0; i < reasons.Length; i++)
+        {
+            var reason = reasons[i];
+            if (string.IsNullOrWhiteSpace(reason))
+            {
+                continue;
+            }
+
+            combined = string.IsNullOrWhiteSpace(combined)
+                ? reason
+                : $"{combined}; {reason}";
+        }
+
+        return combined;
+    }
+
+    private bool PaintWorldSurfaceBrush(Texture2D texture, RaycastHit hit, MirrorPaintTarget mirrorTarget)
+    {
+        if (texture == null)
+        {
+            RefreshEditorReadiness("world brush preflight failed");
+            UpdateUiState();
+            return false;
+        }
+
+        if (_tool != EditorTool.Paint && _tool != EditorTool.Erase)
+        {
+            return PaintAtCursor(texture, hit.textureCoord, mirrorTarget);
+        }
+
+        if (_tool == EditorTool.Erase)
+        {
+            var state = DrawableSuitsPlugin.Registry.GetOrCreateState(_selectedSuitId);
+            if (state?.BaseTexture == null)
+            {
+                LogBrushSurfaceStrokeSkipped("base texture missing", texture, hit, mirrorTarget, default, default, 0f, 0f, "base texture missing");
+                return false;
+            }
+        }
+
+        var radiusFallback = string.Empty;
+        if (!TryComputeWorldBrushRadius(hit, texture, out var worldRadius, out radiusFallback))
+        {
+            worldRadius = EstimateWorldBrushRadius(texture);
+        }
+
+        var applyMirror = ShouldApplyMirror(texture, hit.textureCoord, mirrorTarget);
+        var touchedPixels = applyMirror ? new HashSet<int>() : null;
+        var changed = CompositeBrushSurfaceStroke(texture, hit.point, hit.normal, worldRadius, false, touchedPixels, out var primaryStats, out var primaryReason);
+        TextSurfaceStampStats mirrorStats = default;
+        var mirrorRadius = worldRadius;
+        var mirrorReason = string.Empty;
+        if (applyMirror && TryGetMirrorWorldPlacement(mirrorTarget, out var mirrorPoint, out var mirrorNormal))
+        {
+            changed |= CompositeBrushSurfaceStroke(texture, mirrorPoint, mirrorNormal, mirrorRadius, true, touchedPixels, out mirrorStats, out mirrorReason);
+        }
+
+        var fallbackReason = CombineReasons(radiusFallback, primaryReason, mirrorReason);
+        if (!changed)
+        {
+            LogBrushSurfaceStrokeSkipped("surface projection wrote no pixels", texture, hit, mirrorTarget, primaryStats, mirrorStats, worldRadius, mirrorRadius, fallbackReason);
+            return false;
+        }
+
+        texture.Apply(false, false);
+        InvalidateDecalPreview("texture changed by surface brush stroke");
+        if (_previewMaterial != null)
+        {
+            _previewMaterial.mainTexture = texture;
+        }
+        DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, false);
+        if (_usingTexturePreview)
+        {
+            UseTexturePreview("PaintWorldSurfaceBrush", false);
+        }
+
+        if (_mirrorEnabled && !mirrorTarget.Available)
+        {
+            SetStatus("Mirror target not found; applied primary only.", false);
+        }
+
+        LogBrushSurfaceStrokeApplied(texture, hit, mirrorTarget, primaryStats, mirrorStats, worldRadius, mirrorRadius, fallbackReason);
+        LogPaintApplied(texture, hit.textureCoord, mirrorTarget);
+        UpdateBrushIndicator();
+        return true;
+    }
+
+    private bool TryComputeWorldBrushRadius(RaycastHit hit, Texture2D texture, out float radius, out string fallbackReason)
+    {
+        radius = 0f;
+        fallbackReason = string.Empty;
+        if (_worldPaintProxyObject == null || _worldPaintMesh == null || texture == null)
+        {
+            fallbackReason = "world brush dependencies missing";
+            return false;
+        }
+
+        if (hit.triangleIndex < 0)
+        {
+            fallbackReason = $"invalid triangle {hit.triangleIndex}";
+            return false;
+        }
+
+        var triangles = _worldPaintMesh.triangles;
+        var vertices = _worldPaintMesh.vertices;
+        var uvs = _worldPaintMesh.uv;
+        var triangleOffset = hit.triangleIndex * 3;
+        if (triangles == null || vertices == null || uvs == null
+            || triangleOffset < 0 || triangleOffset + 2 >= triangles.Length)
+        {
+            fallbackReason = $"triangle array unavailable index={hit.triangleIndex}";
+            return false;
+        }
+
+        var i0 = triangles[triangleOffset];
+        var i1 = triangles[triangleOffset + 1];
+        var i2 = triangles[triangleOffset + 2];
+        if (i0 < 0 || i1 < 0 || i2 < 0
+            || i0 >= vertices.Length || i1 >= vertices.Length || i2 >= vertices.Length
+            || i0 >= uvs.Length || i1 >= uvs.Length || i2 >= uvs.Length)
+        {
+            fallbackReason = $"triangle vertex out of range index={hit.triangleIndex}";
+            return false;
+        }
+
+        var edge1 = vertices[i1] - vertices[i0];
+        var edge2 = vertices[i2] - vertices[i0];
+        var duv1 = uvs[i1] - uvs[i0];
+        var duv2 = uvs[i2] - uvs[i0];
+        var determinant = duv1.x * duv2.y - duv1.y * duv2.x;
+        if (Mathf.Abs(determinant) < 0.000001f)
+        {
+            fallbackReason = $"degenerate uv triangle {hit.triangleIndex}";
+            return false;
+        }
+
+        var inverse = 1f / determinant;
+        var dPdu = (edge1 * duv2.y - edge2 * duv1.y) * inverse;
+        var dPdv = (edge2 * duv1.x - edge1 * duv2.x) * inverse;
+        var du = _brushSize / Mathf.Max(1f, texture.width);
+        var dv = _brushSize / Mathf.Max(1f, texture.height);
+        var transform = _worldPaintProxyObject.transform;
+        var radiusU = transform.TransformVector(dPdu * du).magnitude;
+        var radiusV = transform.TransformVector(dPdv * dv).magnitude;
+        var computedRadius = Mathf.Max(radiusU, radiusV);
+        if (float.IsNaN(computedRadius) || float.IsInfinity(computedRadius) || computedRadius <= 0.0001f)
+        {
+            fallbackReason = $"invalid world radius {computedRadius:0.#####}";
+            return false;
+        }
+
+        var boundsHeight = _worldAvatarRenderer != null ? _worldAvatarRenderer.bounds.size.y : 1.8f;
+        if (boundsHeight <= 0.01f)
+        {
+            boundsHeight = 1.8f;
+        }
+
+        radius = Mathf.Clamp(computedRadius, boundsHeight * 0.002f, boundsHeight * 0.35f);
+        return true;
+    }
+
+    private float EstimateWorldBrushRadius(Texture2D texture)
+    {
+        var boundsHeight = _worldAvatarRenderer != null ? _worldAvatarRenderer.bounds.size.y : 1.8f;
+        if (boundsHeight <= 0.01f)
+        {
+            boundsHeight = 1.8f;
+        }
+
+        var textureScale = texture != null ? Mathf.Max(1f, Mathf.Max(texture.width, texture.height)) : 1024f;
+        var radius = (_brushSize / textureScale) * boundsHeight;
+        return Mathf.Clamp(radius, boundsHeight * 0.002f, boundsHeight * 0.28f);
+    }
+
+    private bool TryBuildBrushProjectionFrame(Vector3 center, Vector3 normal, float worldRadius, out TextProjectionFrame frame)
+    {
+        frame = default;
+        if (_worldEditorCamera == null || worldRadius <= 0.0001f)
+        {
+            return false;
+        }
+
+        if (normal.sqrMagnitude < 0.0001f)
+        {
+            normal = -_worldEditorCamera.transform.forward;
+        }
+        normal.Normalize();
+
+        var cameraRight = _worldEditorCamera.transform.right;
+        var cameraUp = _worldEditorCamera.transform.up;
+        var right = Vector3.ProjectOnPlane(cameraRight, normal);
+        if (right.sqrMagnitude < 0.0001f)
+        {
+            right = Vector3.Cross(Vector3.up, normal);
+            if (right.sqrMagnitude < 0.0001f)
+            {
+                right = Vector3.Cross(Vector3.forward, normal);
+            }
+        }
+        right.Normalize();
+
+        var up = Vector3.ProjectOnPlane(cameraUp, normal);
+        up -= right * Vector3.Dot(up, right);
+        if (up.sqrMagnitude < 0.0001f)
+        {
+            up = Vector3.Cross(right, normal);
+            if (up.sqrMagnitude < 0.0001f)
+            {
+                up = Vector3.Cross(normal, right);
+            }
+        }
+        if (Vector3.Dot(up, cameraUp) < 0f)
+        {
+            up = -up;
+        }
+        up.Normalize();
+
+        if (Vector3.Dot(right, cameraRight) < 0f)
+        {
+            right = -right;
+        }
+
+        frame = new TextProjectionFrame
+        {
+            Center = center,
+            Normal = normal,
+            Right = right,
+            Up = up,
+            WorldWidth = worldRadius * 2f,
+            WorldHeight = worldRadius * 2f
+        };
+        return true;
+    }
+
+    private bool CompositeBrushSurfaceStroke(Texture2D target, Vector3 center, Vector3 normal, float worldRadius, bool mirrored, HashSet<int> touchedPixels, out TextSurfaceStampStats stats, out string fallbackReason)
+    {
+        stats = default;
+        stats.Mirrored = mirrored;
+        stats.WorldWidth = worldRadius * 2f;
+        stats.WorldHeight = worldRadius * 2f;
+        fallbackReason = string.Empty;
+
+        if (target == null || _worldPaintCollider == null || _worldPaintProxyObject == null)
+        {
+            fallbackReason = "surface brush dependencies missing";
+            return false;
+        }
+
+        var baseTexture = DrawableSuitsPlugin.Registry.GetOrCreateState(_selectedSuitId)?.BaseTexture;
+        if (_tool == EditorTool.Erase && baseTexture == null)
+        {
+            fallbackReason = "base texture missing";
+            return false;
+        }
+
+        if (!TryBuildBrushProjectionFrame(center, normal, worldRadius, out var frame))
+        {
+            fallbackReason = "brush projection frame unavailable";
+            return false;
+        }
+
+        stats.WorldWidth = frame.WorldWidth;
+        stats.WorldHeight = frame.WorldHeight;
+        var sampleDiameter = Mathf.Clamp(Mathf.CeilToInt(_brushSize * 1.25f), 10, 96);
+        var gridWidth = sampleDiameter + 1;
+        var gridHeight = sampleDiameter + 1;
+        var grid = new SurfaceStampGridSample[gridWidth * gridHeight];
+        var rayOffset = Mathf.Max(0.08f, worldRadius * 3f);
+        var rayDistance = rayOffset * 2.5f;
+        var projectedSamples = new Dictionary<int, SurfaceStampSample>();
+        var seamThreshold = GetBrushProjectionSeamThreshold(target);
+        var opacity01 = Mathf.Clamp01(_brushOpacity);
+
+        for (var gy = 0; gy < gridHeight; gy++)
+        {
+            var v = gy / Mathf.Max(1f, sampleDiameter);
+            var localY = (v - 0.5f) * frame.WorldHeight;
+            for (var gx = 0; gx < gridWidth; gx++)
+            {
+                var u = gx / Mathf.Max(1f, sampleDiameter);
+                var localX = (u - 0.5f) * frame.WorldWidth;
+                var normalizedDistance = Mathf.Sqrt((localX * localX) + (localY * localY)) / Mathf.Max(0.0001f, worldRadius);
+                if (normalizedDistance > 1f)
+                {
+                    continue;
+                }
+
+                stats.ProjectionSamples++;
+                var planePoint = frame.Center + (frame.Right * localX) + (frame.Up * localY);
+                if (!TryRaycastSurfaceStampPoint(planePoint, frame.Normal, rayOffset, rayDistance, out var surfaceHit))
+                {
+                    stats.OffSuitSamples++;
+                    stats.SkippedPixels++;
+                    continue;
+                }
+
+                var pixel = TexturePixel(target, surfaceHit.textureCoord);
+                if (pixel.x < 0 || pixel.y < 0 || pixel.x >= target.width || pixel.y >= target.height)
+                {
+                    stats.OffSuitSamples++;
+                    stats.SkippedPixels++;
+                    continue;
+                }
+
+                var alpha = _tool == EditorTool.Erase
+                    ? opacity01
+                    : opacity01 * Mathf.Clamp01(1f - normalizedDistance + 0.25f);
+                var sample = new SurfaceStampGridSample
+                {
+                    Valid = true,
+                    StampUv = new Vector2(u, v),
+                    SurfaceUv = surfaceHit.textureCoord,
+                    Pixel = new Vector2(
+                        surfaceHit.textureCoord.x * (target.width - 1),
+                        surfaceHit.textureCoord.y * (target.height - 1)),
+                    Alpha = alpha
+                };
+                grid[GridIndex(gx, gy, gridWidth)] = sample;
+                stats.SurfaceHits++;
+                AddProjectedBrushPixel(target, baseTexture, sample.Pixel, sample.Alpha, projectedSamples, ref stats);
+            }
+        }
+
+        for (var y = 0; y < sampleDiameter; y++)
+        {
+            for (var x = 0; x < sampleDiameter; x++)
+            {
+                var s00 = grid[GridIndex(x, y, gridWidth)];
+                var s10 = grid[GridIndex(x + 1, y, gridWidth)];
+                var s01 = grid[GridIndex(x, y + 1, gridWidth)];
+                var s11 = grid[GridIndex(x + 1, y + 1, gridWidth)];
+                if (!s00.Valid || !s10.Valid || !s01.Valid || !s11.Valid)
+                {
+                    continue;
+                }
+
+                if (CellCrossesProjectionSeam(s00, s10, s01, s11, seamThreshold))
+                {
+                    stats.SeamSkippedCells++;
+                    continue;
+                }
+
+                stats.RasterizedCells++;
+                RasterizeProjectedBrushTriangle(target, baseTexture, s00, s10, s01, projectedSamples, ref stats);
+                RasterizeProjectedBrushTriangle(target, baseTexture, s10, s11, s01, projectedSamples, ref stats);
+            }
+        }
+
+        foreach (var pair in projectedSamples)
+        {
+            var x = pair.Key % target.width;
+            var y = pair.Key / target.width;
+            if (!TryMarkTouchedPixel(target, x, y, touchedPixels))
+            {
+                continue;
+            }
+
+            var existing = target.GetPixel(x, y);
+            var targetColor = new Color(pair.Value.Color.r, pair.Value.Color.g, pair.Value.Color.b, existing.a);
+            target.SetPixel(x, y, Color.Lerp(existing, targetColor, pair.Value.Alpha));
+            stats.WrittenPixels++;
+        }
+
+        LogBrushProjectionCoverageWarning(stats, mirrored, sampleDiameter, seamThreshold);
+        return stats.WrittenPixels > 0;
+    }
+
+    private static float GetBrushProjectionSeamThreshold(Texture2D target)
+    {
+        if (target == null)
+        {
+            return 20f;
+        }
+
+        return Mathf.Clamp(Mathf.Max(target.width, target.height) / 36f, 16f, 56f);
+    }
+
+    private void RasterizeProjectedBrushTriangle(Texture2D target, Texture2D baseTexture, SurfaceStampGridSample a, SurfaceStampGridSample b, SurfaceStampGridSample c, Dictionary<int, SurfaceStampSample> projectedSamples, ref TextSurfaceStampStats stats)
+    {
+        var minX = Mathf.Max(0, Mathf.FloorToInt(Mathf.Min(a.Pixel.x, Mathf.Min(b.Pixel.x, c.Pixel.x))));
+        var maxX = Mathf.Min(target.width - 1, Mathf.CeilToInt(Mathf.Max(a.Pixel.x, Mathf.Max(b.Pixel.x, c.Pixel.x))));
+        var minY = Mathf.Max(0, Mathf.FloorToInt(Mathf.Min(a.Pixel.y, Mathf.Min(b.Pixel.y, c.Pixel.y))));
+        var maxY = Mathf.Min(target.height - 1, Mathf.CeilToInt(Mathf.Max(a.Pixel.y, Mathf.Max(b.Pixel.y, c.Pixel.y))));
+        if (maxX < minX || maxY < minY)
+        {
+            return;
+        }
+
+        for (var y = minY; y <= maxY; y++)
+        {
+            for (var x = minX; x <= maxX; x++)
+            {
+                var point = new Vector2(x + 0.5f, y + 0.5f);
+                if (!TryBarycentric2D(point, a.Pixel, b.Pixel, c.Pixel, out var barycentric, 0.001f))
+                {
+                    continue;
+                }
+
+                var alpha = (a.Alpha * barycentric.x) + (b.Alpha * barycentric.y) + (c.Alpha * barycentric.z);
+                AddProjectedBrushPixel(target, baseTexture, new Vector2(x, y), alpha, projectedSamples, ref stats);
+            }
+        }
+    }
+
+    private void AddProjectedBrushPixel(Texture2D target, Texture2D baseTexture, Vector2 pixel, float alpha, Dictionary<int, SurfaceStampSample> projectedSamples, ref TextSurfaceStampStats stats)
+    {
+        if (target == null || projectedSamples == null || alpha <= 0.001f)
+        {
+            return;
+        }
+
+        var x = Mathf.Clamp(Mathf.RoundToInt(pixel.x), 0, target.width - 1);
+        var y = Mathf.Clamp(Mathf.RoundToInt(pixel.y), 0, target.height - 1);
+        var brushTarget = _tool == EditorTool.Erase && baseTexture != null
+            ? baseTexture.GetPixel(x, y)
+            : _brushColor;
+        var index = (y * target.width) + x;
+        var effectiveAlpha = Mathf.Clamp01(alpha);
+        var projected = new SurfaceStampSample
+        {
+            Color = brushTarget,
+            Alpha = effectiveAlpha
+        };
+
+        stats.AlphaPixels++;
+        if (projectedSamples.TryGetValue(index, out var existingSample))
+        {
+            if (effectiveAlpha > existingSample.Alpha)
+            {
+                projectedSamples[index] = projected;
+            }
+        }
+        else
+        {
+            projectedSamples[index] = projected;
+        }
+    }
+
+    private void LogBrushProjectionCoverageWarning(TextSurfaceStampStats stats, bool mirrored, int sampleDiameter, float seamThreshold)
+    {
+        var totalCells = stats.RasterizedCells + stats.SeamSkippedCells;
+        if (stats.SeamSkippedCells < 6 || totalCells <= 0 || stats.SeamSkippedCells < totalCells * 0.12f)
+        {
+            return;
+        }
+
+        var key = $"tool={_tool}|mirrored={mirrored}|sample={sampleDiameter}|seam={stats.SeamSkippedCells}|cells={stats.RasterizedCells}|threshold={Mathf.RoundToInt(seamThreshold)}|brush={Mathf.RoundToInt(_brushSize)}";
+        if (Time.unscaledTime - _lastBrushSurfaceWarningTime < 2f && string.Equals(key, _lastBrushSurfaceWarningKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastBrushSurfaceWarningTime = Time.unscaledTime;
+        _lastBrushSurfaceWarningKey = key;
+        DrawableSuitsDiagnostics.Warn($"BrushSurfaceProjectionWarning: {key}; projectionSamples={stats.ProjectionSamples}; surfaceHits={stats.SurfaceHits}; offSuit={stats.OffSuitSamples}; written={stats.WrittenPixels}; skipped={stats.SkippedPixels}; pointerSource={_pointerSource}");
     }
 
     private bool PaintCircle(Texture2D texture, Vector2 uv, Color color, float radius, float opacity, HashSet<int> touchedPixels = null)

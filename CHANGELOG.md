@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.22
+
+- Changed third-person Paint and Erase to project brush strokes onto the visible suit surface before resolving to texture UVs.
+- Added filled surface-brush coverage with seam guards so strokes no longer cut off at normal UV island boundaries while avoiding unrelated-island bleeding.
+- Kept UV fallback Paint and Erase as direct UV-layout editing.
+- Added `BrushSurfaceStrokeApplied`, `BrushSurfaceStrokeSkipped`, and `BrushSurfaceProjectionWarning` diagnostics.
+
 ## 0.5.21
 
 - Replaced the native software cursor renderer with a direct editor-canvas cursor drawn through the same UGUI canvas as the visible editor controls.
