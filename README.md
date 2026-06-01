@@ -5,8 +5,9 @@ DrawableSuits is a Lethal Company v81 BepInEx mod that lets players draw on suit
 ## Features
 
 - Default third-person paint editor: opening DrawableSuits switches to an editor camera around the local player so you can paint directly on the visible suit.
-- Compact side overlay with Paint, Erase, Decal, Text, Eyedropper, a UI-only Mirror toggle, brush sliders, a hue/SV color picker, decal/text controls, design name, visible decal rows, visible saved-design rows, share-code import/export, Undo, Redo, Reset, Apply, Save, Load, and Close.
-- Mirror painting duplicates Paint, Erase, Decal, and Text edits onto the opposite suit surface using the editor's baked avatar mesh, without adding keyboard or controller shortcuts.
+- Compact side overlay with Paint, Erase, Fill, Decal, Text, Eyedropper, a UI-only Mirror toggle, brush/fill sliders, a hue/SV color picker, decal/text controls, design name, visible decal rows, visible saved-design rows, share-code import/export, Undo, Redo, Reset, Apply, Save, Load, and Close.
+- Fill Bucket flood-fills contiguous matching texture regions under the cursor using the current brush color, opacity, and Fill Tolerance slider.
+- Mirror painting duplicates Paint, Erase, Fill, Decal, and Text edits onto the opposite suit surface using the editor's baked avatar mesh, without adding keyboard or controller shortcuts.
 - Decal placement preview: Decal mode shows a translucent live preview before stamping, then places one projected decal per click or right-trigger press in third-person mode.
 - Text stamping: Text mode previews typed single-line text on the suit as a transparent alpha-mask stamp, then bakes it into the texture once per click or right-trigger press. In third-person mode, text is projected onto the visible suit surface instead of stamped as a flat UV rectangle.
 - Pause-menu entry point: use the `DrawableSuits` button below Resume.
@@ -34,10 +35,11 @@ Keyboard and mouse:
 - Pause menu `DrawableSuits`: primary open path.
 - `F8`: toggle editor.
 - `F10`: emergency open.
-- Left mouse: paint/erase continuously; in Decal or Text mode, stamp one preview at the cursor location.
+- Left mouse: paint/erase continuously; in Fill mode, fill once per press; in Decal or Text mode, stamp one preview at the cursor location.
+- Fill: click the `Fill` UI button, adjust Fill Tolerance if needed, then left-click a contiguous color region on the suit.
 - Text: click the `Text` UI button, type up to 64 characters, then left-click the suit to stamp it. Text uses the current brush color and opacity.
 - Eyedropper: click the `Eyedropper` UI button, then left-click the suit to sample that texture color. It returns to the previous tool after one successful sample.
-- Mirror: click the `Mirror` UI button to duplicate paint, erase, decal stamps, and text stamps onto the opposite suit surface.
+- Mirror: click the `Mirror` UI button to duplicate paint, erase, fill, decal stamps, and text stamps onto the opposite suit surface.
 - Export Code / Import Code: use the design code panel to copy the current editable texture as a compact `DSUIT2:` code or paste a shared `DSUIT2:` or legacy `DSUIT1:` code into the current suit.
 - Right mouse: orbit the third-person editor camera.
 - Mouse wheel: zoom the third-person camera.
@@ -50,13 +52,14 @@ Controller:
 - Left stick: move the editor cursor.
 - `A`: click the button, field, slider, or color picker region directly under the cursor.
 - Text: move the virtual cursor over the `Text` UI button and press `A`, type text with the UI field, then aim at the suit and press right trigger once to stamp it.
+- Fill: move the virtual cursor over the `Fill` UI button and press `A`, adjust Fill Tolerance if needed, then aim at a matching color region and press right trigger once.
 - Eyedropper: move the virtual cursor over the `Eyedropper` UI button, press `A`, then aim at the suit and press right trigger once to sample a color. It returns to the previous tool after one successful sample.
 - Mirror: move the virtual cursor over the `Mirror` UI button and press `A`; there is no controller shortcut for this modifier.
 - Export Code / Import Code: use `A` on the design code UI buttons. There are no shortcuts for import/export.
-- Right trigger: paint/erase continuously; in Decal or Text mode, stamp one preview at the cursor location.
+- Right trigger: paint/erase continuously; in Fill mode, fill once per press; in Decal or Text mode, stamp one preview at the cursor location.
 - Right stick or bumpers: orbit the third-person editor camera.
 - D-pad up/down: zoom the third-person editor camera.
-- `Y`: cycle Paint/Erase/Decal. Decal is skipped until a decal is selected.
+- `Y`: cycle Paint/Erase/Decal. Fill, Text, Eyedropper, and Mirror are UI-only and are not part of this shortcut.
 - `X`: undo.
 - Start: save.
 
@@ -113,7 +116,7 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.22 behavior:
+Expected 0.5.23 behavior:
 
 - Opening the editor shows a compact side overlay and a third-person camera view of the local player.
 - The diagnostics text should show `Preview mode: WorldThirdPerson` when the default path succeeds.
@@ -141,9 +144,12 @@ Expected 0.5.22 behavior:
 - Third-person Text should read left-to-right from the editor camera. Mirrored Text should only appear when the UI-only `Mirror` button is enabled.
 - UV fallback keeps direct flat UV Text stamping for texture-layout editing.
 - Text is baked into the suit texture after stamping. It is not an editable layer after placement.
+- The `Fill` button is a UI-only tool. It flood-fills the contiguous same-color region under the cursor using the current brush color and opacity.
+- Fill is single-shot: holding left mouse or controller RT fills once until the input is released and pressed again.
+- The Fill Tolerance slider appears when Fill is active. Lower tolerance fills tighter matching regions; higher tolerance accepts more color variation.
 - `Export Code` copies a compact lossless `DSUIT2:` code to the clipboard and fills the design code field. `Import Code` validates a pasted `DSUIT2:` or legacy `DSUIT1:` code and loads it into the current suit without auto-saving, broadcasting, or resetting the third-person camera.
 - UV fallback mode shows a non-interactive rotated decal preview over the texture panel.
-- The `Mirror` button is a UI-only modifier. When it is orange, paint, erase, decal stamps, and text stamps use a surface-map mirror target on the opposite side of the baked suit mesh in one undo action.
+- The `Mirror` button is a UI-only modifier. When it is orange, paint, erase, fill, decal stamps, and text stamps use a surface-map mirror target on the opposite side of the baked suit mesh in one undo action.
 - Mirrored decal previews show both the primary and mirrored decal. The mirrored decal is horizontally flipped and uses inverse rotation.
 - UV fallback also uses the mesh mirror map when the clicked UV maps back to a suit triangle. If no mirror target is available, DrawableSuits applies the primary edit only and shows a short status.
 - The `Eyedropper` button is a UI-only one-shot tool. It samples the editable suit texture at the cursor hit point, updates the swatch, color picker, hex field, and brush color, then returns to the previous Paint, Erase, or Decal tool.
@@ -180,6 +186,7 @@ Troubleshooting:
 - If decals rotate unexpectedly or get clipped on third-person suit seams, confirm the installed package is 0.5.14 or newer and check `DecalSurfacePreviewUpdated`, `DecalSurfaceStampCommitted`, or `DecalSurfaceStampSkipped` diagnostics for projected written/skipped pixels.
 - If third-person decals show small suit-background cracks through the decal, confirm the installed package is 0.5.15 or newer and check the same decal surface diagnostics for sample, hit, rasterized-cell, seam-skip, off-suit, and written-pixel counts. High seam-skip counts mean DrawableSuits is intentionally avoiding UV island bleeding.
 - If Paint or Erase strokes cut off on third-person suit seams, confirm the installed package is 0.5.22 or newer and check `BrushSurfaceStrokeApplied`, `BrushSurfaceStrokeSkipped`, and `BrushSurfaceProjectionWarning` diagnostics for sample, hit, rasterized-cell, seam-skip, off-suit, and written-pixel counts. High seam-skip counts mean DrawableSuits is intentionally avoiding UV island bleeding.
+- If Fill affects too much or too little of the suit, adjust Fill Tolerance and check `FillBucketApplied` diagnostics for seed color, tolerance, checked pixel count, matched pixels, written pixels, and mirror target. Fill is texture-contiguous, so separated UV islands may require separate fills.
 - If the cursor is missing, confirm the installed package is 0.5.21 or newer and check `CanvasCursorBuilt`, `CanvasCursorUpdated`, or `CanvasCursorHidden` diagnostics. The editor now draws the cursor directly inside the same UGUI canvas as the visible editor controls.
 - If the cursor is still a filled square or colored world blob, confirm the installed package is 0.5.21 or newer and check `CanvasCursorUpdated` diagnostics. Paint and Erase should use `mode=BrushRing`; Decal, Text, Eyedropper, UI hover, and invalid targets should use `mode=Dot`.
 - If the Paint or Erase ring size looks wrong, check `CanvasCursorUpdated` for `target=WorldThirdPerson` or `target=TextureFallback`, the computed diameter, hit triangle, UV, canvas-local position, and any fallback reason.

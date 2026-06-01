@@ -28,6 +28,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         Paint,
         Erase,
+        FillBucket,
         Decal,
         Eyedropper,
         Text
@@ -60,6 +61,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Color _brushColor = Color.red;
     private float _brushSize = 16f;
     private float _brushOpacity = 1f;
+    private float _fillTolerance = 0.08f;
     private float _decalSize = 128f;
     private float _decalRotation;
     private string _textStampValue = "TEXT";
@@ -96,6 +98,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private string _lastMirrorDiagnosticsKey = string.Empty;
     private float _lastEyedropperDiagnosticsTime;
     private string _lastEyedropperDiagnosticsKey = string.Empty;
+    private float _lastFillBucketDiagnosticsTime;
+    private string _lastFillBucketDiagnosticsKey = string.Empty;
 
     private static readonly string[] GameplayInputActionNames =
     {
@@ -271,6 +275,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private InputField _textStampInput;
     private DrawableSliderControl _brushSizeSlider;
     private DrawableSliderControl _brushOpacitySlider;
+    private Text _fillToleranceLabel;
+    private DrawableSliderControl _fillToleranceSlider;
     private DrawableColorPickerControl _colorPicker;
     private InputField _colorHexInput;
     private DrawableSliderControl _decalSizeSlider;
@@ -278,6 +284,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Image _colorSwatch;
     private Button _paintButton;
     private Button _eraseButton;
+    private Button _fillButton;
     private Button _decalButton;
     private Button _eyedropperButton;
     private Button _textButton;
@@ -389,6 +396,17 @@ internal sealed class SuitEditorController : MonoBehaviour
         internal int OffSuitSamples;
         internal float WorldWidth;
         internal float WorldHeight;
+        internal bool Mirrored;
+    }
+
+    private struct FillBucketStats
+    {
+        internal int CheckedPixels;
+        internal int MatchedPixels;
+        internal int WrittenPixels;
+        internal int TouchedSkippedPixels;
+        internal Vector2Int SeedPixel;
+        internal Color32 SeedColor;
         internal bool Mirrored;
     }
 
@@ -1901,21 +1919,24 @@ internal sealed class SuitEditorController : MonoBehaviour
         CreateAnchoredButton(panel.transform, "Next", new Rect(leftX + 210f, 282f, 72f, 34f), () => SelectAdjacentSuit(1));
 
         CreateAnchoredText(panel.transform, "ToolHeader", "Tool", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 326f, leftW, 24f), Color.white);
-        _textButton = CreateAnchoredButton(panel.transform, "Text", new Rect(leftX + 98f, 322f, 50f, 28f), () => SetTool(EditorTool.Text));
-        _eyedropperButton = CreateAnchoredButton(panel.transform, "Eyedropper", new Rect(leftX + 154f, 322f, 120f, 28f), () => SetTool(EditorTool.Eyedropper));
-        _paintButton = CreateAnchoredButton(panel.transform, "Paint", new Rect(leftX, 354f, 64f, 34f), () => SetTool(EditorTool.Paint));
-        _eraseButton = CreateAnchoredButton(panel.transform, "Erase", new Rect(leftX + 70f, 354f, 64f, 34f), () => SetTool(EditorTool.Erase));
-        _decalButton = CreateAnchoredButton(panel.transform, "Decal", new Rect(leftX + 140f, 354f, 64f, 34f), () => SetTool(EditorTool.Decal));
-        _mirrorButton = CreateAnchoredButton(panel.transform, "Mirror", new Rect(leftX + 210f, 354f, 64f, 34f), ToggleMirror);
+        _paintButton = CreateAnchoredButton(panel.transform, "Paint", new Rect(leftX, 354f, 64f, 30f), () => SetTool(EditorTool.Paint));
+        _eraseButton = CreateAnchoredButton(panel.transform, "Erase", new Rect(leftX + 70f, 354f, 64f, 30f), () => SetTool(EditorTool.Erase));
+        _fillButton = CreateAnchoredButton(panel.transform, "Fill", new Rect(leftX + 140f, 354f, 64f, 30f), () => SetTool(EditorTool.FillBucket));
+        _mirrorButton = CreateAnchoredButton(panel.transform, "Mirror", new Rect(leftX + 210f, 354f, 64f, 30f), ToggleMirror);
+        _decalButton = CreateAnchoredButton(panel.transform, "Decal", new Rect(leftX, 390f, 64f, 30f), () => SetTool(EditorTool.Decal));
+        _textButton = CreateAnchoredButton(panel.transform, "Text", new Rect(leftX + 70f, 390f, 64f, 30f), () => SetTool(EditorTool.Text));
+        _eyedropperButton = CreateAnchoredButton(panel.transform, "Eyedropper", new Rect(leftX + 140f, 390f, 134f, 30f), () => SetTool(EditorTool.Eyedropper));
 
-        CreateAnchoredText(panel.transform, "BrushHeader", "Brush", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 406f, leftW, 24f), Color.white);
-        _brushSizeLabel = CreateAnchoredText(panel.transform, "BrushSizeLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 436f, 94f, 24f), Color.white);
-        _brushSizeSlider = CreateAnchoredSlider(panel.transform, "BrushSize", 1f, 96f, _brushSize, new Rect(leftX + 100f, 438f, 174f, 24f), value => _brushSize = value);
-        _brushOpacityLabel = CreateAnchoredText(panel.transform, "BrushOpacityLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 470f, 94f, 24f), Color.white);
-        _brushOpacitySlider = CreateAnchoredSlider(panel.transform, "BrushOpacity", 0.05f, 1f, _brushOpacity, new Rect(leftX + 100f, 472f, 174f, 24f), value => _brushOpacity = value);
+        CreateAnchoredText(panel.transform, "BrushHeader", "Brush", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 438f, leftW, 24f), Color.white);
+        _brushSizeLabel = CreateAnchoredText(panel.transform, "BrushSizeLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 468f, 94f, 24f), Color.white);
+        _brushSizeSlider = CreateAnchoredSlider(panel.transform, "BrushSize", 1f, 96f, _brushSize, new Rect(leftX + 100f, 470f, 174f, 24f), value => _brushSize = value);
+        _brushOpacityLabel = CreateAnchoredText(panel.transform, "BrushOpacityLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 502f, 94f, 24f), Color.white);
+        _brushOpacitySlider = CreateAnchoredSlider(panel.transform, "BrushOpacity", 0.05f, 1f, _brushOpacity, new Rect(leftX + 100f, 504f, 174f, 24f), value => _brushOpacity = value);
+        _fillToleranceLabel = CreateAnchoredText(panel.transform, "FillToleranceLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 536f, 104f, 24f), Color.white);
+        _fillToleranceSlider = CreateAnchoredSlider(panel.transform, "FillTolerance", 0f, 0.5f, _fillTolerance, new Rect(leftX + 110f, 538f, 164f, 24f), value => _fillTolerance = value);
 
-        CreateAnchoredText(panel.transform, "ColorHeader", "Color", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 510f, leftW, 24f), Color.white);
-        _colorPicker = CreateAnchoredColorPicker(panel.transform, new Rect(leftX, 534f, leftW, 104f), _brushColor, color =>
+        CreateAnchoredText(panel.transform, "ColorHeader", "Color", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 574f, leftW, 24f), Color.white);
+        _colorPicker = CreateAnchoredColorPicker(panel.transform, new Rect(leftX, 598f, leftW, 104f), _brushColor, color =>
         {
             _brushColor = color;
             UpdateColorUi();
@@ -3019,6 +3040,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         if (_brushSizeSlider != null) _brushSizeSlider.SetValue(_brushSize, false);
         if (_brushOpacitySlider != null) _brushOpacitySlider.SetValue(_brushOpacity, false);
+        if (_fillToleranceSlider != null) _fillToleranceSlider.SetValue(_fillTolerance, false);
         if (_colorPicker != null) _colorPicker.SetColor(_brushColor, false);
         if (_decalSizeSlider != null) _decalSizeSlider.SetValue(CurrentPlacementSize(), false);
         if (_decalRotationSlider != null) _decalRotationSlider.SetValue(CurrentPlacementRotation(), false);
@@ -3040,6 +3062,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         var hasEditableTexture = _selectedSuitId >= 0 && DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId) != null;
         SetInteractable(_paintButton, _canPaint);
         SetInteractable(_eraseButton, _canPaint);
+        SetInteractable(_fillButton, _canPaint && hasEditableTexture);
         SetInteractable(_decalButton, _canPaint);
         SetInteractable(_eyedropperButton, _canPaint && hasEditableTexture);
         SetInteractable(_textButton, _canPaint && hasEditableTexture);
@@ -3111,8 +3134,26 @@ internal sealed class SuitEditorController : MonoBehaviour
     }
     private void UpdateLabels()
     {
-        if (_brushSizeLabel != null) _brushSizeLabel.text = $"Size: {Mathf.RoundToInt(_brushSize)} px";
+        var fillActive = _tool == EditorTool.FillBucket;
+        if (_brushSizeLabel != null)
+        {
+            _brushSizeLabel.text = $"Size: {Mathf.RoundToInt(_brushSize)} px";
+            _brushSizeLabel.gameObject.SetActive(!fillActive);
+        }
+        if (_brushSizeSlider != null)
+        {
+            _brushSizeSlider.gameObject.SetActive(!fillActive);
+        }
         if (_brushOpacityLabel != null) _brushOpacityLabel.text = $"Opacity: {Mathf.RoundToInt(_brushOpacity * 100f)}%";
+        if (_fillToleranceLabel != null)
+        {
+            _fillToleranceLabel.text = $"Tolerance: {Mathf.RoundToInt(_fillTolerance * 100f)}%";
+            _fillToleranceLabel.gameObject.SetActive(fillActive);
+        }
+        if (_fillToleranceSlider != null)
+        {
+            _fillToleranceSlider.gameObject.SetActive(fillActive);
+        }
         if (_placementHeaderLabel != null) _placementHeaderLabel.text = _tool == EditorTool.Text ? "Text" : "Decal";
         if (_decalSizeLabel != null) _decalSizeLabel.text = _tool == EditorTool.Text ? $"Height: {Mathf.RoundToInt(_textSize)} px" : $"Size: {Mathf.RoundToInt(_decalSize)} px";
         if (_decalRotationLabel != null) _decalRotationLabel.text = $"Rotation: {Mathf.RoundToInt(CurrentPlacementRotation())} deg";
@@ -3222,6 +3263,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         SetToolButtonColor(_paintButton, _tool == EditorTool.Paint);
         SetToolButtonColor(_eraseButton, _tool == EditorTool.Erase);
+        SetToolButtonColor(_fillButton, _tool == EditorTool.FillBucket);
         SetToolButtonColor(_decalButton, _tool == EditorTool.Decal);
         SetToolButtonColor(_eyedropperButton, _tool == EditorTool.Eyedropper);
         SetToolButtonColor(_textButton, _tool == EditorTool.Text);
@@ -3283,15 +3325,20 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             SetStatus("Eyedropper active. Aim at the suit to sample a color.", false);
         }
+        if (tool == EditorTool.FillBucket)
+        {
+            SetStatus("Fill active. Click or RT a matching color region to fill.", false);
+        }
 
         UpdateToolButtons();
         UpdatePlacementControlsForTool();
+        UpdateLabels();
         UpdateBrushIndicator();
     }
 
     private static bool IsReturnableEyedropperTool(EditorTool tool)
     {
-        return tool == EditorTool.Paint || tool == EditorTool.Erase || tool == EditorTool.Decal || tool == EditorTool.Text;
+        return tool == EditorTool.Paint || tool == EditorTool.Erase || tool == EditorTool.FillBucket || tool == EditorTool.Decal || tool == EditorTool.Text;
     }
 
     private void UpdatePlacementControlsForTool()
@@ -6217,6 +6264,12 @@ internal sealed class SuitEditorController : MonoBehaviour
         var mirrorTarget = overPreview && texture != null ? ResolveUvMirrorTarget(texture, uv, false) : CreateMirrorTargetShell("TextureFallback");
         LogPaintAttemptIfNeeded("paint input", overPreview, uvAvailable, uv, texture, mirrorTarget, !_strokeActive);
 
+        if (_tool == EditorTool.FillBucket)
+        {
+            HandleFillBucketInput(texture, overPreview, uv, mirrorTarget, "TextureFallback");
+            return;
+        }
+
         if (IsPlacementTool(_tool))
         {
             HandleSinglePlacementStampInput(texture, overPreview, uv, mirrorTarget, "TextureFallback");
@@ -6282,6 +6335,12 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         var mirrorTarget = hitAvailable && texture != null ? ResolveWorldMirrorTarget(texture, hit, false) : CreateMirrorTargetShell("WorldThirdPerson");
         LogPaintAttemptIfNeeded("world paint input", hitAvailable, hitAvailable, uv, texture, mirrorTarget, !_strokeActive);
+
+        if (_tool == EditorTool.FillBucket)
+        {
+            HandleFillBucketInput(texture, hitAvailable, uv, mirrorTarget, "WorldThirdPerson");
+            return;
+        }
 
         if (IsPlacementTool(_tool))
         {
@@ -6409,6 +6468,231 @@ internal sealed class SuitEditorController : MonoBehaviour
         _lastEyedropperDiagnosticsTime = Time.unscaledTime;
         _lastEyedropperDiagnosticsKey = key;
         DrawableSuitsDiagnostics.Info($"EyedropperMiss: mode={mode}; pointerSource={_pointerSource}; reason={reason}; cursor={_cursor}");
+    }
+
+    private void HandleFillBucketInput(Texture2D texture, bool targetAvailable, Vector2 uv, MirrorPaintTarget mirrorTarget, string mode)
+    {
+        _strokeActive = false;
+        HideDecalPlacementPreview("fill bucket active", false);
+        if (!_decalStampArmed)
+        {
+            return;
+        }
+
+        _decalStampArmed = false;
+        _suppressDecalPreviewUntilRelease = true;
+
+        if (!targetAvailable || texture == null)
+        {
+            SetStatus(string.Equals(mode, "WorldThirdPerson", StringComparison.OrdinalIgnoreCase)
+                ? "Aim at your visible suit to fill."
+                : "Click the texture preview to fill.", false);
+            LogFillBucketSkipped(mode, targetAvailable ? "no editable texture" : "cursor miss", texture, uv, mirrorTarget, default, default);
+            return;
+        }
+
+        var seedPixel = TexturePixel(texture, uv);
+        if (seedPixel.x < 0 || seedPixel.y < 0 || seedPixel.x >= texture.width || seedPixel.y >= texture.height)
+        {
+            SetStatus("Aim at the suit to fill.", false);
+            LogFillBucketSkipped(mode, $"invalid seed pixel {seedPixel.x},{seedPixel.y}", texture, uv, mirrorTarget, default, default);
+            return;
+        }
+
+        Color32[] sourcePixels;
+        try
+        {
+            sourcePixels = texture.GetPixels32();
+        }
+        catch (Exception ex)
+        {
+            SetStatus("Fill failed; editable texture could not be read.", true);
+            DrawableSuitsDiagnostics.Exception($"FillBucket GetPixels32 failed. mode={mode}; texture={texture.name} {texture.width}x{texture.height}", ex);
+            LogFillBucketSkipped(mode, "texture read failed", texture, uv, mirrorTarget, default, default);
+            return;
+        }
+
+        SaveUndo();
+        _redo.Clear();
+
+        var workingPixels = (Color32[])sourcePixels.Clone();
+        var applyMirror = ShouldApplyMirror(texture, uv, mirrorTarget);
+        var touchedPixels = applyMirror ? new HashSet<int>() : null;
+        var changed = FloodFillBucket(texture, sourcePixels, workingPixels, seedPixel, false, touchedPixels, out var primaryStats);
+        FillBucketStats mirrorStats = default;
+        if (applyMirror)
+        {
+            var mirrorSeed = TexturePixel(texture, mirrorTarget.Uv);
+            if (mirrorSeed.x >= 0 && mirrorSeed.y >= 0 && mirrorSeed.x < texture.width && mirrorSeed.y < texture.height)
+            {
+                changed |= FloodFillBucket(texture, sourcePixels, workingPixels, mirrorSeed, true, touchedPixels, out mirrorStats);
+            }
+        }
+
+        if (!changed)
+        {
+            if (_undo.Count > 0)
+            {
+                _undo.Pop();
+            }
+            SetStatus("Fill found no matching pixels to change.", false);
+            LogFillBucketSkipped(mode, "no pixels changed", texture, uv, mirrorTarget, primaryStats, mirrorStats);
+            return;
+        }
+
+        texture.SetPixels32(workingPixels);
+        texture.Apply(false, false);
+        InvalidateDecalPreview("texture changed by fill bucket");
+        if (_previewMaterial != null)
+        {
+            _previewMaterial.mainTexture = texture;
+        }
+        DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, false);
+        if (_usingTexturePreview)
+        {
+            UseTexturePreview("FillBucket", false);
+        }
+
+        if (_mirrorEnabled && !mirrorTarget.Available)
+        {
+            SetStatus("Mirror target not found; filled primary region only.", false);
+        }
+        else
+        {
+            SetStatus($"Filled {primaryStats.WrittenPixels + mirrorStats.WrittenPixels} pixels.", false);
+        }
+
+        LogFillBucketApplied(mode, texture, uv, mirrorTarget, primaryStats, mirrorStats);
+        UpdateBrushIndicator();
+    }
+
+    private bool FloodFillBucket(Texture2D texture, Color32[] sourcePixels, Color32[] workingPixels, Vector2Int seedPixel, bool mirrored, HashSet<int> touchedPixels, out FillBucketStats stats)
+    {
+        stats = default;
+        stats.Mirrored = mirrored;
+        stats.SeedPixel = seedPixel;
+        if (texture == null
+            || sourcePixels == null
+            || workingPixels == null
+            || sourcePixels.Length != texture.width * texture.height
+            || workingPixels.Length != sourcePixels.Length)
+        {
+            return false;
+        }
+
+        var width = texture.width;
+        var height = texture.height;
+        var seedIndex = (seedPixel.y * width) + seedPixel.x;
+        if (seedIndex < 0 || seedIndex >= sourcePixels.Length)
+        {
+            return false;
+        }
+
+        var seedColor = sourcePixels[seedIndex];
+        stats.SeedColor = seedColor;
+        var visited = new bool[sourcePixels.Length];
+        var queue = new Queue<int>();
+        visited[seedIndex] = true;
+        queue.Enqueue(seedIndex);
+
+        while (queue.Count > 0)
+        {
+            var index = queue.Dequeue();
+            stats.CheckedPixels++;
+            var currentColor = sourcePixels[index];
+            if (RgbDistance01(seedColor, currentColor) > _fillTolerance)
+            {
+                continue;
+            }
+
+            stats.MatchedPixels++;
+            var x = index % width;
+            var y = index / width;
+            if (TryMarkTouchedPixel(texture, x, y, touchedPixels))
+            {
+                var existing = (Color)workingPixels[index];
+                var blended = Color.Lerp(existing, _brushColor, Mathf.Clamp01(_brushOpacity));
+                blended.a = existing.a;
+                if (!ColorsNearlyEqual(existing, blended))
+                {
+                    workingPixels[index] = blended;
+                    stats.WrittenPixels++;
+                }
+            }
+            else
+            {
+                stats.TouchedSkippedPixels++;
+            }
+
+            EnqueueFillNeighbor(index - 1, x > 0, visited, queue);
+            EnqueueFillNeighbor(index + 1, x < width - 1, visited, queue);
+            EnqueueFillNeighbor(index - width, y > 0, visited, queue);
+            EnqueueFillNeighbor(index + width, y < height - 1, visited, queue);
+        }
+
+        return stats.WrittenPixels > 0;
+    }
+
+    private static void EnqueueFillNeighbor(int index, bool valid, bool[] visited, Queue<int> queue)
+    {
+        if (!valid || index < 0 || index >= visited.Length || visited[index])
+        {
+            return;
+        }
+
+        visited[index] = true;
+        queue.Enqueue(index);
+    }
+
+    private static float RgbDistance01(Color32 a, Color32 b)
+    {
+        var dr = (a.r - b.r) / 255f;
+        var dg = (a.g - b.g) / 255f;
+        var db = (a.b - b.b) / 255f;
+        return Mathf.Sqrt((dr * dr) + (dg * dg) + (db * db)) / 1.7320508f;
+    }
+
+    private static bool ColorsNearlyEqual(Color a, Color b)
+    {
+        return Mathf.Abs(a.r - b.r) < 0.001f
+            && Mathf.Abs(a.g - b.g) < 0.001f
+            && Mathf.Abs(a.b - b.b) < 0.001f
+            && Mathf.Abs(a.a - b.a) < 0.001f;
+    }
+
+    private void LogFillBucketApplied(string mode, Texture2D texture, Vector2 uv, MirrorPaintTarget mirrorTarget, FillBucketStats primaryStats, FillBucketStats mirrorStats)
+    {
+        if (texture == null)
+        {
+            return;
+        }
+
+        var seedPixel = TexturePixel(texture, uv);
+        var mirrorDescription = DescribeMirrorTarget(texture, mirrorTarget);
+        var key = $"applied|mode={mode}|seed={seedPixel.x},{seedPixel.y}|mirror={mirrorDescription}|tol={_fillTolerance:0.###}|written={primaryStats.WrittenPixels}+{mirrorStats.WrittenPixels}|checked={primaryStats.CheckedPixels}+{mirrorStats.CheckedPixels}|color={ColorToHex(_brushColor)}|opacity={_brushOpacity:0.##}";
+        if (Time.unscaledTime - _lastFillBucketDiagnosticsTime < 0.5f && string.Equals(key, _lastFillBucketDiagnosticsKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastFillBucketDiagnosticsTime = Time.unscaledTime;
+        _lastFillBucketDiagnosticsKey = key;
+        DrawableSuitsDiagnostics.Info($"FillBucketApplied: {key}; tool={_tool}; pointerSource={_pointerSource}; uv={uv}; seedColor={ColorToHex(primaryStats.SeedColor)}; targetColor={ColorToHex(_brushColor)}; tolerance={_fillTolerance:0.###}; primaryMatched={primaryStats.MatchedPixels}; primaryTouchedSkipped={primaryStats.TouchedSkippedPixels}; mirroredSeed={mirrorStats.SeedPixel.x},{mirrorStats.SeedPixel.y}; mirroredSeedColor={ColorToHex(mirrorStats.SeedColor)}; mirrorMatched={mirrorStats.MatchedPixels}; mirrorTouchedSkipped={mirrorStats.TouchedSkippedPixels}; cursor={_cursor}");
+    }
+
+    private void LogFillBucketSkipped(string mode, string reason, Texture2D texture, Vector2 uv, MirrorPaintTarget mirrorTarget, FillBucketStats primaryStats, FillBucketStats mirrorStats)
+    {
+        var seedPixel = texture != null ? TexturePixel(texture, uv) : new Vector2Int(-1, -1);
+        var mirrorDescription = texture != null ? DescribeMirrorTarget(texture, mirrorTarget) : $"mirrorEnabled={mirrorTarget.Enabled}; mirrorAvailable={mirrorTarget.Available}; reason={mirrorTarget.Reason}";
+        var key = $"skipped|mode={mode}|reason={reason}|seed={seedPixel.x},{seedPixel.y}|mirror={mirrorDescription}|tol={_fillTolerance:0.###}|source={_pointerSource}";
+        if (Time.unscaledTime - _lastFillBucketDiagnosticsTime < 0.75f && string.Equals(key, _lastFillBucketDiagnosticsKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastFillBucketDiagnosticsTime = Time.unscaledTime;
+        _lastFillBucketDiagnosticsKey = key;
+        DrawableSuitsDiagnostics.Info($"FillBucketSkipped: {key}; uv={uv}; checked={primaryStats.CheckedPixels}+{mirrorStats.CheckedPixels}; matched={primaryStats.MatchedPixels}+{mirrorStats.MatchedPixels}; written={primaryStats.WrittenPixels}+{mirrorStats.WrittenPixels}; cursor={_cursor}");
     }
 
     private void HandleSinglePlacementStampInput(Texture2D texture, bool targetAvailable, Vector2 uv, MirrorPaintTarget mirrorTarget, string mode)

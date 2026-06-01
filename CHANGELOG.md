@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.23
+
+- Added a UI-only Fill Bucket tool with a visible Fill Tolerance slider.
+- Fill flood-fills the contiguous matching texture region under the cursor using the current brush color and opacity.
+- Added single-shot mouse/controller RT fill behavior with one undo entry for primary plus mirrored fills.
+- Added anatomical Mirror support for Fill when a mirror target is available.
+- Added `FillBucketApplied` and `FillBucketSkipped` diagnostics.
+
 ## 0.5.22
 
 - Changed third-person Paint and Erase to project brush strokes onto the visible suit surface before resolving to texture UVs.
