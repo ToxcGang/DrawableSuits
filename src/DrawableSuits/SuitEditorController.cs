@@ -40,7 +40,6 @@ internal sealed class SuitEditorController : MonoBehaviour
     }
 
     private const int EditorCanvasSortingOrder = 32760;
-    private const int CursorCanvasSortingOrder = 32767;
     private const float DotCursorRootSize = 17f;
     private const float DotCursorBackSize = 15f;
     private const float DotCursorFrontSize = 9f;
@@ -209,6 +208,9 @@ internal sealed class SuitEditorController : MonoBehaviour
     private GameObject _cursorCanvasObject;
     private RectTransform _canvasRect;
     private RectTransform _cursorCanvasRect;
+    private GameObject _canvasCursorObject;
+    private RectTransform _canvasCursorRect;
+    private DrawableCanvasCursorGraphic _canvasCursorGraphic;
     private RectTransform _panelRect;
     private RectTransform _previewViewportRect;
     private RectTransform _brushIndicator;
@@ -231,6 +233,10 @@ internal sealed class SuitEditorController : MonoBehaviour
     private string _lastNativeCursorWarpKey = string.Empty;
     private float _lastNativeCursorWarpTime;
     private float _ignoreMouseInputUntilTime;
+    private string _lastCanvasCursorLogKey = string.Empty;
+    private float _lastCanvasCursorLogTime;
+    private string _lastCanvasCursorHiddenKey = string.Empty;
+    private float _lastCanvasCursorHiddenTime;
     private string _lastDynamicCursorLogKey = string.Empty;
     private float _lastDynamicCursorLogTime;
     private string _lastImmediateCursorSkipLog = string.Empty;
@@ -1461,6 +1467,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             DestroyLegacyCursorCanvas("plugin destroy");
         }
+        DestroyCanvasCursor("plugin destroy");
 
         if (_editorEventSystemObject != null)
         {
@@ -1492,7 +1499,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         ReapplyPlayerInputLock();
         EnsureCursorUnlockedWhileOpen();
         HandleControllerCursor();
-        UpdateNativeCursor(false, "update");
+        UpdateCanvasCursor(false, "update");
         if (IsWorldThirdPersonMode)
         {
             UpdateWorldPaintProxy(false);
@@ -1549,7 +1556,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         _editorCanvasObject.SetActive(true);
         DestroyLegacyCursorCanvas($"open from {source}");
         InitializePointerForOpen(source);
-        UpdateNativeCursor(true, $"open from {source}");
+        EnsureCanvasCursor();
+        UpdateCanvasCursor(true, $"open from {source}");
         RefreshFileLists();
         _uvFallbackMode = DrawableSuitsPlugin.ModConfig.StartInUvFallbackMode.Value;
         EnsureValidToolForCurrentState($"open from {source}");
@@ -1634,6 +1642,11 @@ internal sealed class SuitEditorController : MonoBehaviour
             DestroyLegacyCursorCanvas($"repair closed state {reason}");
             repaired++;
         }
+        if (_canvasCursorObject != null && _canvasCursorObject.activeSelf)
+        {
+            HideCanvasCursor($"repair closed state {reason}", true);
+            repaired++;
+        }
         if (!string.IsNullOrEmpty(_nativeCursorKey) || _nativeCursorTexture != null)
         {
             ResetNativeCursor($"repair closed state {reason}");
@@ -1671,6 +1684,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawableSuitsDiagnostics.Info($"Closing DrawableSuits editor. reason={reason}");
         _isOpen = false;
         CloseDesignCodePanel();
+        HideCanvasCursor($"close {reason}", true);
         if (_editorCanvasObject != null)
         {
             _editorCanvasObject.SetActive(false);
@@ -2150,10 +2164,10 @@ internal sealed class SuitEditorController : MonoBehaviour
         var canvas = _cursorCanvasObject.GetComponent<Canvas>();
         canvas.renderMode = RenderMode.ScreenSpaceOverlay;
         canvas.overrideSorting = true;
-        canvas.sortingOrder = CursorCanvasSortingOrder;
-        if (canvas.sortingOrder != CursorCanvasSortingOrder || canvas.sortingOrder <= EditorCanvasSortingOrder)
+        canvas.sortingOrder = 32767;
+        if (canvas.sortingOrder != 32767 || canvas.sortingOrder <= EditorCanvasSortingOrder)
         {
-            DrawableSuitsDiagnostics.Warn($"Cursor canvas sorting order invalid after assignment. requested={CursorCanvasSortingOrder}; actual={canvas.sortingOrder}; editorOrder={EditorCanvasSortingOrder}");
+            DrawableSuitsDiagnostics.Warn($"Cursor canvas sorting order invalid after assignment. requested=32767; actual={canvas.sortingOrder}; editorOrder={EditorCanvasSortingOrder}");
         }
 
         CreateDynamicCursorMarker(_cursorCanvasObject.transform);
@@ -2668,10 +2682,10 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        if (!Cursor.visible || Cursor.lockState != CursorLockMode.None)
+        if (Cursor.visible || Cursor.lockState != CursorLockMode.None)
         {
-            DrawableSuitsDiagnostics.Warn($"Editor cursor was recaptured while open; unlocking again. visibleBefore={Cursor.visible}; lockBefore={Cursor.lockState}; pointerSource={_pointerSource}");
-            Cursor.visible = true;
+            DrawableSuitsDiagnostics.Warn($"Editor native cursor state changed while open; restoring hidden canvas-cursor mode. visibleBefore={Cursor.visible}; lockBefore={Cursor.lockState}; pointerSource={_pointerSource}");
+            Cursor.visible = false;
             Cursor.lockState = CursorLockMode.None;
         }
     }
@@ -2684,9 +2698,9 @@ internal sealed class SuitEditorController : MonoBehaviour
             _cursorStateCaptured = true;
         }
 
-        Cursor.visible = true;
+        Cursor.visible = false;
         Cursor.lockState = CursorLockMode.None;
-        DrawableSuitsDiagnostics.Info($"Cursor unlocked for editor native cursor. previousVisible={_previousCursorVisible}; previousLock={_previousCursorLockState}; currentVisible={Cursor.visible}; currentLock={Cursor.lockState}");
+        DrawableSuitsDiagnostics.Info($"Cursor captured for editor canvas cursor. previousVisible={_previousCursorVisible}; previousLock={_previousCursorLockState}; currentVisible={Cursor.visible}; currentLock={Cursor.lockState}");
     }
 
     private void SetStatus(string message, bool warn)
@@ -3779,6 +3793,109 @@ internal sealed class SuitEditorController : MonoBehaviour
         LogImmediateCursorUpdated(mode, targetMode, diameter, triangleIndex, uv, fallbackReason, frontRect, texture);
     }
 
+    private void EnsureCanvasCursor()
+    {
+        if (_editorCanvasObject == null || _canvasRect == null)
+        {
+            return;
+        }
+
+        if (_canvasCursorObject != null && _canvasCursorRect != null && _canvasCursorGraphic != null)
+        {
+            return;
+        }
+
+        DestroyCanvasCursor("rebuild");
+
+        _canvasCursorObject = CreateUiObject("DrawableSuitsCanvasCursor", _editorCanvasObject.transform, typeof(RectTransform), typeof(DrawableCanvasCursorGraphic));
+        _canvasCursorRect = _canvasCursorObject.GetComponent<RectTransform>();
+        _canvasCursorRect.anchorMin = new Vector2(0.5f, 0.5f);
+        _canvasCursorRect.anchorMax = new Vector2(0.5f, 0.5f);
+        _canvasCursorRect.pivot = new Vector2(0.5f, 0.5f);
+        _canvasCursorRect.anchoredPosition = Vector2.zero;
+        _canvasCursorRect.sizeDelta = new Vector2(DotCursorRootSize, DotCursorRootSize);
+
+        _canvasCursorGraphic = _canvasCursorObject.GetComponent<DrawableCanvasCursorGraphic>();
+        _canvasCursorGraphic.raycastTarget = false;
+        _canvasCursorGraphic.SetVisual(CursorVisualMode.Dot, Color.white, DotCursorBackSize);
+        _canvasCursorObject.SetActive(false);
+        LogCanvasCursorBuilt("created");
+    }
+
+    private void UpdateCanvasCursor(bool force, string context)
+    {
+        if (!_isOpen)
+        {
+            HideCanvasCursor($"update while closed {context}", false);
+            return;
+        }
+
+        if (_editorCanvasObject == null || _canvasRect == null)
+        {
+            LogCanvasCursorHidden($"missing editor canvas {context}", true);
+            return;
+        }
+
+        EnsureCanvasCursor();
+        if (_canvasCursorObject == null || _canvasCursorRect == null || _canvasCursorGraphic == null)
+        {
+            LogCanvasCursorHidden($"cursor build failed {context}", true);
+            return;
+        }
+
+        if (Cursor.visible || Cursor.lockState != CursorLockMode.None)
+        {
+            Cursor.visible = false;
+            Cursor.lockState = CursorLockMode.None;
+        }
+
+        var mode = CursorVisualMode.Dot;
+        var diameter = DotCursorBackSize;
+        var color = Color.white;
+        var targetMode = "Navigation";
+        var triangleIndex = -1;
+        var uv = Vector2.zero;
+        var fallbackReason = string.Empty;
+        if (TryResolveBrushCursor(out var brushDiameter, out var brushColor, out targetMode, out triangleIndex, out uv, out fallbackReason))
+        {
+            mode = CursorVisualMode.BrushRing;
+            diameter = ClampCursorDiameter(brushDiameter);
+            color = brushColor;
+        }
+
+        var screenCursor = new Vector2(Mathf.Clamp(_cursor.x, 0f, Screen.width), Mathf.Clamp(_cursor.y, 0f, Screen.height));
+        if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(_canvasRect, screenCursor, null, out var localPosition))
+        {
+            var rootRect = _canvasRect.rect;
+            var scaleFactor = Mathf.Max(0.001f, _editorCanvasObject.GetComponent<Canvas>()?.scaleFactor ?? 1f);
+            localPosition = new Vector2(screenCursor.x / scaleFactor + rootRect.xMin, screenCursor.y / scaleFactor + rootRect.yMin);
+            fallbackReason = AppendFallbackReason(fallbackReason, "screen-to-canvas fallback");
+        }
+
+        var rootSize = mode == CursorVisualMode.BrushRing
+            ? Mathf.Clamp(diameter + 10f, 22f, 300f)
+            : DotCursorRootSize;
+
+        _canvasCursorObject.SetActive(true);
+        _canvasCursorObject.transform.SetAsLastSibling();
+        _canvasCursorRect.anchoredPosition = localPosition;
+        _canvasCursorRect.sizeDelta = new Vector2(rootSize, rootSize);
+        _canvasCursorGraphic.raycastTarget = false;
+        _canvasCursorGraphic.SetVisual(mode, color, diameter);
+
+        LogCanvasCursorUpdated(force, context, mode, targetMode, diameter, triangleIndex, uv, fallbackReason, screenCursor, localPosition, rootSize);
+    }
+
+    private static string AppendFallbackReason(string current, string addition)
+    {
+        if (string.IsNullOrWhiteSpace(addition))
+        {
+            return current ?? string.Empty;
+        }
+
+        return string.IsNullOrWhiteSpace(current) ? addition : current + "; " + addition;
+    }
+
     private void UpdateNativeCursor(bool force, string context)
     {
         if (!_isOpen)
@@ -4019,6 +4136,34 @@ internal sealed class SuitEditorController : MonoBehaviour
         _cursorImage = null;
     }
 
+    private void HideCanvasCursor(string context, bool forceLog)
+    {
+        var wasActive = _canvasCursorObject != null && _canvasCursorObject.activeSelf;
+        if (_canvasCursorObject != null)
+        {
+            _canvasCursorObject.SetActive(false);
+        }
+
+        if (wasActive || forceLog)
+        {
+            LogCanvasCursorHidden(context, forceLog);
+        }
+    }
+
+    private void DestroyCanvasCursor(string context)
+    {
+        if (_canvasCursorObject == null)
+        {
+            return;
+        }
+
+        DrawableSuitsDiagnostics.Info($"CanvasCursorHidden: context={context}; destroyed=True; object={DrawableSuitsPlugin.DescribeUnityObject(_canvasCursorObject)}");
+        Destroy(_canvasCursorObject);
+        _canvasCursorObject = null;
+        _canvasCursorRect = null;
+        _canvasCursorGraphic = null;
+    }
+
     private void UpdateCursorMarker()
     {
         DestroyLegacyCursorCanvas("ignored legacy cursor update request");
@@ -4167,7 +4312,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         var scaleX = screenSize.x / Mathf.Max(1f, texture.width);
         var scaleY = screenSize.y / Mathf.Max(1f, texture.height);
-        return _brushSize * 2f * Mathf.Max(scaleX, scaleY);
+        return ScreenPixelsToCanvasUnits(_brushSize * 2f * Mathf.Max(scaleX, scaleY));
     }
 
     private static Vector2 GetRectTransformScreenSize(RectTransform rectTransform)
@@ -4309,7 +4454,9 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private float ScreenPixelsToCanvasUnits(float screenPixels)
     {
-        return screenPixels;
+        var canvas = _editorCanvasObject != null ? _editorCanvasObject.GetComponent<Canvas>() : null;
+        var scaleFactor = Mathf.Max(0.001f, canvas != null ? canvas.scaleFactor : 1f);
+        return screenPixels / scaleFactor;
     }
 
     private static float ClampCursorDiameter(float diameter)
@@ -4413,6 +4560,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private void DestroyCursorGraphics()
     {
         ResetNativeCursor("destroy cursor graphics");
+        DestroyCanvasCursor("destroy cursor graphics");
         if (_cursorDotSprite != null)
         {
             Destroy(_cursorDotSprite);
@@ -4435,6 +4583,38 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
     }
 
+    private void LogCanvasCursorBuilt(string context)
+    {
+        DrawableSuitsDiagnostics.Info($"CanvasCursorBuilt: context={context}; object={DrawableSuitsPlugin.DescribeUnityObject(_canvasCursorObject)}; active={_canvasCursorObject?.activeSelf.ToString() ?? "null"}; root={DrawableSuitsPlugin.DescribeUnityObject(_editorCanvasObject)}; rootChildren={_editorCanvasObject?.transform.childCount.ToString() ?? "null"}; raycastTarget={_canvasCursorGraphic?.raycastTarget.ToString() ?? "null"}; rootRect={(_canvasRect != null ? _canvasRect.rect.ToString() : "null")}");
+    }
+
+    private void LogCanvasCursorUpdated(bool force, string context, CursorVisualMode mode, string targetMode, float diameter, int triangleIndex, Vector2 uv, string fallbackReason, Vector2 screenPosition, Vector2 localPosition, float rootSize)
+    {
+        var siblingIndex = _canvasCursorObject != null ? _canvasCursorObject.transform.GetSiblingIndex() : -1;
+        var key = $"mode={mode}|tool={_tool}|source={_pointerSource}|target={targetMode}|brush={Mathf.RoundToInt(_brushSize)}|diameter={diameter:0.#}|tri={triangleIndex}|uv={uv.x:0.###},{uv.y:0.###}|fallback={fallbackReason}|screen={screenPosition.x:0.#},{screenPosition.y:0.#}|local={localPosition.x:0.#},{localPosition.y:0.#}|size={rootSize:0.#}|context={context}";
+        if (!force && Time.unscaledTime - _lastCanvasCursorLogTime < 0.75f && string.Equals(key, _lastCanvasCursorLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastCanvasCursorLogTime = Time.unscaledTime;
+        _lastCanvasCursorLogKey = key;
+        DrawableSuitsDiagnostics.Info($"CanvasCursorUpdated: {key}; active={_canvasCursorObject?.activeSelf.ToString() ?? "null"}; activeInHierarchy={_canvasCursorObject?.activeInHierarchy.ToString() ?? "null"}; sibling={siblingIndex}; rootChildCount={_editorCanvasObject?.transform.childCount.ToString() ?? "null"}; rectSize={(_canvasCursorRect != null ? _canvasCursorRect.rect.size.ToString() : "null")}; anchored={(_canvasCursorRect != null ? _canvasCursorRect.anchoredPosition.ToString() : "null")}; raycastTarget={_canvasCursorGraphic?.raycastTarget.ToString() ?? "null"}; graphicMode={_canvasCursorGraphic?.Mode.ToString() ?? "null"}; graphicDiameter={_canvasCursorGraphic?.Diameter.ToString("0.#") ?? "null"}; canvasScale={_editorCanvasObject?.GetComponent<Canvas>()?.scaleFactor.ToString("0.###") ?? "null"}; rootRect={(_canvasRect != null ? _canvasRect.rect.ToString() : "null")}; nativeCursorVisible={Cursor.visible}; nativeCursorLock={Cursor.lockState}; overPanel={IsCursorOverEditorPanel()}; previewMode={_previewMode}");
+    }
+
+    private void LogCanvasCursorHidden(string context, bool force)
+    {
+        var key = context ?? "unknown";
+        if (!force && Time.unscaledTime - _lastCanvasCursorHiddenTime < 1.5f && string.Equals(key, _lastCanvasCursorHiddenKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastCanvasCursorHiddenTime = Time.unscaledTime;
+        _lastCanvasCursorHiddenKey = key;
+        DrawableSuitsDiagnostics.Info($"CanvasCursorHidden: context={key}; object={DrawableSuitsPlugin.DescribeUnityObject(_canvasCursorObject)}; active={_canvasCursorObject?.activeSelf.ToString() ?? "null"}; isOpen={_isOpen}; canvasActive={CanvasActiveForDiagnostics}; nativeCursorVisible={Cursor.visible}; nativeCursorLock={Cursor.lockState}");
+    }
+
     private void LogDynamicCursorUpdated(CursorVisualMode mode, string targetMode, float diameter, int triangleIndex, Vector2 uv, string fallbackReason)
     {
         var key = $"mode={mode}|tool={_tool}|source={_pointerSource}|target={targetMode}|brush={Mathf.RoundToInt(_brushSize)}|diameter={diameter:0.#}|tri={triangleIndex}|uv={uv.x:0.###},{uv.y:0.###}|fallback={fallbackReason}";
@@ -4445,8 +4625,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         _lastDynamicCursorLogTime = Time.unscaledTime;
         _lastDynamicCursorLogKey = key;
-        var cursorCanvas = _cursorCanvasObject != null ? _cursorCanvasObject.GetComponent<Canvas>() : null;
-        DrawableSuitsDiagnostics.Info($"DynamicCursorUpdated: {key}; canPaint={_canPaint}; overPanel={IsCursorOverEditorPanel()}; overPreview={IsCursorOverPreviewViewport()}; screenCursor={_cursor}; anchored={(_cursorMarker != null ? _cursorMarker.anchoredPosition.ToString() : "null")}; rootSize={(_cursorMarker != null ? _cursorMarker.sizeDelta.ToString() : "null")}; frontSize={(_cursorFrontRect != null ? _cursorFrontRect.sizeDelta.ToString() : "null")}; backSize={(_cursorBackRect != null ? _cursorBackRect.sizeDelta.ToString() : "null")}; frontSprite={_cursorImage?.sprite?.name ?? "null"}; backSprite={_cursorBackImage?.sprite?.name ?? "null"}; cursorCanvasActive={_cursorCanvasObject?.activeSelf.ToString() ?? "null"}; cursorCanvasRequestedOrder={CursorCanvasSortingOrder}; cursorCanvasOrder={cursorCanvas?.sortingOrder.ToString() ?? "null"}; cursorCanvasOverrideSorting={cursorCanvas?.overrideSorting.ToString() ?? "null"}; editorCanvasOrder={EditorCanvasSortingOrder}; previewMode={_previewMode}");
+        DrawableSuitsDiagnostics.Info($"DynamicCursorUpdated: {key}; canPaint={_canPaint}; overPanel={IsCursorOverEditorPanel()}; overPreview={IsCursorOverPreviewViewport()}; screenCursor={_cursor}; anchored={(_cursorMarker != null ? _cursorMarker.anchoredPosition.ToString() : "null")}; rootSize={(_cursorMarker != null ? _cursorMarker.sizeDelta.ToString() : "null")}; frontSize={(_cursorFrontRect != null ? _cursorFrontRect.sizeDelta.ToString() : "null")}; backSize={(_cursorBackRect != null ? _cursorBackRect.sizeDelta.ToString() : "null")}; frontSprite={_cursorImage?.sprite?.name ?? "null"}; backSprite={_cursorBackImage?.sprite?.name ?? "null"}; editorCanvasOrder={EditorCanvasSortingOrder}; canvasCursor={DrawableSuitsPlugin.DescribeUnityObject(_canvasCursorObject)}; previewMode={_previewMode}");
     }
 
     private void LogImmediateCursorUpdated(CursorVisualMode mode, string targetMode, float diameter, int triangleIndex, Vector2 uv, string fallbackReason, Rect drawRect, Texture2D texture)
@@ -4517,7 +4696,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private void LogCursorCanvasState(string context)
     {
         var canvas = _cursorCanvasObject != null ? _cursorCanvasObject.GetComponent<Canvas>() : null;
-        DrawableSuitsDiagnostics.Info($"CursorCanvasState[{context}]: canvasObject={DrawableSuitsPlugin.DescribeUnityObject(_cursorCanvasObject)}; active={_cursorCanvasObject?.activeSelf.ToString() ?? "null"}; renderMode={canvas?.renderMode.ToString() ?? "null"}; requestedSortingOrder={CursorCanvasSortingOrder}; sortingOrder={canvas?.sortingOrder.ToString() ?? "null"}; editorCanvasOrder={EditorCanvasSortingOrder}; overrideSorting={canvas?.overrideSorting.ToString() ?? "null"}; hasRaycaster={(_cursorCanvasObject != null && _cursorCanvasObject.GetComponent<GraphicRaycaster>() != null)}; screen={Screen.width}x{Screen.height}; cursor={_cursor}; marker={DrawableSuitsPlugin.DescribeUnityObject(_cursorMarker)}; markerActive={_cursorMarker?.gameObject.activeSelf.ToString() ?? "null"}; markerPos={(_cursorMarker != null ? _cursorMarker.anchoredPosition.ToString() : "null")}; frontImage={DrawableSuitsPlugin.DescribeUnityObject(_cursorImage)}; backImage={DrawableSuitsPlugin.DescribeUnityObject(_cursorBackImage)}");
+        DrawableSuitsDiagnostics.Info($"CursorCanvasState[{context}]: legacyCanvasObject={DrawableSuitsPlugin.DescribeUnityObject(_cursorCanvasObject)}; active={_cursorCanvasObject?.activeSelf.ToString() ?? "null"}; renderMode={canvas?.renderMode.ToString() ?? "null"}; sortingOrder={canvas?.sortingOrder.ToString() ?? "null"}; editorCanvasOrder={EditorCanvasSortingOrder}; overrideSorting={canvas?.overrideSorting.ToString() ?? "null"}; hasRaycaster={(_cursorCanvasObject != null && _cursorCanvasObject.GetComponent<GraphicRaycaster>() != null)}; screen={Screen.width}x{Screen.height}; cursor={_cursor}; marker={DrawableSuitsPlugin.DescribeUnityObject(_cursorMarker)}; markerActive={_cursorMarker?.gameObject.activeSelf.ToString() ?? "null"}; markerPos={(_cursorMarker != null ? _cursorMarker.anchoredPosition.ToString() : "null")}; frontImage={DrawableSuitsPlugin.DescribeUnityObject(_cursorImage)}; backImage={DrawableSuitsPlugin.DescribeUnityObject(_cursorBackImage)}; canvasCursor={DrawableSuitsPlugin.DescribeUnityObject(_canvasCursorObject)}");
     }
 
     private void UpdateBrushIndicator()
@@ -9171,6 +9350,116 @@ internal sealed class SuitEditorController : MonoBehaviour
             var alphaSummary = canvasRenderer != null ? $"; alpha={canvasRenderer.GetAlpha():0.###}" : string.Empty;
             DrawableSuitsDiagnostics.Info($"EditorControl[{logged}]: name={rect.name}; activeSelf={rect.gameObject.activeSelf}; activeInHierarchy={rect.gameObject.activeInHierarchy}; anchors=({rect.anchorMin},{rect.anchorMax}); pos={rect.anchoredPosition}; size={rect.rect.size}{alphaSummary}{textSummary}{imageSummary}{selectableSummary}");
             logged++;
+        }
+    }
+
+    private sealed class DrawableCanvasCursorGraphic : Graphic
+    {
+        private const int CircleSegments = 64;
+        private CursorVisualMode _mode = CursorVisualMode.Dot;
+        private Color _cursorColor = Color.white;
+        private float _diameter = DotCursorBackSize;
+
+        public CursorVisualMode Mode => _mode;
+
+        public float Diameter => _diameter;
+
+        public void SetVisual(CursorVisualMode mode, Color cursorColor, float diameter)
+        {
+            diameter = Mathf.Max(1f, diameter);
+            if (_mode == mode
+                && Mathf.Abs(_diameter - diameter) < 0.05f
+                && Mathf.Abs(_cursorColor.r - cursorColor.r) < 0.003f
+                && Mathf.Abs(_cursorColor.g - cursorColor.g) < 0.003f
+                && Mathf.Abs(_cursorColor.b - cursorColor.b) < 0.003f
+                && Mathf.Abs(_cursorColor.a - cursorColor.a) < 0.003f)
+            {
+                return;
+            }
+
+            _mode = mode;
+            _cursorColor = cursorColor;
+            _diameter = diameter;
+            SetVerticesDirty();
+        }
+
+        protected override void OnPopulateMesh(VertexHelper vh)
+        {
+            vh.Clear();
+            var rect = rectTransform.rect;
+            var center = rect.center;
+            if (_mode == CursorVisualMode.BrushRing)
+            {
+                var radius = Mathf.Min(rect.width, rect.height) * 0.5f - 5f;
+                radius = Mathf.Max(5f, Mathf.Min(radius, _diameter * 0.5f));
+                var backingThickness = Mathf.Clamp(_diameter * 0.14f, 4f, 10f);
+                var frontThickness = Mathf.Clamp(_diameter * 0.07f, 2f, 6f);
+                AddRing(vh, center, radius, backingThickness, new Color32(0, 0, 0, 245));
+                AddRing(vh, center, radius, frontThickness, ToColor32(_cursorColor));
+                return;
+            }
+
+            var outerRadius = Mathf.Min(rect.width, rect.height) * 0.5f;
+            var innerRadius = outerRadius * 0.58f;
+            AddDisc(vh, center, outerRadius, new Color32(0, 0, 0, 235));
+            AddDisc(vh, center, innerRadius, new Color32(255, 255, 255, 255));
+        }
+
+        private static void AddDisc(VertexHelper vh, Vector2 center, float radius, Color32 color)
+        {
+            var centerIndex = vh.currentVertCount;
+            AddVertex(vh, center, color);
+            for (var segment = 0; segment <= CircleSegments; segment++)
+            {
+                var angle = segment / (float)CircleSegments * Mathf.PI * 2f;
+                AddVertex(vh, center + new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * radius, color);
+            }
+
+            for (var segment = 0; segment < CircleSegments; segment++)
+            {
+                vh.AddTriangle(centerIndex, centerIndex + segment + 1, centerIndex + segment + 2);
+            }
+        }
+
+        private static void AddRing(VertexHelper vh, Vector2 center, float radius, float thickness, Color32 color)
+        {
+            var innerRadius = Mathf.Max(0f, radius - thickness * 0.5f);
+            var outerRadius = radius + thickness * 0.5f;
+            var startIndex = vh.currentVertCount;
+            for (var segment = 0; segment <= CircleSegments; segment++)
+            {
+                var angle = segment / (float)CircleSegments * Mathf.PI * 2f;
+                var direction = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
+                AddVertex(vh, center + direction * outerRadius, color);
+                AddVertex(vh, center + direction * innerRadius, color);
+            }
+
+            for (var segment = 0; segment < CircleSegments; segment++)
+            {
+                var outer0 = startIndex + segment * 2;
+                var inner0 = outer0 + 1;
+                var outer1 = outer0 + 2;
+                var inner1 = outer0 + 3;
+                vh.AddTriangle(outer0, outer1, inner1);
+                vh.AddTriangle(outer0, inner1, inner0);
+            }
+        }
+
+        private static void AddVertex(VertexHelper vh, Vector2 position, Color32 color)
+        {
+            var vertex = UIVertex.simpleVert;
+            vertex.color = color;
+            vertex.position = position;
+            vh.AddVert(vertex);
+        }
+
+        private static Color32 ToColor32(Color color)
+        {
+            return new Color32(
+                (byte)Mathf.RoundToInt(Mathf.Clamp01(color.r) * 255f),
+                (byte)Mathf.RoundToInt(Mathf.Clamp01(color.g) * 255f),
+                (byte)Mathf.RoundToInt(Mathf.Clamp01(color.b) * 255f),
+                (byte)Mathf.RoundToInt(Mathf.Clamp01(color.a) * 255f));
         }
     }
 

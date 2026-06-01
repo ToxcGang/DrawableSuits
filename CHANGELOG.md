@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.21
+
+- Replaced the native software cursor renderer with a direct editor-canvas cursor drawn through the same UGUI canvas as the visible editor controls.
+- Kept dynamic Paint and Erase brush rings plus dot-mode cursor behavior without relying on Unity native cursor textures, IMGUI, or a separate cursor canvas.
+- Stopped controller cursor rendering from depending on OS mouse warping while preserving existing virtual-cursor UI targeting.
+- Added `CanvasCursorBuilt`, `CanvasCursorUpdated`, and `CanvasCursorHidden` diagnostics.
+
 ## 0.5.20
 
 - Replaced the IMGUI cursor renderer with Unity's native software cursor path using generated cursor textures.
