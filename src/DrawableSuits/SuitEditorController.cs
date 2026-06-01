@@ -224,6 +224,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Texture2D _cursorRingTexture;
     private string _lastDynamicCursorLogKey = string.Empty;
     private float _lastDynamicCursorLogTime;
+    private string _lastImmediateCursorSkipLog = string.Empty;
+    private float _lastImmediateCursorSkipLogTime;
     private RectTransform _designListContent;
     private RectTransform _decalListContent;
     private Text _designEmptyLabel;
@@ -1447,14 +1449,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
         if (_cursorCanvasObject != null)
         {
-            Destroy(_cursorCanvasObject);
-            _cursorCanvasObject = null;
-            _cursorCanvasRect = null;
-            _cursorMarker = null;
-            _cursorBackRect = null;
-            _cursorFrontRect = null;
-            _cursorBackImage = null;
-            _cursorImage = null;
+            DestroyLegacyCursorCanvas("plugin destroy");
         }
 
         if (_editorEventSystemObject != null)
@@ -1492,7 +1487,6 @@ internal sealed class SuitEditorController : MonoBehaviour
             UpdateWorldPaintProxy(false);
             UpdateWorldEditorCamera(false);
         }
-        UpdateCursorMarker();
         HandleVirtualCursorClick();
         HandleEditorShortcuts();
         if (IsWorldThirdPersonMode)
@@ -1511,6 +1505,16 @@ internal sealed class SuitEditorController : MonoBehaviour
             RenderPreviewFrame();
         }
         LogUiInputDiagnosticsIfNeeded();
+    }
+
+    private void OnGUI()
+    {
+        if (!_isOpen || Event.current == null || Event.current.type != EventType.Repaint)
+        {
+            return;
+        }
+
+        DrawImmediateCursor();
     }
 
     public bool OpenEditor()
@@ -1541,15 +1545,13 @@ internal sealed class SuitEditorController : MonoBehaviour
         CaptureAndLockPlayerInput();
         _isOpen = true;
         _editorCanvasObject.SetActive(true);
-        EnsureCursorCanvas();
-        SetCursorCanvasVisible(true, $"open from {source}");
+        DestroyLegacyCursorCanvas($"open from {source}");
         InitializePointerForOpen(source);
         RefreshFileLists();
         _uvFallbackMode = DrawableSuitsPlugin.ModConfig.StartInUvFallbackMode.Value;
         EnsureValidToolForCurrentState($"open from {source}");
         TryRebuildPreviewForCurrentReadiness(source);
         RefreshEditorReadiness($"after preview ({source})");
-        UpdateCursorMarker();
         UpdateUiState();
         RebuildSelectableNavigation();
         LogEditorControlTree(_panelRect);
@@ -1624,9 +1626,9 @@ internal sealed class SuitEditorController : MonoBehaviour
             repaired++;
         }
 
-        if (_cursorCanvasObject != null && _cursorCanvasObject.activeSelf)
+        if (_cursorCanvasObject != null)
         {
-            SetCursorCanvasVisible(false, $"repair closed state {reason}");
+            DestroyLegacyCursorCanvas($"repair closed state {reason}");
             repaired++;
         }
 
@@ -1665,7 +1667,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             _editorCanvasObject.SetActive(false);
         }
-        SetCursorCanvasVisible(false, $"close {reason}");
+        DestroyLegacyCursorCanvas($"close {reason}");
 
         DestroyPreview();
         _strokeActive = false;
@@ -2190,19 +2192,11 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         if (visible)
         {
-            EnsureCursorCanvas();
-        }
-
-        if (_cursorCanvasObject == null)
-        {
+            DestroyLegacyCursorCanvas($"ignored legacy show request: {context}");
             return;
         }
 
-        if (_cursorCanvasObject.activeSelf != visible)
-        {
-            _cursorCanvasObject.SetActive(visible);
-            LogCursorCanvasState(context);
-        }
+        DestroyLegacyCursorCanvas($"legacy hide request: {context}");
     }
 
     private static GameObject CreateUiObject(string name, Transform parent, params Type[] components)
@@ -2665,10 +2659,10 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        if (!Cursor.visible || Cursor.lockState != CursorLockMode.None)
+        if (Cursor.visible || Cursor.lockState != CursorLockMode.None)
         {
             DrawableSuitsDiagnostics.Warn($"Editor cursor was recaptured while open; unlocking again. visibleBefore={Cursor.visible}; lockBefore={Cursor.lockState}; pointerSource={_pointerSource}");
-            Cursor.visible = true;
+            Cursor.visible = false;
             Cursor.lockState = CursorLockMode.None;
         }
     }
@@ -2681,9 +2675,9 @@ internal sealed class SuitEditorController : MonoBehaviour
             _cursorStateCaptured = true;
         }
 
-        Cursor.visible = true;
+        Cursor.visible = false;
         Cursor.lockState = CursorLockMode.None;
-        DrawableSuitsDiagnostics.Info($"Cursor unlocked for editor. previousVisible={_previousCursorVisible}; previousLock={_previousCursorLockState}; currentVisible={Cursor.visible}; currentLock={Cursor.lockState}");
+        DrawableSuitsDiagnostics.Info($"Cursor unlocked for editor immediate cursor. previousVisible={_previousCursorVisible}; previousLock={_previousCursorLockState}; currentVisible={Cursor.visible}; currentLock={Cursor.lockState}");
     }
 
     private void SetStatus(string message, bool warn)
@@ -3718,23 +3712,90 @@ internal sealed class SuitEditorController : MonoBehaviour
         ClearSelectedNormalButton();
     }
 
-    private void UpdateCursorMarker()
+    private void DrawImmediateCursor()
     {
-        EnsureCursorCanvas();
-        if (_cursorCanvasObject == null || _cursorMarker == null || _cursorBackImage == null || _cursorImage == null)
+        if (!_isOpen)
+        {
+            LogImmediateCursorDrawSkipped("editor closed");
+            return;
+        }
+
+        var mode = CursorVisualMode.Dot;
+        var diameter = DotCursorFrontSize;
+        var color = Color.white;
+        var targetMode = "Navigation";
+        var triangleIndex = -1;
+        var uv = Vector2.zero;
+        var fallbackReason = string.Empty;
+        if (TryResolveBrushCursor(out var brushDiameter, out var brushColor, out targetMode, out triangleIndex, out uv, out fallbackReason))
+        {
+            mode = CursorVisualMode.BrushRing;
+            diameter = ClampCursorDiameter(brushDiameter);
+            color = brushColor;
+        }
+
+        var texture = mode == CursorVisualMode.BrushRing ? EnsureCursorRingTexture() : EnsureCursorDotTexture();
+        if (texture == null)
+        {
+            LogImmediateCursorDrawSkipped($"missing texture mode={mode}");
+            return;
+        }
+
+        var screenX = Mathf.Clamp(_cursor.x, 0f, Screen.width);
+        var screenY = Mathf.Clamp(_cursor.y, 0f, Screen.height);
+        var guiCenter = new Vector2(screenX, Screen.height - screenY);
+        var frontSize = mode == CursorVisualMode.BrushRing ? diameter : DotCursorFrontSize;
+        var backSize = mode == CursorVisualMode.BrushRing ? diameter + 6f : DotCursorBackSize;
+        var frontRect = RectFromCenter(guiCenter, frontSize);
+        var backRect = RectFromCenter(guiCenter, backSize);
+
+        var oldDepth = GUI.depth;
+        var oldColor = GUI.color;
+        try
+        {
+            GUI.depth = int.MinValue;
+            GUI.color = mode == CursorVisualMode.BrushRing
+                ? new Color(0f, 0f, 0f, 0.95f)
+                : new Color(0f, 0f, 0f, 0.85f);
+            GUI.DrawTexture(backRect, texture, ScaleMode.StretchToFill, true);
+            GUI.color = color;
+            GUI.DrawTexture(frontRect, texture, ScaleMode.StretchToFill, true);
+        }
+        finally
+        {
+            GUI.color = oldColor;
+            GUI.depth = oldDepth;
+        }
+
+        LogImmediateCursorUpdated(mode, targetMode, diameter, triangleIndex, uv, fallbackReason, frontRect, texture);
+    }
+
+    private static Rect RectFromCenter(Vector2 center, float size)
+    {
+        return new Rect(center.x - size * 0.5f, center.y - size * 0.5f, size, size);
+    }
+
+    private void DestroyLegacyCursorCanvas(string context)
+    {
+        if (_cursorCanvasObject == null)
         {
             return;
         }
 
-        if (!_cursorCanvasObject.activeSelf)
-        {
-            _cursorCanvasObject.SetActive(true);
-            LogCursorCanvasState("auto-show while open");
-        }
+        DrawableSuitsDiagnostics.Info($"Legacy cursor canvas destroyed. context={context}; canvas={DrawableSuitsPlugin.DescribeUnityObject(_cursorCanvasObject)}");
+        Destroy(_cursorCanvasObject);
+        _cursorCanvasObject = null;
+        _cursorCanvasRect = null;
+        _cursorMarker = null;
+        _cursorBackRect = null;
+        _cursorFrontRect = null;
+        _cursorBackImage = null;
+        _cursorImage = null;
+    }
 
-        _cursorMarker.gameObject.SetActive(true);
-        _cursorMarker.anchoredPosition = new Vector2(Mathf.Clamp(_cursor.x, -64f, Screen.width + 64f), Mathf.Clamp(_cursor.y, -64f, Screen.height + 64f));
-        ApplyDynamicCursorVisual();
+    private void UpdateCursorMarker()
+    {
+        DestroyLegacyCursorCanvas("ignored legacy cursor update request");
     }
 
     private void ApplyDynamicCursorVisual()
@@ -4035,6 +4096,26 @@ internal sealed class SuitEditorController : MonoBehaviour
         return _designCodePanelObject != null && _designCodePanelObject.activeInHierarchy;
     }
 
+    private Texture2D EnsureCursorDotTexture()
+    {
+        if (_cursorDotTexture == null)
+        {
+            _cursorDotTexture = CreateCursorTexture("DrawableSuitsImmediateCursorDot", 32, true);
+        }
+
+        return _cursorDotTexture;
+    }
+
+    private Texture2D EnsureCursorRingTexture()
+    {
+        if (_cursorRingTexture == null)
+        {
+            _cursorRingTexture = CreateCursorTexture("DrawableSuitsImmediateCursorRing", 128, false);
+        }
+
+        return _cursorRingTexture;
+    }
+
     private Sprite EnsureCursorDotSprite()
     {
         if (_cursorDotSprite != null)
@@ -4042,7 +4123,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return _cursorDotSprite;
         }
 
-        _cursorDotTexture = CreateCursorTexture("DrawableSuitsCursorDot", 32, true);
+        _cursorDotTexture = EnsureCursorDotTexture();
         _cursorDotSprite = Sprite.Create(_cursorDotTexture, new Rect(0f, 0f, _cursorDotTexture.width, _cursorDotTexture.height), new Vector2(0.5f, 0.5f), 100f);
         _cursorDotSprite.name = "DrawableSuitsCursorDotSprite";
         return _cursorDotSprite;
@@ -4055,7 +4136,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return _cursorRingSprite;
         }
 
-        _cursorRingTexture = CreateCursorTexture("DrawableSuitsCursorRing", 128, false);
+        _cursorRingTexture = EnsureCursorRingTexture();
         _cursorRingSprite = Sprite.Create(_cursorRingTexture, new Rect(0f, 0f, _cursorRingTexture.width, _cursorRingTexture.height), new Vector2(0.5f, 0.5f), 100f);
         _cursorRingSprite.name = "DrawableSuitsCursorRingSprite";
         return _cursorRingSprite;
@@ -4139,6 +4220,32 @@ internal sealed class SuitEditorController : MonoBehaviour
         _lastDynamicCursorLogKey = key;
         var cursorCanvas = _cursorCanvasObject != null ? _cursorCanvasObject.GetComponent<Canvas>() : null;
         DrawableSuitsDiagnostics.Info($"DynamicCursorUpdated: {key}; canPaint={_canPaint}; overPanel={IsCursorOverEditorPanel()}; overPreview={IsCursorOverPreviewViewport()}; screenCursor={_cursor}; anchored={(_cursorMarker != null ? _cursorMarker.anchoredPosition.ToString() : "null")}; rootSize={(_cursorMarker != null ? _cursorMarker.sizeDelta.ToString() : "null")}; frontSize={(_cursorFrontRect != null ? _cursorFrontRect.sizeDelta.ToString() : "null")}; backSize={(_cursorBackRect != null ? _cursorBackRect.sizeDelta.ToString() : "null")}; frontSprite={_cursorImage?.sprite?.name ?? "null"}; backSprite={_cursorBackImage?.sprite?.name ?? "null"}; cursorCanvasActive={_cursorCanvasObject?.activeSelf.ToString() ?? "null"}; cursorCanvasRequestedOrder={CursorCanvasSortingOrder}; cursorCanvasOrder={cursorCanvas?.sortingOrder.ToString() ?? "null"}; cursorCanvasOverrideSorting={cursorCanvas?.overrideSorting.ToString() ?? "null"}; editorCanvasOrder={EditorCanvasSortingOrder}; previewMode={_previewMode}");
+    }
+
+    private void LogImmediateCursorUpdated(CursorVisualMode mode, string targetMode, float diameter, int triangleIndex, Vector2 uv, string fallbackReason, Rect drawRect, Texture2D texture)
+    {
+        var key = $"mode={mode}|tool={_tool}|source={_pointerSource}|target={targetMode}|brush={Mathf.RoundToInt(_brushSize)}|diameter={diameter:0.#}|tri={triangleIndex}|uv={uv.x:0.###},{uv.y:0.###}|fallback={fallbackReason}";
+        if (Time.unscaledTime - _lastDynamicCursorLogTime < 0.75f && string.Equals(key, _lastDynamicCursorLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastDynamicCursorLogTime = Time.unscaledTime;
+        _lastDynamicCursorLogKey = key;
+        DrawableSuitsDiagnostics.Info($"ImmediateCursorUpdated: {key}; canPaint={_canPaint}; overPanel={IsCursorOverEditorPanel()}; overPreview={IsCursorOverPreviewViewport()}; screenCursor={_cursor}; imguiRect={drawRect}; texture={texture?.name ?? "null"}:{texture?.width.ToString() ?? "null"}x{texture?.height.ToString() ?? "null"}; guiDepth={int.MinValue}; systemCursorVisible={Cursor.visible}; cursorLock={Cursor.lockState}; previewMode={_previewMode}");
+    }
+
+    private void LogImmediateCursorDrawSkipped(string reason)
+    {
+        var key = reason ?? "unknown";
+        if (Time.unscaledTime - _lastImmediateCursorSkipLogTime < 1.5f && string.Equals(key, _lastImmediateCursorSkipLog, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastImmediateCursorSkipLogTime = Time.unscaledTime;
+        _lastImmediateCursorSkipLog = key;
+        DrawableSuitsDiagnostics.Warn($"ImmediateCursorDrawSkipped: reason={key}; isOpen={_isOpen}; eventType={Event.current?.type.ToString() ?? "null"}; cursor={_cursor}; screen={Screen.width}x{Screen.height}; tool={_tool}; pointerSource={_pointerSource}");
     }
 
     private void LogCursorCanvasState(string context)

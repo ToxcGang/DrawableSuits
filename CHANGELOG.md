@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.19
+
+- Replaced the unreliable UGUI cursor canvas with an immediate-mode overlay cursor drawn through `OnGUI`.
+- Kept dynamic Paint and Erase brush rings plus dot-mode cursor behavior without relying on Canvas, Image, CanvasScaler, sorting order, EventSystem, or raycasters.
+- Hid the native Unity cursor while the editor is open so the immediate cursor is the only editor pointer.
+- Added `ImmediateCursorUpdated` and `ImmediateCursorDrawSkipped` diagnostics for the new cursor renderer.
+
 ## 0.5.18
 
 - Fixed the invisible dynamic cursor caused by assigning the cursor canvas sorting order above Unity's safe signed range.
