@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.25
+
+- Made the UV texture panel visible alongside the third-person editor instead of requiring a normal view toggle.
+- Added target-based input routing so hovering the UV panel edits the texture panel while hovering the world edits the third-person suit.
+- Kept texture-only fallback behavior for `StartInUvFallbackMode` and failed third-person setup.
+- Added `TexturePanel[...]` diagnostics for UV panel assignment and input target distinction.
+
 ## 0.5.24
 
 - Moved the UV fallback preview into a reserved right-column slot so it no longer covers the color picker or brush controls.

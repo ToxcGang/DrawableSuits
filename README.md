@@ -15,7 +15,7 @@ DrawableSuits is a Lethal Company v81 BepInEx mod that lets players draw on suit
 - Emergency open shortcut: `F10`, which opens the editor and does not toggle it closed.
 - Controller support: left stick moves the editor cursor, `A` clicks exactly the UI control under the cursor, right trigger paints only, right stick/bumpers orbit the camera, D-pad up/down zooms, `Y` cycles tools, `X` undoes, and Start saves.
 - Direct surface painting: the editor bakes a hidden mesh collider from the local player model and paints by raycasting from the third-person camera to suit UV coordinates.
-- UV fallback mode: press `Use UV Fallback` if third-person setup fails; it shows the full editable suit texture.
+- Always-visible UV texture panel: while third-person editing is active, the right-column texture panel stays visible and editable without toggling views. Texture-only fallback is still available for diagnostics or third-person setup failures.
 - PNG/JPG decals from `BepInEx/config/DrawableSuits/Decals`. The in-game OS file dialog is disabled for stability in Gale/Unity.
 - Reusable saved designs stored as JSON metadata plus PNG texture files.
 - Compact lossless `DSUIT2:` design codes for copy/paste import and export between profiles or players, with legacy `DSUIT1:` import compatibility.
@@ -41,6 +41,7 @@ Keyboard and mouse:
 - Eyedropper: click the `Eyedropper` UI button, then left-click the suit to sample that texture color. It returns to the previous tool after one successful sample.
 - Mirror: click the `Mirror` UI button to duplicate paint, erase, fill, decal stamps, and text stamps onto the opposite suit surface.
 - Export Code / Import Code: use the design code panel to copy the current editable texture as a compact `DSUIT2:` code or paste a shared `DSUIT2:` or legacy `DSUIT1:` code into the current suit.
+- UV texture panel: move the cursor over the right-column texture panel to paint, erase, fill, stamp decals/text, or sample colors directly on the UV layout while the third-person view remains active.
 - Right mouse: orbit the third-person editor camera.
 - Mouse wheel: zoom the third-person camera.
 - Ctrl + mouse wheel: change brush size.
@@ -103,7 +104,7 @@ The BepInEx config file controls:
 - Undo history size.
 - Multiplayer sync enable/disable.
 - Max sync payload size and chunk size.
-- `StartInUvFallbackMode`, disabled by default, opens directly into the old UV fallback view.
+- `StartInUvFallbackMode`, disabled by default, opens directly into texture-only UV panel mode for diagnostics.
 - `ThirdPersonCameraDistance`, the default third-person editor camera distance.
 - `ApplyLocalFirstPersonArms`, disabled by default, is experimental and allows edited materials on local first-person arms/body outside the editor.
 - `AutoDisableBrokenJetpackWarningLateUpdatePatch`, enabled by default, disables only the broken JetpackWarning `PlayerControllerB.LateUpdate` postfix after repeated null-reference errors are detected.
@@ -116,14 +117,15 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.24 behavior:
+Expected 0.5.25 behavior:
 
 - Opening the editor shows a compact side overlay and a third-person camera view of the local player.
 - The diagnostics text should show `Preview mode: WorldThirdPerson` when the default path succeeds.
+- The UV texture panel is visible at the same time as the third-person suit and can be edited directly by moving the cursor over it.
 - The visible editor model is `DrawableSuitsWorldAvatarProxy`, a baked suit/body proxy on an isolated layer, not the live first-person local rig. First-person helmet/viewmodel renderers are hidden during editing and restored on close.
 - Normal session startup should log `SessionSafetyCheck` with `EditorOpen=False`, no active DrawableSuits cameras, `Camera.main` state, local player state, prompt context, and `jetpackWarningGuard` status.
-- If third-person setup fails, the editor falls back to `TextureFallback` and logs the reason.
-- UV fallback shows the editable texture in a reserved right-column preview slot below the decal list. It should not cover the color picker, brush controls, tools, design controls, or saved-design rows.
+- If third-person setup fails, the editor falls back to texture-only `TextureFallback` and logs the reason.
+- The UV texture panel shows the editable texture in a reserved right-column preview slot below the decal list. It should not cover the color picker, brush controls, tools, design controls, or saved-design rows.
 - Decal and saved-design rows are explicit anchored buttons, not ScrollRect/layout rows.
 - Controller right trigger paints only. Camera zoom uses mouse wheel or controller D-pad up/down.
 - Active edited textures are per player/client, not global per suit type.
@@ -136,27 +138,27 @@ Expected 0.5.24 behavior:
 - The decal section has one `Refresh Decals` button. It refreshes decal and save rows and shows only a short status line.
 - In Decal mode with a selected decal, hovering over the suit shows a translucent preview and status `Previewing decal. Click/RT to stamp.`
 - Decal placement is single-shot: holding left mouse or RT places one decal until the input is released and pressed again.
-- Third-person Decal preview and stamping project onto the visible suit surface and fill between valid projected samples, so decals avoid both UV-island wrapping and small suit-background cracks on curved geometry. UV fallback keeps direct flat UV decal stamping.
+- Third-person Decal preview and stamping project onto the visible suit surface and fill between valid projected samples, so decals avoid both UV-island wrapping and small suit-background cracks on curved geometry. The UV panel keeps direct flat UV decal stamping.
 - The editor cursor is dynamic and rendered as a top-level non-raycastable graphic inside the visible editor canvas: Paint and Erase show a hollow brush ring sized to the current editable target, while UI hover, invalid targets, Decal, Text, Eyedropper, and normal navigation show a small white dot.
 - The old filled UV brush indicator and world-space sphere marker are kept hidden, so there should not be a colored square or blob following the cursor.
 - In Text mode, the text input uses Unity's built-in Arial font, accepts one line up to 64 characters, and shows `Previewing text. Click/RT to stamp.` when the cursor is over a valid suit target.
 - Text stamps are generated as transparent alpha-mask textures and tinted with the current brush color/opacity, so they should not stamp a black rectangle behind the letters.
 - In third-person mode, Text stamps project onto the visible suit surface and skip glyph pixels that fall off the suit instead of wrapping them through unrelated UV islands.
 - Third-person Text should read left-to-right from the editor camera. Mirrored Text should only appear when the UI-only `Mirror` button is enabled.
-- UV fallback keeps direct flat UV Text stamping for texture-layout editing.
+- The UV panel keeps direct flat UV Text stamping for texture-layout editing.
 - Text is baked into the suit texture after stamping. It is not an editable layer after placement.
 - The `Fill` button is a UI-only tool. It flood-fills the contiguous same-color region under the cursor using the current brush color and opacity.
 - Fill is single-shot: holding left mouse or controller RT fills once until the input is released and pressed again.
 - The Fill Tolerance slider appears when Fill is active. Lower tolerance fills tighter matching regions; higher tolerance accepts more color variation.
 - `Export Code` copies a compact lossless `DSUIT2:` code to the clipboard and fills the design code field. `Import Code` validates a pasted `DSUIT2:` or legacy `DSUIT1:` code and loads it into the current suit without auto-saving, broadcasting, or resetting the third-person camera.
-- UV fallback mode shows a non-interactive rotated decal preview over the texture panel.
+- The UV panel shows a non-interactive rotated decal preview over the texture panel.
 - The `Mirror` button is a UI-only modifier. When it is orange, paint, erase, fill, decal stamps, and text stamps use a surface-map mirror target on the opposite side of the baked suit mesh in one undo action.
 - Mirrored decal previews show both the primary and mirrored decal. The mirrored decal is horizontally flipped and uses inverse rotation.
-- UV fallback also uses the mesh mirror map when the clicked UV maps back to a suit triangle. If no mirror target is available, DrawableSuits applies the primary edit only and shows a short status.
+- The UV panel also uses the mesh mirror map when the clicked UV maps back to a suit triangle. If no mirror target is available, DrawableSuits applies the primary edit only and shows a short status.
 - The `Eyedropper` button is a UI-only one-shot tool. It samples the editable suit texture at the cursor hit point, updates the swatch, color picker, hex field, and brush color, then returns to the previous Paint, Erase, or Decal tool.
 - Eyedropper does not create undo entries and Mirror does not affect sampling.
-- The part picker is removed. Third-person mode always shows the full avatar proxy, and UV fallback always shows the full editable suit texture.
-- Paint and Erase in third-person mode project onto the visible suit surface and fill between valid projected samples, so brush strokes avoid UV-island cutoffs while still guarding against unrelated UV island bleeding. UV fallback keeps direct flat UV brush painting.
+- The part picker is removed. Third-person mode always shows the full avatar proxy, and the UV panel always shows the full editable suit texture.
+- Paint and Erase in third-person mode project onto the visible suit surface and fill between valid projected samples, so brush strokes avoid UV-island cutoffs while still guarding against unrelated UV island bleeding. The UV panel keeps direct flat UV brush painting.
 - Paint, erase, decal preview, and decal stamping operate on the full editable texture.
 - Active editor diagnostics report full proxy mesh/collider state through `WorldAvatarProxy updated`; `PartClassifierBuilt` should not appear during normal editor use.
 
@@ -175,11 +177,11 @@ Troubleshooting:
 - If loading a design or switching suits resets the third-person camera, confirm the installed package is 0.4.7 or newer and check for `World camera state preserved` diagnostics.
 - If the color picker does not update paint color, check the swatch, editable hex field, and `DrawableColorPickerBuilt` diagnostics. Hex input accepts `#RRGGBB` or `RRGGBB`.
 - If right trigger zooms the third-person camera, confirm the installed package is 0.4.4 or newer. In 0.4.4, right trigger is paint-only and D-pad up/down controls controller zoom.
-- If UV fallback shows a second colored cursor, confirm the installed package is 0.4.4 or newer. The old filled brush indicator is disabled because it looked like another cursor.
+- If the UV panel or texture-only fallback shows a second colored cursor, confirm the installed package is 0.4.4 or newer. The old filled brush indicator is disabled because it looked like another cursor.
 - If editing one player changes every other player wearing the same skin, confirm the installed package is 0.4.4 or newer. Active edits now sync with owner client IDs and do not mutate suit rack/global suit materials.
 - If you cannot see the local suit in third person, check `diagnostics.log` for `WorldThirdPerson setup`, `WorldAvatarProxy updated`, and `WorldEditorCamera updated`.
 - If painting misses the suit, check `PaintAttempt` entries for `world paint input`, UV coordinates, and whether the cursor is over the editor panel.
-- If Eyedropper does not sample a color, check `EyedropperMiss` entries for whether the cursor was over the visible suit or UV preview. A successful sample logs `EyedropperSampled` with UV, pixel, sampled hex color, and return tool.
+- If Eyedropper does not sample a color, check `EyedropperMiss` entries for whether the cursor was over the visible suit or UV panel. A successful sample logs `EyedropperSampled` with UV, pixel, sampled hex color, and return tool.
 - If Text does not preview or stamp, check that the text field is not empty, then search `diagnostics.log` for `TextStampRendered`, `TextPreviewUpdated`, `TextPreviewHidden`, `TextStampCommitted`, or `TextStampSkipped`.
 - If Text stamps with a black rectangle, confirm the installed package is 0.5.10 or newer. `TextStampRendered` should report `alphaMode=luminance`, glyph bounds, and a trimmed final texture size.
 - If third-person Text drops side letters, confirm the installed package is 0.5.11 or newer and check `TextSurfacePreviewUpdated`, `TextSurfaceStampCommitted`, or `TextSurfaceStampSkipped` for written and skipped glyph-pixel counts.
@@ -188,10 +190,10 @@ Troubleshooting:
 - If third-person decals show small suit-background cracks through the decal, confirm the installed package is 0.5.15 or newer and check the same decal surface diagnostics for sample, hit, rasterized-cell, seam-skip, off-suit, and written-pixel counts. High seam-skip counts mean DrawableSuits is intentionally avoiding UV island bleeding.
 - If Paint or Erase strokes cut off on third-person suit seams, confirm the installed package is 0.5.22 or newer and check `BrushSurfaceStrokeApplied`, `BrushSurfaceStrokeSkipped`, and `BrushSurfaceProjectionWarning` diagnostics for sample, hit, rasterized-cell, seam-skip, off-suit, and written-pixel counts. High seam-skip counts mean DrawableSuits is intentionally avoiding UV island bleeding.
 - If Fill affects too much or too little of the suit, adjust Fill Tolerance and check `FillBucketApplied` diagnostics for seed color, tolerance, checked pixel count, matched pixels, written pixels, and mirror target. Fill is texture-contiguous, so separated UV islands may require separate fills.
-- If UV fallback covers the color picker or other controls, confirm the installed package is 0.5.24 or newer and check `TexturePreview[ToggleUvFallback]` for the preview viewport rect, sibling index, and anchored position.
+- If the UV panel covers the color picker or other controls, confirm the installed package is 0.5.25 or newer and check `TexturePanel[...]` diagnostics for the preview viewport rect, sibling index, and anchored position.
 - If the cursor is missing, confirm the installed package is 0.5.21 or newer and check `CanvasCursorBuilt`, `CanvasCursorUpdated`, or `CanvasCursorHidden` diagnostics. The editor now draws the cursor directly inside the same UGUI canvas as the visible editor controls.
 - If the cursor is still a filled square or colored world blob, confirm the installed package is 0.5.21 or newer and check `CanvasCursorUpdated` diagnostics. Paint and Erase should use `mode=BrushRing`; Decal, Text, Eyedropper, UI hover, and invalid targets should use `mode=Dot`.
-- If the Paint or Erase ring size looks wrong, check `CanvasCursorUpdated` for `target=WorldThirdPerson` or `target=TextureFallback`, the computed diameter, hit triangle, UV, canvas-local position, and any fallback reason.
+- If the Paint or Erase ring size looks wrong, check `CanvasCursorUpdated` for `target=WorldThirdPerson`, `target=TexturePanel`, or `target=TextureFallback`, the computed diameter, hit triangle, UV, canvas-local position, and any fallback reason.
 - If the controller cursor does not line up with the visible cursor, check `CanvasCursorUpdated` and the virtual cursor diagnostics. The visible cursor follows DrawableSuits' virtual cursor directly instead of warping the OS mouse cursor.
 - If importing a design code resets the third-person camera, confirm the installed package is 0.5.14 or newer and check `DesignCodeImported` plus `World camera state preserved` diagnostics.
 - If a design code does not import, confirm it starts with `DSUIT2:` or `DSUIT1:` and check `DesignCodeImportFailed` diagnostics for prefix, Base64Url, decompression, binary/JSON payload, PNG, or texture-size validation errors. DrawableSuits never logs the full code.
@@ -212,4 +214,4 @@ Troubleshooting:
 - Share codes can still be long because they embed PNG image data. `DSUIT2:` removes the older inner Base64 PNG-in-JSON overhead, but it is still lossless and does not downscale or reduce quality.
 - Very large decal images are resized to the configured maximum texture size.
 - Multiplayer sync is designed for applied designs, not every brush stroke.
-- The old UV fallback view remains available for debugging and edge cases.
+- Texture-only fallback remains available for debugging and edge cases.

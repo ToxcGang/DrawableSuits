@@ -3059,6 +3059,10 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             UseTexturePreview("UpdateUiState", false);
         }
+        else
+        {
+            RefreshTexturePanelPreview("UpdateUiState", false);
+        }
 
         var hasEditableTexture = _selectedSuitId >= 0 && DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId) != null;
         SetInteractable(_paintButton, _canPaint);
@@ -3074,7 +3078,12 @@ internal sealed class SuitEditorController : MonoBehaviour
         SetInteractable(_importCodeButton, hasEditableTexture);
         SetInteractable(_resetButton, hasEditableTexture);
         SetInteractable(_loadButton, hasEditableTexture && _selectedDesignIndex >= 0);
-        SetButtonLabel(_uvFallbackButton, _uvFallbackMode ? "Use Third Person" : "Use UV Fallback");
+        if (_uvFallbackButton != null)
+        {
+            var showFallbackButton = _uvFallbackMode || !IsWorldThirdPersonMode;
+            _uvFallbackButton.gameObject.SetActive(showFallbackButton);
+            SetButtonLabel(_uvFallbackButton, _uvFallbackMode ? "Use Third Person" : "UV Panel Active");
+        }
 
         UpdateToolButtons();
         UpdateLabels();
@@ -3097,7 +3106,8 @@ internal sealed class SuitEditorController : MonoBehaviour
             $"Tool: {_tool}",
             $"Mirror enabled: {_mirrorEnabled}",
             $"Mirror map: {(_mirrorSurfaceMap != null ? $"{_mirrorSurfaceMap.TriangleCount} tris" : "none")}",
-            $"UV fallback mode: {_uvFallbackMode}",
+            $"Texture-only mode: {_uvFallbackMode}",
+            $"UV panel visible: {_previewViewportRect != null && _previewViewportRect.gameObject.activeSelf}",
             $"World camera found: {_worldEditorCamera != null}",
             $"World avatar proxy found: {_worldAvatarRenderer != null}",
             $"World source renderer: {_worldSourceRendererSummary}",
@@ -4316,6 +4326,19 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         if (IsWorldThirdPersonMode)
         {
+            if (IsCursorOverPreviewViewport())
+            {
+                targetMode = "TexturePanel";
+                if (!TryGetTexturePreviewUv(_cursor, out uv))
+                {
+                    fallbackReason = "texture panel uv miss";
+                    return false;
+                }
+
+                diameter = ComputeUvFallbackBrushDiameter(texture);
+                return true;
+            }
+
             targetMode = "WorldThirdPerson";
             if (IsCursorOverEditorPanel())
             {
@@ -4789,6 +4812,19 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
+        if (IsWorldThirdPersonMode && IsCursorOverPreviewViewport())
+        {
+            if (!TryGetTexturePreviewUv(_cursor, out var panelUv))
+            {
+                HideDecalPlacementPreview("texture panel miss", false);
+                return;
+            }
+
+            var panelMirrorTarget = ResolveUvMirrorTarget(texture, panelUv, false, "TexturePanel");
+            ShowUvPlacementPreview(texture, panelUv, panelMirrorTarget, stampTexture, "TexturePanel");
+            return;
+        }
+
         if (IsWorldThirdPersonMode)
         {
             if (IsCursorOverEditorPanel() || !TryGetWorldPaintHit(out var hit, false))
@@ -4815,7 +4851,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         var uvMirrorTarget = ResolveUvMirrorTarget(texture, uv, false);
-        ShowUvPlacementPreview(texture, uv, uvMirrorTarget, stampTexture);
+        ShowUvPlacementPreview(texture, uv, uvMirrorTarget, stampTexture, "TextureFallback");
     }
 
     private bool IsPlacementTool(EditorTool tool)
@@ -5000,7 +5036,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
     }
 
-    private void ShowUvPlacementPreview(Texture2D sourceTexture, Vector2 uv, MirrorPaintTarget mirrorTarget, Texture2D stampTexture)
+    private void ShowUvPlacementPreview(Texture2D sourceTexture, Vector2 uv, MirrorPaintTarget mirrorTarget, Texture2D stampTexture, string mode)
     {
         if (_uvDecalPreviewRect == null || _uvDecalPreviewImage == null || _previewViewportRect == null || sourceTexture == null || stampTexture == null)
         {
@@ -5023,9 +5059,9 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         _decalPreviewVisible = true;
         _placementPreviewTool = _tool;
-        _lastDecalPreviewKey = BuildDecalPreviewKey("TextureFallback", sourceTexture, uv, mirrorTarget);
+        _lastDecalPreviewKey = BuildDecalPreviewKey(mode, sourceTexture, uv, mirrorTarget);
         SetPlacementPreviewStatus(mirrorTarget);
-        LogPlacementPreviewUpdated("TextureFallback", sourceTexture, uv, mirrorTarget, stampTexture, false);
+        LogPlacementPreviewUpdated(mode, sourceTexture, uv, mirrorTarget, stampTexture, false);
     }
 
     private void ConfigureUvPlacementPreview(RectTransform previewRect, RawImage previewImage, Texture2D sourceTexture, Texture2D stampTexture, Vector2 uv, bool mirrored)
@@ -5134,9 +5170,9 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         RestoreWorldDecalPreviewMaterial();
-        if (_usingTexturePreview && wasVisible)
+        if (wasVisible)
         {
-            UseTexturePreview("decal preview hidden", false);
+            RefreshTexturePanelPreview("placement preview hidden", false);
         }
         _decalPreviewVisible = false;
         if (_statusMessage.StartsWith("Previewing decal", StringComparison.OrdinalIgnoreCase)
@@ -5581,9 +5617,9 @@ internal sealed class SuitEditorController : MonoBehaviour
         return target;
     }
 
-    private MirrorPaintTarget ResolveUvMirrorTarget(Texture2D texture, Vector2 uv, bool allowStatus)
+    private MirrorPaintTarget ResolveUvMirrorTarget(Texture2D texture, Vector2 uv, bool allowStatus, string mode = "TextureFallback")
     {
-        var target = CreateMirrorTargetShell("TextureFallback");
+        var target = CreateMirrorTargetShell(mode);
         if (!target.Enabled || texture == null)
         {
             return target;
@@ -6116,6 +6152,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         if (IsWorldThirdPersonMode)
         {
+            var cursorOverTexturePanel = IsCursorOverPreviewViewport();
             if (gamepad != null)
             {
                 if (gamepad.leftShoulder.isPressed)
@@ -6141,13 +6178,23 @@ internal sealed class SuitEditorController : MonoBehaviour
                 }
             }
 
+            var worldScroll = DrawableSuitsInput.MouseScrollY();
+            if (cursorOverTexturePanel && Mathf.Abs(worldScroll) > 0.01f)
+            {
+                _brushSize = Mathf.Clamp(_brushSize + worldScroll * 2f, 1f, 96f);
+                if (_brushSizeSlider != null)
+                {
+                    _brushSizeSlider.SetValue(_brushSize, false);
+                }
+                return;
+            }
+
             if (!IsCursorOverEditorPanel() && DrawableSuitsInput.IsRightMousePressed())
             {
                 _worldCameraYaw += DrawableSuitsInput.MouseDeltaX() * 3f;
                 _worldCameraPitch -= DrawableSuitsInput.MouseDeltaY() * 2f;
             }
 
-            var worldScroll = DrawableSuitsInput.MouseScrollY();
             if (!IsCursorOverEditorPanel() && Mathf.Abs(worldScroll) > 0.01f)
             {
                 if (DrawableSuitsInput.IsKeyPressed(Key.LeftCtrl) || DrawableSuitsInput.IsKeyPressed(Key.RightCtrl))
@@ -6228,12 +6275,23 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
+        if (IsWorldThirdPersonMode && IsCursorOverPreviewViewport())
+        {
+            HandleTexturePanelPaintingInput("TexturePanel");
+            return;
+        }
+
         if (IsWorldThirdPersonMode)
         {
             HandleWorldPaintingInput();
             return;
         }
 
+        HandleTexturePanelPaintingInput("TextureFallback");
+    }
+
+    private void HandleTexturePanelPaintingInput(string mode)
+    {
         var mousePainting = DrawableSuitsInput.IsLeftMousePressed();
         var gamepadPainting = Gamepad.current?.rightTrigger.ReadValue() > 0.55f;
         var painting = mousePainting || gamepadPainting;
@@ -6258,22 +6316,22 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         if (_tool == EditorTool.Eyedropper)
         {
-            HandleEyedropperInput(texture, overPreview, uv, "TextureFallback");
+            HandleEyedropperInput(texture, overPreview, uv, mode);
             return;
         }
 
-        var mirrorTarget = overPreview && texture != null ? ResolveUvMirrorTarget(texture, uv, false) : CreateMirrorTargetShell("TextureFallback");
-        LogPaintAttemptIfNeeded("paint input", overPreview, uvAvailable, uv, texture, mirrorTarget, !_strokeActive);
+        var mirrorTarget = overPreview && texture != null ? ResolveUvMirrorTarget(texture, uv, false, mode) : CreateMirrorTargetShell(mode);
+        LogPaintAttemptIfNeeded($"{mode} paint input", overPreview, uvAvailable, uv, texture, mirrorTarget, !_strokeActive);
 
         if (_tool == EditorTool.FillBucket)
         {
-            HandleFillBucketInput(texture, overPreview, uv, mirrorTarget, "TextureFallback");
+            HandleFillBucketInput(texture, overPreview, uv, mirrorTarget, mode);
             return;
         }
 
         if (IsPlacementTool(_tool))
         {
-            HandleSinglePlacementStampInput(texture, overPreview, uv, mirrorTarget, "TextureFallback");
+            HandleSinglePlacementStampInput(texture, overPreview, uv, mirrorTarget, mode);
             return;
         }
 
@@ -6549,10 +6607,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             _previewMaterial.mainTexture = texture;
         }
         DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, false);
-        if (_usingTexturePreview)
-        {
-            UseTexturePreview("FillBucket", false);
-        }
+        RefreshTexturePanelPreview("FillBucket", false);
 
         if (_mirrorEnabled && !mirrorTarget.Available)
         {
@@ -6795,6 +6850,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         texture.Apply(false, false);
         InvalidateDecalPreview("texture changed by decal surface stamp");
         DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, false);
+        RefreshTexturePanelPreview("WorldDecalStamp", false);
         if (_mirrorEnabled && !mirrorTarget.Available)
         {
             SetStatus("Mirror target not found; applied primary only.", false);
@@ -6850,6 +6906,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         texture.Apply(false, false);
         InvalidateDecalPreview("texture changed by text surface stamp");
         DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, false);
+        RefreshTexturePanelPreview("WorldTextStamp", false);
         if (_mirrorEnabled && !mirrorTarget.Available)
         {
             SetStatus("Mirror target not found; applied primary only.", false);
@@ -7041,10 +7098,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             _previewMaterial.mainTexture = texture;
         }
         DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, false);
-        if (_usingTexturePreview)
-        {
-            UseTexturePreview("PaintAtCursor", false);
-        }
+        RefreshTexturePanelPreview("PaintAtCursor", false);
 
         if (_mirrorEnabled && !mirrorTarget.Available)
         {
@@ -7135,10 +7189,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             _previewMaterial.mainTexture = texture;
         }
         DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, false);
-        if (_usingTexturePreview)
-        {
-            UseTexturePreview("PaintWorldSurfaceBrush", false);
-        }
+        RefreshTexturePanelPreview("PaintWorldSurfaceBrush", false);
 
         if (_mirrorEnabled && !mirrorTarget.Available)
         {
@@ -8325,10 +8376,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         texture.Apply(false, false);
         DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, false);
         InvalidateDecalPreview("undo");
-        if (_usingTexturePreview)
-        {
-            UseTexturePreview("Undo", false);
-        }
+        RefreshTexturePanelPreview("Undo", false);
     }
 
     private void Redo()
@@ -8344,10 +8392,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         texture.Apply(false, false);
         DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, false);
         InvalidateDecalPreview("redo");
-        if (_usingTexturePreview)
-        {
-            UseTexturePreview("Redo", false);
-        }
+        RefreshTexturePanelPreview("Redo", false);
     }
 
     private static void TrimOldest(Stack<Color32[]> stack)
@@ -8693,7 +8738,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private void ToggleUvFallback()
     {
         _uvFallbackMode = !_uvFallbackMode;
-        DrawableSuitsDiagnostics.Info($"UV fallback toggled. enabled={_uvFallbackMode}");
+        DrawableSuitsDiagnostics.Info($"Texture-only fallback toggled. enabled={_uvFallbackMode}");
         TryRebuildPreviewForCurrentReadiness("ToggleUvFallback");
         RefreshEditorReadiness("after UV fallback toggle");
         UpdateUiState();
@@ -8730,12 +8775,13 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             DestroyPreview();
             UseTexturePreview(context, true);
-            SetStatus("Ready. UV fallback preview is active. Full-suit editing.", false);
+            SetStatus("Ready. Texture-only UV panel is active. Full-suit editing.", false);
             return;
         }
 
         if (SetupWorldThirdPersonPreview(context, preserveCamera ? preservedCameraState : default))
         {
+            RefreshTexturePanelPreview(context, true);
             return;
         }
 
@@ -8778,7 +8824,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             _worldPaintLayer = SelectWorldPaintLayer();
             _worldSourceRenderer = source;
             _worldSourceRendererSummary = DescribeRendererCandidate(source, "selected");
-            SetUvFallbackVisible(false);
+            RefreshTexturePanelPreview($"{context}:world texture panel", true);
             CaptureAndHideLocalPlayerRenderers(player, source);
 
             _worldEditorCameraObject = new GameObject("DrawableSuitsThirdPersonCamera");
@@ -8832,7 +8878,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             }
             _hasPreviewCollider = _worldPaintCollider != null;
             _canPaint = texture != null && _worldPreviewReady;
-            SetStatus(_canPaint ? "Ready. Third-person paint mode is active." : "Third-person editor opened, but paint proxy is not ready.", !_canPaint);
+            SetStatus(_canPaint ? "Ready. Third-person and UV panel are active." : "Third-person editor opened, but paint proxy is not ready.", !_canPaint);
             DrawableSuitsDiagnostics.Info($"WorldThirdPerson setup complete. context={context}; ready={_worldPreviewReady}; player={player.name}; selectedRenderer={_worldSourceRendererSummary}; hiddenRenderers={_rendererRestoreStates.Count}; layer={_worldPaintLayer}; camera={DrawableSuitsPlugin.DescribeUnityObject(_worldEditorCamera)}; cameraMask={_worldEditorCamera.cullingMask}; avatarProxy={DrawableSuitsPlugin.DescribeUnityObject(_worldPaintProxyObject)}; proxyRenderer={DrawableSuitsPlugin.DescribeUnityObject(_worldAvatarRenderer)}; proxyMaterial={_worldAvatarRenderer?.sharedMaterial?.name ?? "null"}; proxyCollider={_worldPaintCollider != null}; editable={DescribeEditableTexture()}");
             return _worldPreviewReady;
         }
@@ -9813,11 +9859,18 @@ internal sealed class SuitEditorController : MonoBehaviour
     private void UseTexturePreview(string context, bool forceLog)
     {
         var texture = _selectedSuitId >= 0 ? DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId) : null;
-        var assignedTexture = texture != null ? (Texture)texture : EnsureCheckerTexture();
         _usingTexturePreview = true;
         _previewMode = texture != null ? "TextureFallback" : "TextureFallbackNoEditableTexture";
         _canPaint = texture != null;
-        SetUvFallbackVisible(true);
+        RefreshTexturePanelPreview(context, forceLog);
+    }
+
+    private bool RefreshTexturePanelPreview(string context, bool forceLog)
+    {
+        var texture = _selectedSuitId >= 0 ? DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId) : null;
+        var assignedTexture = texture != null ? (Texture)texture : EnsureCheckerTexture();
+        var visible = texture != null || _usingTexturePreview || _uvFallbackMode;
+        SetUvFallbackVisible(visible);
 
         if (_previewImage != null)
         {
@@ -9827,12 +9880,15 @@ internal sealed class SuitEditorController : MonoBehaviour
             _previewImage.raycastTarget = true;
         }
 
-        var assignment = $"{_previewMode}; assigned={assignedTexture?.name ?? "null"}; editable={DescribeEditableTexture()}; rawImage={DescribePreviewImageTexture()}";
+        var panelMode = IsWorldThirdPersonMode ? "TexturePanel" : _previewMode;
+        var assignment = $"{panelMode}; visible={visible}; assigned={assignedTexture?.name ?? "null"}; editable={DescribeEditableTexture()}; rawImage={DescribePreviewImageTexture()}";
         if (forceLog || !string.Equals(_lastPreviewAssignmentLog, assignment, StringComparison.Ordinal))
         {
-            DrawableSuitsDiagnostics.Info($"TexturePreview[{context}]: {assignment}; viewport={(_previewViewportRect != null ? _previewViewportRect.rect.ToString() : "null")}; siblingIndex={(_previewViewportRect != null ? _previewViewportRect.GetSiblingIndex().ToString() : "null")}; anchoredPosition={(_previewViewportRect != null ? _previewViewportRect.anchoredPosition.ToString() : "null")}");
+            DrawableSuitsDiagnostics.Info($"TexturePanel[{context}]: {assignment}; viewport={(_previewViewportRect != null ? _previewViewportRect.rect.ToString() : "null")}; siblingIndex={(_previewViewportRect != null ? _previewViewportRect.GetSiblingIndex().ToString() : "null")}; anchoredPosition={(_previewViewportRect != null ? _previewViewportRect.anchoredPosition.ToString() : "null")}");
             _lastPreviewAssignmentLog = assignment;
         }
+
+        return texture != null;
     }
 
     private string DescribeEditableTexture()
