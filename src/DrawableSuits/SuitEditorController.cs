@@ -163,6 +163,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private MeshRenderer _worldAvatarRenderer;
     private SkinnedMeshRenderer _worldSourceRenderer;
     private string _worldSourceRendererSummary = "none";
+    private bool _worldSourceRequiresMeshCleanup;
+    private string _worldSourceValidationSummary = "none";
     private GameObject _worldBrushMarker;
     private Material _worldBrushMarkerMaterial;
     private Material _worldHiddenSubmeshMaterial;
@@ -350,6 +352,54 @@ internal sealed class SuitEditorController : MonoBehaviour
         internal Text Label;
         internal Image Image;
         internal int Index = -1;
+    }
+
+    private sealed class WorldProxyCandidate
+    {
+        internal SkinnedMeshRenderer Renderer;
+        internal int Score;
+        internal string ScoreReason;
+        internal bool Rejected;
+        internal ProxyMeshValidation Validation;
+    }
+
+    private struct ProxyMeshValidation
+    {
+        internal bool Accepted;
+        internal bool RequiresCleanup;
+        internal string Reason;
+        internal string ComponentSummary;
+        internal int ComponentCount;
+        internal int SuspectComponentCount;
+        internal int TriangleCount;
+        internal int VertexCount;
+    }
+
+    private struct ProxyMeshTriangle
+    {
+        internal int A;
+        internal int B;
+        internal int C;
+        internal int SubMesh;
+    }
+
+    private sealed class ProxyMeshComponent
+    {
+        internal int Index;
+        internal int TriangleCount;
+        internal int VertexCount;
+        internal Bounds Bounds;
+        internal List<int> TriangleOrdinals = new();
+        internal HashSet<int> Vertices = new();
+    }
+
+    private sealed class ProxyMeshAnalysis
+    {
+        internal ProxyMeshTriangle[] Triangles;
+        internal ProxyMeshComponent[] Components;
+        internal int TotalTriangles;
+        internal int TotalVertices;
+        internal Bounds Bounds;
     }
 
     private struct MirrorPaintTarget
@@ -8929,41 +8979,86 @@ internal sealed class SuitEditorController : MonoBehaviour
             return null;
         }
 
-        var candidates = new List<SkinnedMeshRenderer>();
-        AddRendererCandidate(candidates, player.thisPlayerModel as SkinnedMeshRenderer);
-        AddRendererCandidate(candidates, player.thisPlayerModelLOD1 as SkinnedMeshRenderer);
-        AddRendererCandidate(candidates, player.thisPlayerModelLOD2 as SkinnedMeshRenderer);
+        var renderers = new List<SkinnedMeshRenderer>();
+        AddRendererCandidate(renderers, player.thisPlayerModel as SkinnedMeshRenderer);
+        AddRendererCandidate(renderers, player.thisPlayerModelLOD1 as SkinnedMeshRenderer);
+        AddRendererCandidate(renderers, player.thisPlayerModelLOD2 as SkinnedMeshRenderer);
 
         var childRenderers = player.GetComponentsInChildren<SkinnedMeshRenderer>(true);
         for (var i = 0; i < childRenderers.Length; i++)
         {
-            AddRendererCandidate(candidates, childRenderers[i]);
+            AddRendererCandidate(renderers, childRenderers[i]);
         }
 
-        SkinnedMeshRenderer best = null;
-        var bestScore = int.MinValue;
-        for (var i = 0; i < candidates.Count; i++)
+        var candidates = new List<WorldProxyCandidate>();
+        WorldProxyCandidate highestScored = null;
+        for (var i = 0; i < renderers.Count; i++)
         {
-            var renderer = candidates[i];
+            var renderer = renderers[i];
             var score = ScoreSuitRenderer(player, renderer, out var reason, out var rejected);
-            DrawableSuitsDiagnostics.Info($"World renderer candidate: {DescribeRendererCandidate(renderer, rejected ? "rejected" : "candidate")}; score={score}; reason={reason}");
-            if (!rejected && score > bestScore)
+            var candidate = new WorldProxyCandidate
             {
-                best = renderer;
-                bestScore = score;
+                Renderer = renderer,
+                Score = score,
+                ScoreReason = reason,
+                Rejected = rejected
+            };
+            candidates.Add(candidate);
+            DrawableSuitsDiagnostics.Info($"World renderer candidate: {DescribeRendererCandidate(renderer, rejected ? "rejected" : "candidate")}; score={score}; reason={reason}");
+            if (!rejected && (highestScored == null || score > highestScored.Score))
+            {
+                highestScored = candidate;
             }
         }
 
-        if (best != null)
-        {
-            DrawableSuitsDiagnostics.Info($"World renderer selected: {DescribeRendererCandidate(best, "selected")}; score={bestScore}");
-        }
-        else
+        if (highestScored == null)
         {
             DrawableSuitsDiagnostics.Warn($"No valid world suit renderer found. candidates={candidates.Count}");
+            _worldSourceRequiresMeshCleanup = false;
+            _worldSourceValidationSummary = "none";
+            return null;
         }
 
-        return best;
+        WorldProxyCandidate bestAccepted = null;
+        WorldProxyCandidate bestCleanupFallback = null;
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            var candidate = candidates[i];
+            if (candidate.Rejected)
+            {
+                continue;
+            }
+
+            var lowerLodFallbackAvailable = HasLowerDetailProxyCandidate(candidates, candidate.Renderer);
+            candidate.Validation = ValidateWorldProxyCandidate(candidate.Renderer, lowerLodFallbackAvailable);
+            DrawableSuitsDiagnostics.Info($"WorldProxyMeshValidation: renderer={DescribeRendererCandidate(candidate.Renderer, "candidate")}; score={candidate.Score}; accepted={candidate.Validation.Accepted}; cleanup={candidate.Validation.RequiresCleanup}; reason={candidate.Validation.Reason}; vertices={candidate.Validation.VertexCount}; triangles={candidate.Validation.TriangleCount}; components={candidate.Validation.ComponentCount}; suspectComponents={candidate.Validation.SuspectComponentCount}; componentSummary=[{candidate.Validation.ComponentSummary}]");
+
+            if (candidate.Validation.Accepted)
+            {
+                if (bestAccepted == null || candidate.Score > bestAccepted.Score)
+                {
+                    bestAccepted = candidate;
+                }
+            }
+            else if (candidate.Validation.RequiresCleanup && (bestCleanupFallback == null || candidate.Score > bestCleanupFallback.Score))
+            {
+                bestCleanupFallback = candidate;
+            }
+        }
+
+        var selected = bestAccepted ?? bestCleanupFallback ?? highestScored;
+        _worldSourceRequiresMeshCleanup = selected.Validation.RequiresCleanup;
+        _worldSourceValidationSummary = string.IsNullOrWhiteSpace(selected.Validation.Reason)
+            ? selected.ScoreReason
+            : selected.Validation.Reason;
+
+        if (!ReferenceEquals(selected.Renderer, highestScored.Renderer))
+        {
+            DrawableSuitsDiagnostics.Warn($"WorldProxySourceFallback: initial={DescribeRendererCandidate(highestScored.Renderer, "initial")}; initialScore={highestScored.Score}; selected={DescribeRendererCandidate(selected.Renderer, "selected")}; selectedScore={selected.Score}; reason={_worldSourceValidationSummary}");
+        }
+
+        DrawableSuitsDiagnostics.Info($"World renderer selected: {DescribeRendererCandidate(selected.Renderer, "selected")}; score={selected.Score}; validation={_worldSourceValidationSummary}; cleanup={_worldSourceRequiresMeshCleanup}");
+        return selected.Renderer;
     }
 
     private static void AddRendererCandidate(List<SkinnedMeshRenderer> candidates, SkinnedMeshRenderer renderer)
@@ -9088,6 +9183,631 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         return false;
+    }
+
+    private static bool HasLowerDetailProxyCandidate(List<WorldProxyCandidate> candidates, SkinnedMeshRenderer renderer)
+    {
+        if (renderer == null || renderer.sharedMesh == null)
+        {
+            return false;
+        }
+
+        var vertexCount = renderer.sharedMesh.vertexCount;
+        var rendererBounds = renderer.bounds;
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            var candidate = candidates[i];
+            var other = candidate.Renderer;
+            if (candidate.Rejected || other == null || ReferenceEquals(other, renderer) || other.sharedMesh == null)
+            {
+                continue;
+            }
+
+            var otherVertices = other.sharedMesh.vertexCount;
+            if (otherVertices < 1200 || otherVertices >= vertexCount * 0.9f)
+            {
+                continue;
+            }
+
+            if (!RendererBoundsAreSimilar(rendererBounds, other.bounds))
+            {
+                continue;
+            }
+
+            if (!RendererMaterialNamesOverlap(renderer, other))
+            {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool RendererBoundsAreSimilar(Bounds a, Bounds b)
+    {
+        var aSize = a.size;
+        var bSize = b.size;
+        var aLargest = Mathf.Max(aSize.x, Mathf.Max(aSize.y, aSize.z));
+        var bLargest = Mathf.Max(bSize.x, Mathf.Max(bSize.y, bSize.z));
+        if (aLargest <= 0.001f || bLargest <= 0.001f)
+        {
+            return false;
+        }
+
+        var ratio = bLargest / aLargest;
+        var centerDistance = Vector3.Distance(a.center, b.center);
+        return ratio > 0.55f && ratio < 1.35f && centerDistance < Mathf.Max(1.25f, aLargest * 0.75f);
+    }
+
+    private static bool RendererMaterialNamesOverlap(Renderer a, Renderer b)
+    {
+        var aMaterials = a != null ? a.sharedMaterials : null;
+        var bMaterials = b != null ? b.sharedMaterials : null;
+        if (aMaterials == null || bMaterials == null || aMaterials.Length == 0 || bMaterials.Length == 0)
+        {
+            return true;
+        }
+
+        for (var i = 0; i < aMaterials.Length; i++)
+        {
+            var aName = NormalizeMaterialName(aMaterials[i]);
+            for (var j = 0; j < bMaterials.Length; j++)
+            {
+                if (string.Equals(aName, NormalizeMaterialName(bMaterials[j]), StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static string NormalizeMaterialName(Material material)
+    {
+        if (material == null)
+        {
+            return string.Empty;
+        }
+
+        var name = material.name ?? string.Empty;
+        return name.Replace(" (Instance)", string.Empty, StringComparison.OrdinalIgnoreCase).Trim();
+    }
+
+    private ProxyMeshValidation ValidateWorldProxyCandidate(SkinnedMeshRenderer renderer, bool lowerLodFallbackAvailable)
+    {
+        var validation = new ProxyMeshValidation
+        {
+            Reason = "not baked"
+        };
+
+        if (renderer == null)
+        {
+            validation.Reason = "renderer null";
+            return validation;
+        }
+
+        var mesh = new Mesh { name = "DrawableSuitsProxyValidationMesh" };
+        try
+        {
+            if (!TryBakeRendererMesh(renderer, mesh, out var bakeReason))
+            {
+                validation.Reason = bakeReason;
+                return validation;
+            }
+
+            mesh.RecalculateBounds();
+            validation.VertexCount = mesh.vertexCount;
+            validation.TriangleCount = CountMeshTriangles(mesh);
+            var analysis = AnalyzeProxyMesh(mesh);
+            validation.ComponentCount = analysis.Components.Length;
+            validation.ComponentSummary = DescribeProxyComponents(analysis, 6);
+            var suspectComponents = FindSuspectProxyHelmetComponents(mesh, analysis);
+            validation.SuspectComponentCount = suspectComponents.Count;
+
+            if (IsHighRiskLod1ProxySource(renderer, mesh, lowerLodFallbackAvailable))
+            {
+                validation.Accepted = false;
+                validation.RequiresCleanup = false;
+                validation.Reason = "high-detail LOD1 proxy has a lower-detail compatible fallback; rejecting to avoid baked first-person helmet overlay";
+                return validation;
+            }
+
+            if (suspectComponents.Count > 0)
+            {
+                validation.Accepted = false;
+                validation.RequiresCleanup = true;
+                validation.Reason = $"suspect detached helmet/viewmodel components={suspectComponents.Count}";
+                return validation;
+            }
+
+            validation.Accepted = validation.VertexCount > 0 && validation.TriangleCount > 0;
+            validation.RequiresCleanup = false;
+            validation.Reason = validation.Accepted ? "accepted clean proxy mesh" : "empty proxy mesh";
+            return validation;
+        }
+        catch (Exception ex)
+        {
+            validation.Reason = $"validation exception {ex.GetType().Name}: {ex.Message}";
+            return validation;
+        }
+        finally
+        {
+            Destroy(mesh);
+        }
+    }
+
+    private static bool IsHighRiskLod1ProxySource(SkinnedMeshRenderer renderer, Mesh mesh, bool lowerLodFallbackAvailable)
+    {
+        if (!lowerLodFallbackAvailable || renderer == null || mesh == null)
+        {
+            return false;
+        }
+
+        var path = GetTransformPath(renderer.transform).ToLowerInvariant();
+        var name = renderer.name != null ? renderer.name.ToLowerInvariant() : string.Empty;
+        var isLod1 = path.Contains("lod1") || name.Contains("lod1");
+        return isLod1 && mesh.vertexCount >= 6000;
+    }
+
+    private static bool TryBakeRendererMesh(SkinnedMeshRenderer renderer, Mesh mesh, out string reason)
+    {
+        reason = string.Empty;
+        if (renderer == null || mesh == null)
+        {
+            reason = "renderer or target mesh null";
+            return false;
+        }
+
+        var previousEnabled = renderer.enabled;
+        try
+        {
+            renderer.enabled = true;
+            mesh.Clear();
+            renderer.BakeMesh(mesh, true);
+            if (mesh.vertexCount == 0)
+            {
+                reason = "BakeMesh produced zero vertices";
+                return false;
+            }
+
+            if (CountMeshTriangles(mesh) == 0)
+            {
+                reason = "BakeMesh produced zero triangles";
+                return false;
+            }
+
+            reason = "baked";
+            return true;
+        }
+        finally
+        {
+            renderer.enabled = previousEnabled;
+        }
+    }
+
+    private static int CountMeshTriangles(Mesh mesh)
+    {
+        if (mesh == null)
+        {
+            return 0;
+        }
+
+        var count = 0;
+        var subMeshCount = Mathf.Max(1, mesh.subMeshCount);
+        for (var i = 0; i < subMeshCount; i++)
+        {
+            count += mesh.GetTriangles(i).Length / 3;
+        }
+
+        return count;
+    }
+
+    private static ProxyMeshAnalysis AnalyzeProxyMesh(Mesh mesh)
+    {
+        var empty = new ProxyMeshAnalysis
+        {
+            Triangles = Array.Empty<ProxyMeshTriangle>(),
+            Components = Array.Empty<ProxyMeshComponent>(),
+            Bounds = new Bounds(Vector3.zero, Vector3.zero)
+        };
+        if (mesh == null || mesh.vertexCount == 0)
+        {
+            return empty;
+        }
+
+        var vertices = mesh.vertices;
+        var triangles = new List<ProxyMeshTriangle>();
+        var subMeshCount = Mathf.Max(1, mesh.subMeshCount);
+        for (var subMesh = 0; subMesh < subMeshCount; subMesh++)
+        {
+            var indices = mesh.GetTriangles(subMesh);
+            for (var i = 0; i + 2 < indices.Length; i += 3)
+            {
+                var a = indices[i];
+                var b = indices[i + 1];
+                var c = indices[i + 2];
+                if (a < 0 || b < 0 || c < 0 || a >= vertices.Length || b >= vertices.Length || c >= vertices.Length)
+                {
+                    continue;
+                }
+
+                triangles.Add(new ProxyMeshTriangle
+                {
+                    A = a,
+                    B = b,
+                    C = c,
+                    SubMesh = subMesh
+                });
+            }
+        }
+
+        if (triangles.Count == 0)
+        {
+            empty.Bounds = mesh.bounds;
+            empty.TotalVertices = mesh.vertexCount;
+            return empty;
+        }
+
+        var vertexToTriangles = new List<int>[vertices.Length];
+        for (var i = 0; i < triangles.Count; i++)
+        {
+            AddTriangleForVertex(vertexToTriangles, triangles[i].A, i);
+            AddTriangleForVertex(vertexToTriangles, triangles[i].B, i);
+            AddTriangleForVertex(vertexToTriangles, triangles[i].C, i);
+        }
+
+        var visited = new bool[triangles.Count];
+        var components = new List<ProxyMeshComponent>();
+        var queue = new Queue<int>();
+        for (var i = 0; i < triangles.Count; i++)
+        {
+            if (visited[i])
+            {
+                continue;
+            }
+
+            var component = new ProxyMeshComponent { Index = components.Count };
+            visited[i] = true;
+            queue.Enqueue(i);
+            var boundsInitialized = false;
+            while (queue.Count > 0)
+            {
+                var triangleIndex = queue.Dequeue();
+                var triangle = triangles[triangleIndex];
+                component.TriangleOrdinals.Add(triangleIndex);
+                AddComponentVertex(component, vertices, triangle.A, ref boundsInitialized);
+                AddComponentVertex(component, vertices, triangle.B, ref boundsInitialized);
+                AddComponentVertex(component, vertices, triangle.C, ref boundsInitialized);
+                EnqueueAdjacentTriangles(vertexToTriangles, visited, queue, triangle.A);
+                EnqueueAdjacentTriangles(vertexToTriangles, visited, queue, triangle.B);
+                EnqueueAdjacentTriangles(vertexToTriangles, visited, queue, triangle.C);
+            }
+
+            component.TriangleCount = component.TriangleOrdinals.Count;
+            component.VertexCount = component.Vertices.Count;
+            components.Add(component);
+        }
+
+        return new ProxyMeshAnalysis
+        {
+            Triangles = triangles.ToArray(),
+            Components = components.ToArray(),
+            TotalTriangles = triangles.Count,
+            TotalVertices = vertices.Length,
+            Bounds = mesh.bounds
+        };
+    }
+
+    private static void AddTriangleForVertex(List<int>[] vertexToTriangles, int vertex, int triangle)
+    {
+        var list = vertexToTriangles[vertex];
+        if (list == null)
+        {
+            list = new List<int>();
+            vertexToTriangles[vertex] = list;
+        }
+
+        list.Add(triangle);
+    }
+
+    private static void AddComponentVertex(ProxyMeshComponent component, Vector3[] vertices, int vertex, ref bool boundsInitialized)
+    {
+        if (!component.Vertices.Add(vertex))
+        {
+            return;
+        }
+
+        if (!boundsInitialized)
+        {
+            component.Bounds = new Bounds(vertices[vertex], Vector3.zero);
+            boundsInitialized = true;
+        }
+        else
+        {
+            component.Bounds.Encapsulate(vertices[vertex]);
+        }
+    }
+
+    private static void EnqueueAdjacentTriangles(List<int>[] vertexToTriangles, bool[] visited, Queue<int> queue, int vertex)
+    {
+        var adjacent = vertexToTriangles[vertex];
+        if (adjacent == null)
+        {
+            return;
+        }
+
+        for (var i = 0; i < adjacent.Count; i++)
+        {
+            var triangle = adjacent[i];
+            if (visited[triangle])
+            {
+                continue;
+            }
+
+            visited[triangle] = true;
+            queue.Enqueue(triangle);
+        }
+    }
+
+    private static List<ProxyMeshComponent> FindSuspectProxyHelmetComponents(Mesh mesh, ProxyMeshAnalysis analysis)
+    {
+        var suspects = new List<ProxyMeshComponent>();
+        if (mesh == null || analysis == null || analysis.Components == null || analysis.Components.Length < 2 || analysis.TotalTriangles <= 0)
+        {
+            return suspects;
+        }
+
+        var main = FindMainProxyComponent(analysis);
+        if (main == null)
+        {
+            return suspects;
+        }
+
+        var meshBounds = analysis.Bounds;
+        var meshSize = meshBounds.size;
+        var meshMagnitude = Mathf.Max(0.001f, meshSize.magnitude);
+        for (var i = 0; i < analysis.Components.Length; i++)
+        {
+            var component = analysis.Components[i];
+            if (ReferenceEquals(component, main))
+            {
+                continue;
+            }
+
+            var ratio = component.TriangleCount / (float)analysis.TotalTriangles;
+            if (component.TriangleCount < 90 || ratio < 0.018f)
+            {
+                continue;
+            }
+
+            var bounds = component.Bounds;
+            var size = bounds.size;
+            var upper = bounds.max.y > meshBounds.center.y + meshBounds.extents.y * 0.18f;
+            var central = Mathf.Abs(bounds.center.x - meshBounds.center.x) < Mathf.Max(0.18f, meshBounds.extents.x * 0.8f);
+            var largeEnough = size.magnitude > meshMagnitude * 0.12f;
+            var shellLike = size.y > meshSize.y * 0.12f && Mathf.Max(size.x, size.z) > Mathf.Max(0.12f, Mathf.Min(meshSize.x, meshSize.z) * 0.25f);
+            if (upper && central && largeEnough && shellLike)
+            {
+                suspects.Add(component);
+            }
+        }
+
+        return suspects;
+    }
+
+    private static ProxyMeshComponent FindMainProxyComponent(ProxyMeshAnalysis analysis)
+    {
+        ProxyMeshComponent main = null;
+        if (analysis == null || analysis.Components == null)
+        {
+            return null;
+        }
+
+        for (var i = 0; i < analysis.Components.Length; i++)
+        {
+            var component = analysis.Components[i];
+            if (main == null || component.TriangleCount > main.TriangleCount)
+            {
+                main = component;
+            }
+        }
+
+        return main;
+    }
+
+    private static string DescribeProxyComponents(ProxyMeshAnalysis analysis, int limit)
+    {
+        if (analysis == null || analysis.Components == null || analysis.Components.Length == 0)
+        {
+            return "none";
+        }
+
+        var parts = new List<string>();
+        for (var i = 0; i < analysis.Components.Length && i < limit; i++)
+        {
+            var component = analysis.Components[i];
+            parts.Add($"{component.Index}:tri={component.TriangleCount}:verts={component.VertexCount}:bounds={component.Bounds}");
+        }
+
+        if (analysis.Components.Length > limit)
+        {
+            parts.Add($"+{analysis.Components.Length - limit} more");
+        }
+
+        return string.Join("; ", parts);
+    }
+
+    private bool TryCleanWorldProxyMesh(Mesh mesh, out string cleanupSummary)
+    {
+        cleanupSummary = "not needed";
+        if (mesh == null || !_worldSourceRequiresMeshCleanup)
+        {
+            return false;
+        }
+
+        var analysis = AnalyzeProxyMesh(mesh);
+        var suspects = FindSuspectProxyHelmetComponents(mesh, analysis);
+        if (suspects.Count == 0)
+        {
+            cleanupSummary = "cleanup requested but no suspect components found";
+            return false;
+        }
+
+        var removedComponents = new HashSet<int>();
+        var removedTriangles = 0;
+        var removedVertices = 0;
+        var suspectDescriptions = new List<string>();
+        for (var i = 0; i < suspects.Count; i++)
+        {
+            removedComponents.Add(suspects[i].Index);
+            removedTriangles += suspects[i].TriangleCount;
+            removedVertices += suspects[i].VertexCount;
+            suspectDescriptions.Add($"{suspects[i].Index}:tri={suspects[i].TriangleCount}:verts={suspects[i].VertexCount}:bounds={suspects[i].Bounds}");
+        }
+
+        if (!RebuildMeshWithoutComponents(mesh, analysis, removedComponents))
+        {
+            cleanupSummary = $"cleanup failed; suspects=[{string.Join("; ", suspectDescriptions)}]";
+            return false;
+        }
+
+        cleanupSummary = $"removedComponents={suspects.Count}; removedTriangles={removedTriangles}; removedVertices={removedVertices}; suspects=[{string.Join("; ", suspectDescriptions)}]";
+        DrawableSuitsDiagnostics.Warn($"WorldProxyMeshCleaned: source={DescribeRendererCandidate(_worldSourceRenderer, "source")}; {cleanupSummary}; finalVertices={mesh.vertexCount}; finalTriangles={CountMeshTriangles(mesh)}; finalBounds={mesh.bounds}");
+        return true;
+    }
+
+    private static bool RebuildMeshWithoutComponents(Mesh mesh, ProxyMeshAnalysis analysis, HashSet<int> removedComponents)
+    {
+        if (mesh == null || analysis == null || removedComponents == null || removedComponents.Count == 0)
+        {
+            return false;
+        }
+
+        var removedTriangleOrdinals = new HashSet<int>();
+        for (var i = 0; i < analysis.Components.Length; i++)
+        {
+            var component = analysis.Components[i];
+            if (!removedComponents.Contains(component.Index))
+            {
+                continue;
+            }
+
+            for (var j = 0; j < component.TriangleOrdinals.Count; j++)
+            {
+                removedTriangleOrdinals.Add(component.TriangleOrdinals[j]);
+            }
+        }
+
+        if (removedTriangleOrdinals.Count == 0 || removedTriangleOrdinals.Count >= analysis.Triangles.Length)
+        {
+            return false;
+        }
+
+        var sourceVertices = mesh.vertices;
+        var sourceNormals = mesh.normals;
+        var sourceUv = mesh.uv;
+        var sourceTangents = mesh.tangents;
+        var hasNormals = sourceNormals != null && sourceNormals.Length == sourceVertices.Length;
+        var hasUv = sourceUv != null && sourceUv.Length == sourceVertices.Length;
+        var hasTangents = sourceTangents != null && sourceTangents.Length == sourceVertices.Length;
+        var vertexMap = new Dictionary<int, int>();
+        var vertices = new List<Vector3>();
+        var normals = hasNormals ? new List<Vector3>() : null;
+        var uvs = hasUv ? new List<Vector2>() : null;
+        var tangents = hasTangents ? new List<Vector4>() : null;
+        var subMeshCount = Mathf.Max(1, mesh.subMeshCount);
+        var subMeshTriangles = new List<int>[subMeshCount];
+        for (var i = 0; i < subMeshTriangles.Length; i++)
+        {
+            subMeshTriangles[i] = new List<int>();
+        }
+
+        for (var i = 0; i < analysis.Triangles.Length; i++)
+        {
+            if (removedTriangleOrdinals.Contains(i))
+            {
+                continue;
+            }
+
+            var triangle = analysis.Triangles[i];
+            var subMesh = Mathf.Clamp(triangle.SubMesh, 0, subMeshTriangles.Length - 1);
+            subMeshTriangles[subMesh].Add(RemapProxyVertex(triangle.A, sourceVertices, sourceNormals, sourceUv, sourceTangents, hasNormals, hasUv, hasTangents, vertexMap, vertices, normals, uvs, tangents));
+            subMeshTriangles[subMesh].Add(RemapProxyVertex(triangle.B, sourceVertices, sourceNormals, sourceUv, sourceTangents, hasNormals, hasUv, hasTangents, vertexMap, vertices, normals, uvs, tangents));
+            subMeshTriangles[subMesh].Add(RemapProxyVertex(triangle.C, sourceVertices, sourceNormals, sourceUv, sourceTangents, hasNormals, hasUv, hasTangents, vertexMap, vertices, normals, uvs, tangents));
+        }
+
+        if (vertices.Count == 0)
+        {
+            return false;
+        }
+
+        mesh.Clear();
+        mesh.SetVertices(vertices);
+        if (hasNormals)
+        {
+            mesh.SetNormals(normals);
+        }
+        if (hasUv)
+        {
+            mesh.SetUVs(0, uvs);
+        }
+        if (hasTangents)
+        {
+            mesh.SetTangents(tangents);
+        }
+        mesh.subMeshCount = subMeshCount;
+        for (var i = 0; i < subMeshTriangles.Length; i++)
+        {
+            mesh.SetTriangles(subMeshTriangles[i], i);
+        }
+        if (!hasNormals)
+        {
+            mesh.RecalculateNormals();
+        }
+        mesh.RecalculateBounds();
+        return true;
+    }
+
+    private static int RemapProxyVertex(
+        int sourceIndex,
+        Vector3[] sourceVertices,
+        Vector3[] sourceNormals,
+        Vector2[] sourceUv,
+        Vector4[] sourceTangents,
+        bool hasNormals,
+        bool hasUv,
+        bool hasTangents,
+        Dictionary<int, int> vertexMap,
+        List<Vector3> vertices,
+        List<Vector3> normals,
+        List<Vector2> uvs,
+        List<Vector4> tangents)
+    {
+        if (vertexMap.TryGetValue(sourceIndex, out var mapped))
+        {
+            return mapped;
+        }
+
+        mapped = vertices.Count;
+        vertexMap[sourceIndex] = mapped;
+        vertices.Add(sourceVertices[sourceIndex]);
+        if (hasNormals)
+        {
+            normals.Add(sourceNormals[sourceIndex]);
+        }
+        if (hasUv)
+        {
+            uvs.Add(sourceUv[sourceIndex]);
+        }
+        if (hasTangents)
+        {
+            tangents.Add(sourceTangents[sourceIndex]);
+        }
+
+        return mapped;
     }
 
     private void StartFirstPersonOverlaySuppressionWindow(string context)
@@ -9477,8 +10197,10 @@ internal sealed class SuitEditorController : MonoBehaviour
                 return false;
             }
 
+            var cleanupSummary = "none";
+            var cleaned = TryCleanWorldProxyMesh(_worldPaintMesh, out cleanupSummary);
             _worldPaintMesh.RecalculateBounds();
-            _lastWorldProxyMeshSummary = $"mode=Full; vertices={_worldPaintMesh.vertexCount}; subMeshes={_worldPaintMesh.subMeshCount}; bounds={_worldPaintMesh.bounds}";
+            _lastWorldProxyMeshSummary = $"mode=Full; vertices={_worldPaintMesh.vertexCount}; subMeshes={_worldPaintMesh.subMeshCount}; bounds={_worldPaintMesh.bounds}; validation={_worldSourceValidationSummary}; cleanup={(cleaned ? cleanupSummary : "none")}";
             if (_worldPaintProxyObject.transform.parent != source.transform)
             {
                 _worldPaintProxyObject.transform.SetParent(source.transform, false);
@@ -9494,7 +10216,8 @@ internal sealed class SuitEditorController : MonoBehaviour
             source.enabled = false;
             if (forceLog)
             {
-                DrawableSuitsDiagnostics.Info($"WorldAvatarProxy updated. mesh={_lastWorldProxyMeshSummary}; renderer={DescribeRendererCandidate(source, "source")}; vertices={_worldPaintMesh.vertexCount}; subMeshes={_worldPaintMesh.subMeshCount}; bounds={_worldPaintMesh.bounds}; proxyPos={_worldPaintProxyObject.transform.position}; proxyRot={_worldPaintProxyObject.transform.rotation.eulerAngles}; proxyScale={_worldPaintProxyObject.transform.localScale}; layer={_worldPaintLayer}; rendererEnabled={_worldAvatarRenderer.enabled}; proxyMaterials=[{DescribeMaterials(_worldAvatarRenderer.sharedMaterials)}]; collider={_worldPaintCollider != null}");
+                var analysis = AnalyzeProxyMesh(_worldPaintMesh);
+                DrawableSuitsDiagnostics.Info($"WorldAvatarProxy updated. mesh={_lastWorldProxyMeshSummary}; renderer={DescribeRendererCandidate(source, "source")}; vertices={_worldPaintMesh.vertexCount}; triangles={CountMeshTriangles(_worldPaintMesh)}; components={analysis.Components.Length}; componentSummary=[{DescribeProxyComponents(analysis, 6)}]; subMeshes={_worldPaintMesh.subMeshCount}; bounds={_worldPaintMesh.bounds}; proxyPos={_worldPaintProxyObject.transform.position}; proxyRot={_worldPaintProxyObject.transform.rotation.eulerAngles}; proxyScale={_worldPaintProxyObject.transform.localScale}; layer={_worldPaintLayer}; rendererEnabled={_worldAvatarRenderer.enabled}; proxyMaterials=[{DescribeMaterials(_worldAvatarRenderer.sharedMaterials)}]; collider={_worldPaintCollider != null}");
                 LogVisibleEditorCameraRenderers(source);
                 StartFirstPersonOverlaySuppressionWindow("world proxy rebuild");
             }
@@ -9775,6 +10498,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         _worldAvatarRenderer = null;
         _worldSourceRenderer = null;
         _worldSourceRendererSummary = "none";
+        _worldSourceRequiresMeshCleanup = false;
+        _worldSourceValidationSummary = "none";
         _worldPreviewReady = false;
         _firstPersonOverlaySuppressionFramesRemaining = 0;
         _nextFirstPersonOverlaySuppressionFrame = 0;

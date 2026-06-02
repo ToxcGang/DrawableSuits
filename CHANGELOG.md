@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.27
+
+- Added baked proxy mesh validation so the editor can reject a polluted high-detail `LOD1` source and fall back to cleaner compatible LOD renderers.
+- Added conservative connected-component cleanup for detached helmet/viewmodel shell geometry when no clean proxy source is available.
+- Added `WorldProxyMeshValidation`, `WorldProxySourceFallback`, and `WorldProxyMeshCleaned` diagnostics for tracking second-helmet regressions.
+- Kept first-person overlay suppression, full-suit editing, and the always-visible UV texture panel workflow unchanged.
+
 ## 0.5.26
 
 - Added a repeated first-person/viewmodel helmet suppression pass while the third-person editor is open.
