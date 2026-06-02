@@ -204,6 +204,10 @@ internal sealed class SuitEditorController : MonoBehaviour
     private int _designListPage;
     private int _decalListPage;
     private readonly List<RendererRestoreState> _rendererRestoreStates = new();
+    private int _firstPersonOverlaySuppressionFramesRemaining;
+    private int _nextFirstPersonOverlaySuppressionFrame;
+    private string _lastVisibleOverlayWarningKey = string.Empty;
+    private float _lastVisibleOverlayWarningTime;
     private Texture2D _loadedDecal;
     private TextStampRenderer _textStampRenderer;
     private Texture2D _textStampTexture;
@@ -1526,6 +1530,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         if (IsWorldThirdPersonMode)
         {
             UpdateWorldPaintProxy(false);
+            SuppressFirstPersonOverlaysDuringOpen("update", false);
             UpdateWorldEditorCamera(false);
         }
         HandleVirtualCursorClick();
@@ -8826,6 +8831,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             _worldSourceRendererSummary = DescribeRendererCandidate(source, "selected");
             RefreshTexturePanelPreview($"{context}:world texture panel", true);
             CaptureAndHideLocalPlayerRenderers(player, source);
+            StartFirstPersonOverlaySuppressionWindow(context);
 
             _worldEditorCameraObject = new GameObject("DrawableSuitsThirdPersonCamera");
             _worldEditorCameraObject.hideFlags = HideFlags.HideAndDontSave;
@@ -9084,6 +9090,51 @@ internal sealed class SuitEditorController : MonoBehaviour
         return false;
     }
 
+    private void StartFirstPersonOverlaySuppressionWindow(string context)
+    {
+        _firstPersonOverlaySuppressionFramesRemaining = Mathf.Max(_firstPersonOverlaySuppressionFramesRemaining, 90);
+        _nextFirstPersonOverlaySuppressionFrame = 0;
+        DrawableSuitsDiagnostics.Info($"First-person overlay suppression window started. context={context}; frames={_firstPersonOverlaySuppressionFramesRemaining}");
+    }
+
+    private void SuppressFirstPersonOverlaysDuringOpen(string context, bool forceLog)
+    {
+        if (!_isOpen || !IsWorldThirdPersonMode)
+        {
+            return;
+        }
+
+        var player = StartOfRound.Instance?.localPlayerController;
+        if (player == null)
+        {
+            return;
+        }
+
+        if (!forceLog)
+        {
+            if (_firstPersonOverlaySuppressionFramesRemaining <= 0)
+            {
+                return;
+            }
+
+            _firstPersonOverlaySuppressionFramesRemaining--;
+            if (Time.frameCount < _nextFirstPersonOverlaySuppressionFrame)
+            {
+                return;
+            }
+        }
+
+        _nextFirstPersonOverlaySuppressionFrame = Time.frameCount + 5;
+        var hidden = 0;
+        hidden += CaptureAndHideLocalOverlayRootRenderers(player, _worldSourceRenderer, $"{context}:local roots");
+        hidden += CaptureAndHideNearbyFirstPersonOverlayRenderers(player, _worldSourceRenderer, context);
+        if (forceLog || hidden > 0)
+        {
+            DrawableSuitsDiagnostics.Info($"First-person overlay suppression pass complete. context={context}; hidden={hidden}; framesRemaining={_firstPersonOverlaySuppressionFramesRemaining}; selectedSource={DescribeRendererCandidate(_worldSourceRenderer, "selected")}");
+            LogVisibleEditorCameraRenderers(_worldSourceRenderer);
+        }
+    }
+
     private void CaptureAndHideLocalPlayerRenderers(PlayerControllerB player, SkinnedMeshRenderer selectedSource)
     {
         RestorePlayerRenderers();
@@ -9092,16 +9143,29 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
+        var hidden = CaptureAndHideLocalOverlayRootRenderers(player, selectedSource, "initial setup");
+        hidden += CaptureAndHideNearbyFirstPersonOverlayRenderers(player, selectedSource, "initial setup");
+
+        DrawableSuitsDiagnostics.Info($"Hidden local renderers for third-person avatar proxy. hidden={hidden}; selectedSource={DescribeRendererCandidate(selectedSource, "selected")}; main={DescribeRendererState(player.thisPlayerModel)}; lod1={DescribeRendererState(player.thisPlayerModelLOD1)}; lod2={DescribeRendererState(player.thisPlayerModelLOD2)}; arms={DescribeRendererState(player.thisPlayerModelArms)}");
+    }
+
+    private int CaptureAndHideLocalOverlayRootRenderers(PlayerControllerB player, SkinnedMeshRenderer selectedSource, string context)
+    {
+        if (player == null)
+        {
+            return 0;
+        }
+
         var hidden = 0;
-        hidden += CaptureAndHideRenderer(player.thisPlayerModel, "local thisPlayerModel");
-        hidden += CaptureAndHideRenderer(player.thisPlayerModelLOD1, "local thisPlayerModelLOD1");
-        hidden += CaptureAndHideRenderer(player.thisPlayerModelLOD2, "local thisPlayerModelLOD2");
-        hidden += CaptureAndHideRenderer(player.thisPlayerModelArms, "local first-person arms");
+        hidden += CaptureAndHideRenderer(player.thisPlayerModel, $"{context}:local thisPlayerModel");
+        hidden += CaptureAndHideRenderer(player.thisPlayerModelLOD1, $"{context}:local thisPlayerModelLOD1");
+        hidden += CaptureAndHideRenderer(player.thisPlayerModelLOD2, $"{context}:local thisPlayerModelLOD2");
+        hidden += CaptureAndHideRenderer(player.thisPlayerModelArms, $"{context}:local first-person arms");
 
         var playerRenderers = player.GetComponentsInChildren<Renderer>(true);
         for (var i = 0; i < playerRenderers.Length; i++)
         {
-            hidden += CaptureAndHideRenderer(playerRenderers[i], "local player child");
+            hidden += CaptureAndHideRenderer(playerRenderers[i], $"{context}:local player child");
         }
 
         var mainCamera = Camera.main;
@@ -9110,7 +9174,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             var cameraRenderers = mainCamera.GetComponentsInChildren<Renderer>(true);
             for (var i = 0; i < cameraRenderers.Length; i++)
             {
-                hidden += CaptureAndHideRenderer(cameraRenderers[i], "local camera child");
+                hidden += CaptureAndHideRenderer(cameraRenderers[i], $"{context}:local camera child");
             }
         }
 
@@ -9118,15 +9182,13 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             CaptureRendererState(selectedSource);
             selectedSource.updateWhenOffscreen = true;
-            selectedSource.enabled = false;
+            hidden += CaptureAndHideRenderer(selectedSource, $"{context}:selected source");
         }
 
-        hidden += CaptureAndHideNearbyFirstPersonOverlayRenderers(player, selectedSource);
-
-        DrawableSuitsDiagnostics.Info($"Hidden local renderers for third-person avatar proxy. hidden={hidden}; selectedSource={DescribeRendererCandidate(selectedSource, "selected")}; main={DescribeRendererState(player.thisPlayerModel)}; lod1={DescribeRendererState(player.thisPlayerModelLOD1)}; lod2={DescribeRendererState(player.thisPlayerModelLOD2)}; arms={DescribeRendererState(player.thisPlayerModelArms)}");
+        return hidden;
     }
 
-    private int CaptureAndHideNearbyFirstPersonOverlayRenderers(PlayerControllerB player, Renderer selectedSource)
+    private int CaptureAndHideNearbyFirstPersonOverlayRenderers(PlayerControllerB player, Renderer selectedSource, string context)
     {
         if (player == null)
         {
@@ -9157,20 +9219,20 @@ internal sealed class SuitEditorController : MonoBehaviour
             }
 
             var path = GetTransformPath(renderer.transform);
-            if (!LooksFirstPersonOverlayRenderer(renderer, path))
+            if (!TryGetFirstPersonOverlayReason(renderer, player, camera, distanceToPlayer, distanceToCamera, path, out var overlayReason))
             {
                 continue;
             }
 
-            hidden += CaptureAndHideRenderer(renderer, $"nearby first-person overlay path={path}");
-            DrawableSuitsDiagnostics.Info($"Hidden nearby first-person overlay renderer. renderer={DescribeRendererState(renderer)}; distanceToPlayer={distanceToPlayer:0.##}; distanceToCamera={distanceToCamera:0.##}; material={renderer.sharedMaterial?.name ?? "null"}");
+            hidden += CaptureAndHideRenderer(renderer, $"{context}:nearby first-person overlay reason={overlayReason}", distanceToPlayer, distanceToCamera);
         }
 
         return hidden;
     }
 
-    private static bool LooksFirstPersonOverlayRenderer(Renderer renderer, string path)
+    private static bool TryGetFirstPersonOverlayReason(Renderer renderer, PlayerControllerB player, Camera camera, float distanceToPlayer, float distanceToCamera, string path, out string reason)
     {
+        reason = string.Empty;
         var lowerPath = (path ?? string.Empty).ToLowerInvariant();
         if (LooksFirstPersonOnly(lowerPath)
             || lowerPath.Contains("local")
@@ -9180,26 +9242,130 @@ internal sealed class SuitEditorController : MonoBehaviour
             || lowerPath.Contains("mask")
             || lowerPath.Contains("head"))
         {
+            reason = "path token";
             return true;
         }
 
-        var materialName = renderer?.sharedMaterial?.name ?? string.Empty;
-        return materialName.IndexOf("helmet", StringComparison.OrdinalIgnoreCase) >= 0
-            || materialName.IndexOf("visor", StringComparison.OrdinalIgnoreCase) >= 0
-            || materialName.IndexOf("glass", StringComparison.OrdinalIgnoreCase) >= 0
-            || materialName.IndexOf("view", StringComparison.OrdinalIgnoreCase) >= 0;
+        if (RendererMaterialsLookFirstPersonOverlay(renderer, out var materialReason))
+        {
+            reason = materialReason;
+            return true;
+        }
+
+        if (LooksLikeLocalHeadOverlayGeometry(renderer, player, camera, distanceToCamera, out var geometryReason))
+        {
+            reason = geometryReason;
+            return true;
+        }
+
+        return false;
     }
 
-    private int CaptureAndHideRenderer(Renderer renderer, string reason)
+    private static bool RendererMaterialsLookFirstPersonOverlay(Renderer renderer, out string reason)
+    {
+        reason = string.Empty;
+        if (renderer == null)
+        {
+            return false;
+        }
+
+        var materials = renderer.sharedMaterials;
+        for (var i = 0; i < materials.Length; i++)
+        {
+            var material = materials[i];
+            if (material == null)
+            {
+                continue;
+            }
+
+            var materialName = material.name ?? string.Empty;
+            var textureName = material.mainTexture != null ? material.mainTexture.name ?? string.Empty : string.Empty;
+            if (ContainsFirstPersonOverlayToken(materialName) || ContainsFirstPersonOverlayToken(textureName))
+            {
+                reason = $"material token slot={i} material={materialName} texture={textureName}";
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsFirstPersonOverlayToken(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return false;
+        }
+
+        var lower = value.ToLowerInvariant();
+        return lower.Contains("helmet")
+            || lower.Contains("visor")
+            || lower.Contains("glass")
+            || lower.Contains("mask")
+            || lower.Contains("head")
+            || lower.Contains("face")
+            || lower.Contains("view")
+            || lower.Contains("viewmodel")
+            || lower.Contains("view model")
+            || lower.Contains("firstperson")
+            || lower.Contains("first person")
+            || lower.Contains("overlay")
+            || lower.Contains("hud");
+    }
+
+    private static bool LooksLikeLocalHeadOverlayGeometry(Renderer renderer, PlayerControllerB player, Camera camera, float distanceToCamera, out string reason)
+    {
+        reason = string.Empty;
+        if (renderer == null || player == null || camera == null)
+        {
+            return false;
+        }
+
+        var bounds = renderer.bounds;
+        var size = bounds.size;
+        var largest = Mathf.Max(size.x, Mathf.Max(size.y, size.z));
+        var smallest = Mathf.Min(size.x, Mathf.Min(size.y, size.z));
+        var playerLocal = player.transform.InverseTransformPoint(bounds.center);
+        var horizontal = new Vector2(playerLocal.x, playerLocal.z).magnitude;
+        var headHeight = playerLocal.y;
+        var headSized = largest >= 0.12f && largest <= 1.35f && smallest >= 0.005f;
+        var nearHead = headHeight >= 0.55f && headHeight <= 2.35f && horizontal <= 1.15f;
+        var nearLocalCamera = distanceToCamera <= 1.25f;
+        if (headSized && nearHead && nearLocalCamera)
+        {
+            reason = $"near local camera head-sized overlay size={size}; local={playerLocal}; distanceToCamera={distanceToCamera:0.##}";
+            return true;
+        }
+
+        return false;
+    }
+
+    private int CaptureAndHideRenderer(Renderer renderer, string reason, float distanceToPlayer = -1f, float distanceToCamera = -1f)
     {
         if (renderer == null || renderer.gameObject.name.IndexOf("DrawableSuits", StringComparison.OrdinalIgnoreCase) >= 0)
         {
             return 0;
         }
 
+        if (!renderer.enabled)
+        {
+            return 0;
+        }
+
         CaptureRendererState(renderer);
         renderer.enabled = false;
+        LogFirstPersonOverlaySuppressed(renderer, reason, distanceToPlayer, distanceToCamera);
         return 1;
+    }
+
+    private static void LogFirstPersonOverlaySuppressed(Renderer renderer, string reason, float distanceToPlayer, float distanceToCamera)
+    {
+        DrawableSuitsDiagnostics.Info($"FirstPersonOverlaySuppressed: reason={reason}; renderer={DescribeRendererState(renderer)}; bounds={(renderer != null ? renderer.bounds.ToString() : "null")}; materials=[{DescribeMaterials(renderer != null ? renderer.sharedMaterials : null)}]; distanceToPlayer={FormatDistance(distanceToPlayer)}; distanceToCamera={FormatDistance(distanceToCamera)}");
+    }
+
+    private static string FormatDistance(float distance)
+    {
+        return distance >= 0f && distance < float.MaxValue ? distance.ToString("0.##", CultureInfo.InvariantCulture) : "n/a";
     }
 
     private void CaptureRendererState(Renderer renderer)
@@ -9330,6 +9496,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             {
                 DrawableSuitsDiagnostics.Info($"WorldAvatarProxy updated. mesh={_lastWorldProxyMeshSummary}; renderer={DescribeRendererCandidate(source, "source")}; vertices={_worldPaintMesh.vertexCount}; subMeshes={_worldPaintMesh.subMeshCount}; bounds={_worldPaintMesh.bounds}; proxyPos={_worldPaintProxyObject.transform.position}; proxyRot={_worldPaintProxyObject.transform.rotation.eulerAngles}; proxyScale={_worldPaintProxyObject.transform.localScale}; layer={_worldPaintLayer}; rendererEnabled={_worldAvatarRenderer.enabled}; proxyMaterials=[{DescribeMaterials(_worldAvatarRenderer.sharedMaterials)}]; collider={_worldPaintCollider != null}");
                 LogVisibleEditorCameraRenderers(source);
+                StartFirstPersonOverlaySuppressionWindow("world proxy rebuild");
             }
             return true;
         }
@@ -9453,16 +9620,18 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         var player = StartOfRound.Instance?.localPlayerController;
         var center = player != null ? player.transform.position : _worldEditorCamera.transform.position;
+        var localCamera = Camera.main;
         var renderers = Resources.FindObjectsOfTypeAll<Renderer>();
         var logged = 0;
         for (var i = 0; i < renderers.Length && logged < 40; i++)
         {
             var renderer = renderers[i];
+            var distanceToCenter = Vector3.Distance(renderer != null ? renderer.bounds.center : Vector3.zero, center);
             if (renderer == null
                 || !renderer.enabled
                 || !renderer.gameObject.activeInHierarchy
                 || !renderer.gameObject.scene.IsValid()
-                || Vector3.Distance(renderer.bounds.center, center) > 5f)
+                || distanceToCenter > 5f)
             {
                 continue;
             }
@@ -9473,8 +9642,25 @@ internal sealed class SuitEditorController : MonoBehaviour
                 continue;
             }
 
+            var distanceToPlayer = player != null ? Vector3.Distance(renderer.bounds.center, player.transform.position) : float.MaxValue;
+            var distanceToCamera = localCamera != null ? Vector3.Distance(renderer.bounds.center, localCamera.transform.position) : float.MaxValue;
+            var path = GetTransformPath(renderer.transform);
+            var isProxy = renderer.gameObject.name.IndexOf("DrawableSuits", StringComparison.OrdinalIgnoreCase) >= 0;
             logged++;
-            DrawableSuitsDiagnostics.Info($"World editor visible renderer candidate. renderer={DescribeRendererState(renderer)}; path={GetTransformPath(renderer.transform)}; source={ReferenceEquals(renderer, source)}; proxy={renderer.gameObject.name.IndexOf("DrawableSuits", StringComparison.OrdinalIgnoreCase) >= 0}; distance={Vector3.Distance(renderer.bounds.center, center):0.##}; material={renderer.sharedMaterial?.name ?? "null"}");
+            DrawableSuitsDiagnostics.Info($"World editor visible renderer candidate. renderer={DescribeRendererState(renderer)}; path={path}; source={ReferenceEquals(renderer, source)}; proxy={isProxy}; distance={distanceToCenter:0.##}; material={renderer.sharedMaterial?.name ?? "null"}");
+            if (!isProxy
+                && !ReferenceEquals(renderer, source)
+                && TryGetFirstPersonOverlayReason(renderer, player, localCamera, distanceToPlayer, distanceToCamera, path, out var overlayReason))
+            {
+                var warningKey = $"{renderer.GetInstanceID()}:{overlayReason}";
+                if (!string.Equals(warningKey, _lastVisibleOverlayWarningKey, StringComparison.Ordinal)
+                    || Time.unscaledTime - _lastVisibleOverlayWarningTime > 3f)
+                {
+                    _lastVisibleOverlayWarningKey = warningKey;
+                    _lastVisibleOverlayWarningTime = Time.unscaledTime;
+                    DrawableSuitsDiagnostics.Warn($"FirstPersonOverlayStillVisible: reason={overlayReason}; renderer={DescribeRendererState(renderer)}; bounds={renderer.bounds}; materials=[{DescribeMaterials(renderer.sharedMaterials)}]; distanceToPlayer={FormatDistance(distanceToPlayer)}; distanceToCamera={FormatDistance(distanceToCamera)}; cameraMask={_worldEditorCamera.cullingMask}; layerMask={(1 << renderer.gameObject.layer)}");
+                }
+            }
         }
     }
 
@@ -9590,6 +9776,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         _worldSourceRenderer = null;
         _worldSourceRendererSummary = "none";
         _worldPreviewReady = false;
+        _firstPersonOverlaySuppressionFramesRemaining = 0;
+        _nextFirstPersonOverlaySuppressionFrame = 0;
         _lastWorldRaycastHit = false;
         if (restoreRenderers)
         {

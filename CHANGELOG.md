@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.26
+
+- Added a repeated first-person/viewmodel helmet suppression pass while the third-person editor is open.
+- Expanded local overlay detection for helmet, mask, visor, glass, head, viewmodel, camera, and overlay renderers.
+- Added `FirstPersonOverlaySuppressed` and `FirstPersonOverlayStillVisible` diagnostics for tracking second-helmet regressions.
+- Kept the full `DrawableSuitsWorldAvatarProxy` and always-visible UV texture panel workflow unchanged.
+
 ## 0.5.25
 
 - Made the UV texture panel visible alongside the third-person editor instead of requiring a normal view toggle.
