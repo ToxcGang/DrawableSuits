@@ -1984,18 +1984,18 @@ internal sealed class SuitEditorController : MonoBehaviour
             InvalidateDecalPreview("text input changed");
         });
         CreateAnchoredButton(panel.transform, "Refresh Decals", new Rect(rightX + 150f, 290f, 136f, 34f), ImportDecalFromDialog);
-        _decalListContent = CreateAnchoredScrollList(panel.transform, "DecalList", new Rect(rightX, 334f, rightW, 132f));
+        _decalListContent = CreateAnchoredScrollList(panel.transform, "DecalList", new Rect(rightX, 334f, rightW, 84f));
 
-        CreateAnchoredText(panel.transform, "DesignHeader", "Design Name", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 486f, rightW, 24f), Color.white);
-        _designNameInput = CreateAnchoredInputField(panel.transform, _designName, new Rect(rightX, 516f, rightW, 34f));
+        CreateAnchoredText(panel.transform, "DesignHeader", "Design Name", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 590f, rightW, 24f), Color.white);
+        _designNameInput = CreateAnchoredInputField(panel.transform, _designName, new Rect(rightX, 620f, rightW, 34f));
         _designNameInput.onValueChanged.AddListener(value => _designName = value);
 
-        _exportCodeButton = CreateAnchoredButton(panel.transform, "Export Code", new Rect(rightX, 558f, 138f, 34f), () => OpenDesignCodePanel(true));
-        _importCodeButton = CreateAnchoredButton(panel.transform, "Import Code", new Rect(rightX + 148f, 558f, 138f, 34f), () => OpenDesignCodePanel(false));
+        _exportCodeButton = CreateAnchoredButton(panel.transform, "Export Code", new Rect(rightX, 662f, 138f, 34f), () => OpenDesignCodePanel(true));
+        _importCodeButton = CreateAnchoredButton(panel.transform, "Import Code", new Rect(rightX + 148f, 662f, 138f, 34f), () => OpenDesignCodePanel(false));
 
-        CreateAnchoredButton(panel.transform, "Undo", new Rect(rightX, 604f, 84f, 34f), Undo);
-        CreateAnchoredButton(panel.transform, "Redo", new Rect(rightX + 92f, 604f, 84f, 34f), Redo);
-        _resetButton = CreateAnchoredButton(panel.transform, "Reset", new Rect(rightX + 184f, 604f, 84f, 34f), () =>
+        CreateAnchoredButton(panel.transform, "Undo", new Rect(rightX, 708f, 84f, 34f), Undo);
+        CreateAnchoredButton(panel.transform, "Redo", new Rect(rightX + 92f, 708f, 84f, 34f), Redo);
+        _resetButton = CreateAnchoredButton(panel.transform, "Reset", new Rect(rightX + 184f, 708f, 84f, 34f), () =>
         {
             SaveUndo();
             DrawableSuitsPlugin.Registry.ResetSuit(_selectedSuitId);
@@ -2004,16 +2004,17 @@ internal sealed class SuitEditorController : MonoBehaviour
             UpdateUiState();
         });
 
-        _applyButton = CreateAnchoredButton(panel.transform, "Apply", new Rect(rightX, 646f, 84f, 34f), () => DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, true));
-        _saveButton = CreateAnchoredButton(panel.transform, "Save", new Rect(rightX + 92f, 646f, 84f, 34f), SaveDesign);
-        _loadButton = CreateAnchoredButton(panel.transform, "Load", new Rect(rightX + 184f, 646f, 84f, 34f), LoadSelectedDesign);
+        _applyButton = CreateAnchoredButton(panel.transform, "Apply", new Rect(rightX, 750f, 84f, 34f), () => DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, true));
+        _saveButton = CreateAnchoredButton(panel.transform, "Save", new Rect(rightX + 92f, 750f, 84f, 34f), SaveDesign);
+        _loadButton = CreateAnchoredButton(panel.transform, "Load", new Rect(rightX + 184f, 750f, 84f, 34f), LoadSelectedDesign);
 
-        CreateAnchoredText(panel.transform, "SavedDesignsHeader", "Saved Designs", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 700f, rightW, 24f), Color.white);
-        _designListContent = CreateAnchoredScrollList(panel.transform, "DesignList", new Rect(rightX, 730f, rightW, 114f));
+        CreateAnchoredText(panel.transform, "SavedDesignsHeader", "Saved Designs", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 804f, rightW, 24f), Color.white);
+        _designListContent = CreateAnchoredScrollList(panel.transform, "DesignList", new Rect(rightX, 834f, rightW, 106f));
 
         var fallbackPreview = CreateUiObject("PreviewViewport", panel.transform, typeof(RectTransform), typeof(Image));
         _previewViewportRect = fallbackPreview.GetComponent<RectTransform>();
-        SetAnchoredRect(_previewViewportRect, new Rect(leftX, 648f, 274f, 190f));
+        SetAnchoredRect(_previewViewportRect, new Rect(rightX, 430f, rightW, 142f));
+        fallbackPreview.transform.SetSiblingIndex(_decalListContent != null ? _decalListContent.GetSiblingIndex() + 1 : fallbackPreview.transform.GetSiblingIndex());
         var previewBackground = fallbackPreview.GetComponent<Image>();
         previewBackground.color = new Color(0.025f, 0.028f, 0.032f, 1f);
         previewBackground.raycastTarget = true;
@@ -9829,7 +9830,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         var assignment = $"{_previewMode}; assigned={assignedTexture?.name ?? "null"}; editable={DescribeEditableTexture()}; rawImage={DescribePreviewImageTexture()}";
         if (forceLog || !string.Equals(_lastPreviewAssignmentLog, assignment, StringComparison.Ordinal))
         {
-            DrawableSuitsDiagnostics.Info($"TexturePreview[{context}]: {assignment}; viewport={(_previewViewportRect != null ? _previewViewportRect.rect.ToString() : "null")}");
+            DrawableSuitsDiagnostics.Info($"TexturePreview[{context}]: {assignment}; viewport={(_previewViewportRect != null ? _previewViewportRect.rect.ToString() : "null")}; siblingIndex={(_previewViewportRect != null ? _previewViewportRect.GetSiblingIndex().ToString() : "null")}; anchoredPosition={(_previewViewportRect != null ? _previewViewportRect.anchoredPosition.ToString() : "null")}");
             _lastPreviewAssignmentLog = assignment;
         }
     }

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.24
+
+- Moved the UV fallback preview into a reserved right-column slot so it no longer covers the color picker or brush controls.
+- Rebalanced the right-column design/action/list controls around the new UV preview area.
+- Added UV preview sibling index and anchored position diagnostics to `TexturePreview[...]` logs.
+
 ## 0.5.23
 
 - Added a UI-only Fill Bucket tool with a visible Fill Tolerance slider.
