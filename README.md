@@ -14,13 +14,13 @@ DrawableSuits is a Lethal Company v81 BepInEx mod that lets players draw on suit
 - Fallback shortcuts: `F8` on keyboard or `View/Back + Y` on controller.
 - Emergency open shortcut: `F10`, which opens the editor and does not toggle it closed.
 - Controller support: left stick moves the editor cursor, `A` clicks exactly the UI control under the cursor, right trigger paints only, right stick/bumpers orbit the camera, D-pad up/down zooms, `Y` cycles tools, `X` undoes, and Start saves.
-- Direct surface painting: the editor bakes a hidden mesh collider from the local player model and paints by raycasting from the third-person camera to suit UV coordinates.
+- Direct surface painting: the editor builds a combined paintable proxy from the detected visible suit renderers and paints by raycasting from the third-person camera to suit UV coordinates.
 - UV fallback mode: press `Use UV Fallback` if third-person setup fails; it shows the full editable suit texture.
 - PNG/JPG decals from `BepInEx/config/DrawableSuits/Decals`. The in-game OS file dialog is disabled for stability in Gale/Unity.
 - Reusable saved designs stored as JSON metadata plus PNG texture files.
 - Compact lossless `DSUIT2:` design codes for copy/paste import and export between profiles or players, with legacy `DSUIT1:` import compatibility.
 - Apply/save multiplayer sync for other players who also have DrawableSuits installed, keyed per player so two players wearing the same suit can have different edits.
-- Vanilla and modded suit support as long as the suit exposes a normal suit material and texture.
+- Vanilla, MoreSuits, and custom-model suit support. DrawableSuits prefers visible world-model renderers, hides first-person/viewmodel duplicates while editing, and shows non-editable custom accessories as read-only proxy parts when they do not share the editable suit texture.
 
 ## Install
 
@@ -88,7 +88,13 @@ New exports use the shorter lossless `DSUIT2:` format. Older `DSUIT1:` codes sti
 
 ## Modded Suits
 
-DrawableSuits works with modded suits by detecting unlockables that expose a `suitMaterial`. Saved designs are reusable on any suit, but loading a design onto a suit with a different UV layout can stretch or misplace drawings and decals.
+DrawableSuits works with modded suits by detecting the visible suit renderer set around the local player. It supports normal skinned suit renderers, static `MeshRenderer`/`MeshFilter` custom model parts, and MoreSuits-style world model roots such as `Shadow`.
+
+Editable proxy geometry is built only from renderers that appear compatible with the selected suit texture. Custom accessories or materials that do not use the editable suit texture are shown as read-only proxy parts so the editor model stays visually complete without force-painting unrelated materials.
+
+First-person and viewmodel renderers, including MoreSuits-style `ViewModel` roots, are hidden while the editor is open and restored on close. If DrawableSuits cannot find any editable renderers for a custom model, it falls back to UV fallback mode with a clear status message.
+
+Saved designs are reusable on any suit, but loading a design onto a suit with a different UV layout can stretch or misplace drawings and decals.
 
 ## Configuration
 
@@ -116,11 +122,11 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.24 behavior:
+Expected 0.5.25 behavior:
 
 - Opening the editor shows a compact side overlay and a third-person camera view of the local player.
 - The diagnostics text should show `Preview mode: WorldThirdPerson` when the default path succeeds.
-- The visible editor model is `DrawableSuitsWorldAvatarProxy`, a baked suit/body proxy on an isolated layer, not the live first-person local rig. First-person helmet/viewmodel renderers are hidden during editing and restored on close.
+- The visible editor model is `DrawableSuitsWorldAvatarProxy`, a renderer-set proxy on an isolated layer, not the live first-person local rig. MoreSuits/custom world-model renderers are preferred over `ViewModel` renderers, compatible surfaces are paintable, read-only accessories remain visible, and first-person helmet/viewmodel renderers are hidden during editing and restored on close.
 - Normal session startup should log `SessionSafetyCheck` with `EditorOpen=False`, no active DrawableSuits cameras, `Camera.main` state, local player state, prompt context, and `jetpackWarningGuard` status.
 - If third-person setup fails, the editor falls back to `TextureFallback` and logs the reason.
 - UV fallback shows the editable texture in a reserved right-column preview slot below the decal list. It should not cover the color picker, brush controls, tools, design controls, or saved-design rows.
@@ -158,7 +164,7 @@ Expected 0.5.24 behavior:
 - The part picker is removed. Third-person mode always shows the full avatar proxy, and UV fallback always shows the full editable suit texture.
 - Paint and Erase in third-person mode project onto the visible suit surface and fill between valid projected samples, so brush strokes avoid UV-island cutoffs while still guarding against unrelated UV island bleeding. UV fallback keeps direct flat UV brush painting.
 - Paint, erase, decal preview, and decal stamping operate on the full editable texture.
-- Active editor diagnostics report full proxy mesh/collider state through `WorldAvatarProxy updated`; `PartClassifierBuilt` should not appear during normal editor use.
+- Active editor diagnostics report full renderer-set proxy mesh/collider state through `World renderer candidate`, `World renderer set selected`, and `WorldAvatarProxy updated`; `PartClassifierBuilt` should not appear during normal editor use.
 
 Troubleshooting:
 
@@ -167,7 +173,7 @@ Troubleshooting:
 - If Mirror does not appear to find the opposite side, check `MirrorSurfaceMap built` and `MirrorSurfaceTarget` diagnostics. Asymmetric or unusual modded meshes may not have a reliable opposite surface for every hit.
 - If entering a session starts on a black screen before opening DrawableSuits, check `SessionSafetyCheck` lines. They list `Camera.main`, active cameras, camera target textures, local player flags, prompt context such as grab/hover fields, local renderer materials, and any repaired DrawableSuits objects. DrawableSuits should report no active DrawableSuits cameras while `EditorOpen=False`.
 - If the black screen shows `Grab: [E]` and `SessionSafetyCheck` reports `Camera.main=null`, inspect `LogOutput.log` for repeated `JetpackWarning` `PlayerControllerB.LateUpdate` `NullReferenceException`. By default, DrawableSuits disables only `JetpackWarning.Patches.PlayerControllerB_LateUpdate_Postfix` after repeated failures and logs the unpatch result in `diagnostics.log`. Set `AutoDisableBrokenJetpackWarningLateUpdatePatch=false` to turn this compatibility guard off.
-- If third person shows first-person arms, a giant helmet, held items, or another partial rig, check `World renderer candidate`, `Hidden nearby first-person overlay renderer`, `World editor visible renderer candidate`, and `WorldAvatarProxy updated` lines. The selected renderer should be a body/suit renderer and the proxy should use only the player-specific DrawableSuits material for suit-compatible submeshes.
+- If third person shows first-person arms, a giant helmet, held items, or another partial rig, confirm the installed package is 0.5.25 or newer and check `World renderer candidate`, `World renderer set selected`, `Hidden nearby first-person overlay renderer`, `World read-only proxy created`, and `WorldAvatarProxy updated` lines. MoreSuits/custom suits should select a world-model group such as `Shadow` instead of a `ViewModel` group; incompatible accessories should be listed as `ReadOnlyAccessory`, not forced into the editable proxy.
 - If action buttons such as Reset, Save, or Load also select decal/save rows, confirm the installed package is 0.4.7 or newer. Lists now use stable row pools and log `ListRowsUpdated` instead of rebuilding/destroying row buttons during normal UI refresh.
 - If controller `A` clicks the wrong UI item, confirm the installed package is 0.4.7 or newer, move the left stick before the first `A` press, then check `Virtual cursor A press` and `Virtual cursor A release` diagnostics. They should show the same resolved button or control that is visually under the cursor.
 - If button highlights stick around, confirm the installed package is 0.4.7 or newer. Normal button selected colors are neutral.
@@ -205,7 +211,7 @@ Troubleshooting:
 
 ## Known Limits
 
-- Third-person Paint, Erase, Decal, and Text project onto the visible suit surface before resolving to texture UVs. Unusual modded suit UV layouts may still make edits appear somewhere unexpected, and seam guards may skip ambiguous pixels instead of bleeding across unrelated islands.
+- Third-person Paint, Erase, Fill, Decal, and Text project onto the visible editable suit surface before resolving to texture UVs. Unusual modded suit renderer/material setups may produce read-only accessories or fall back to UV fallback if no editable surface can be found, and unusual UV layouts may still make edits appear somewhere unexpected.
 - Mirror mode uses a mesh surface map, so unusual or asymmetric meshes may skip the mirrored edit when no reliable opposite surface can be found.
 - Text stamps use Unity's built-in Arial font only in this version and are baked as tinted transparent alpha masks. Third-person Text projection can still skip letters that physically land off the visible suit surface.
 - Cross-suit loading depends on UV compatibility.
