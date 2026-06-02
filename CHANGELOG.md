@@ -1,13 +1,5 @@
 # Changelog
 
-## 0.5.25
-
-- Replaced the single vanilla `LOD1` editor proxy with a renderer-set proxy for vanilla, MoreSuits, and custom-model suits.
-- Added support for editable skinned/static suit renderers plus visible read-only accessory proxy parts when custom materials do not share the editable suit texture.
-- Improved renderer discovery to prefer MoreSuits-style `Shadow` world models over `ViewModel`/first-person renderers and reduce duplicate helmet/viewmodel glitches.
-- Routed third-person painting, erase, fill, decal/text projection, eyedropper, mirror mapping, and cursor sizing through the combined editable proxy collider.
-- Added detailed renderer discovery diagnostics with candidate roles, selected renderer-set summaries, hidden live renderer counts, and read-only proxy counts.
-
 ## 0.5.24
 
 - Moved the UV fallback preview into a reserved right-column slot so it no longer covers the color picker or brush controls.

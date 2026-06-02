@@ -161,10 +161,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private MeshCollider _worldPaintCollider;
     private MeshFilter _worldAvatarMeshFilter;
     private MeshRenderer _worldAvatarRenderer;
-    private Renderer _worldSourceRenderer;
-    private WorldSuitRendererSet _worldRendererSet;
-    private readonly List<GameObject> _worldReadOnlyProxyObjects = new();
-    private string _worldReadOnlyProxyKey = string.Empty;
+    private SkinnedMeshRenderer _worldSourceRenderer;
     private string _worldSourceRendererSummary = "none";
     private GameObject _worldBrushMarker;
     private Material _worldBrushMarkerMaterial;
@@ -341,99 +338,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         internal int Layer;
         internal bool UpdateWhenOffscreen;
         internal bool HasUpdateWhenOffscreen;
-    }
-
-    private struct RendererEnabledState
-    {
-        internal Renderer Renderer;
-        internal bool Enabled;
-        internal bool UpdateWhenOffscreen;
-        internal bool HasUpdateWhenOffscreen;
-    }
-
-    private sealed class WorldRendererCandidate
-    {
-        internal Renderer Renderer;
-        internal bool ExplicitPlayerRenderer;
-        internal string Path = string.Empty;
-        internal string GroupKey = string.Empty;
-        internal string Role = "Unknown";
-        internal string Reason = string.Empty;
-        internal string MaterialSummary = string.Empty;
-        internal float DistanceToPlayer;
-        internal int VertexCount;
-        internal int Score;
-        internal int MaterialScore;
-        internal int BodyScore;
-        internal bool EditableCandidate;
-        internal bool ReadOnlyCandidate;
-    }
-
-    private sealed class WorldSuitRendererSet
-    {
-        internal readonly List<WorldRendererCandidate> Editable = new();
-        internal readonly List<WorldRendererCandidate> ReadOnly = new();
-        internal readonly List<Renderer> AllRenderers = new();
-        internal string GroupKey = string.Empty;
-        internal int Score;
-        internal string Summary = "none";
-
-        internal bool HasEditableRenderers => Editable.Count > 0;
-        internal Renderer PrimaryEditableRenderer => Editable.Count > 0 ? Editable[0].Renderer : null;
-
-        internal void Sort()
-        {
-            Editable.Sort((left, right) => right.Score.CompareTo(left.Score));
-            ReadOnly.Sort((left, right) => right.Score.CompareTo(left.Score));
-            AllRenderers.Clear();
-            AddUnique(AllRenderers, Editable);
-            AddUnique(AllRenderers, ReadOnly);
-        }
-
-        internal bool Contains(Renderer renderer)
-        {
-            if (renderer == null)
-            {
-                return false;
-            }
-
-            for (var i = 0; i < AllRenderers.Count; i++)
-            {
-                if (ReferenceEquals(AllRenderers[i], renderer))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private static void AddUnique(List<Renderer> renderers, List<WorldRendererCandidate> candidates)
-        {
-            for (var i = 0; i < candidates.Count; i++)
-            {
-                var renderer = candidates[i].Renderer;
-                if (renderer == null)
-                {
-                    continue;
-                }
-
-                var exists = false;
-                for (var j = 0; j < renderers.Count; j++)
-                {
-                    if (ReferenceEquals(renderers[j], renderer))
-                    {
-                        exists = true;
-                        break;
-                    }
-                }
-
-                if (!exists)
-                {
-                    renderers.Add(renderer);
-                }
-            }
-        }
     }
 
     private sealed class AnchoredListRow
@@ -5744,16 +5648,39 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
+        var source = _worldSourceRenderer ?? FindBestSuitRenderer(StartOfRound.Instance?.localPlayerController);
         var mesh = _worldPaintMesh != null && _worldPaintMesh.vertexCount > 0 ? _worldPaintMesh : null;
+        Mesh temporaryMesh = null;
         try
         {
+            if (mesh == null && source != null)
+            {
+                temporaryMesh = new Mesh { name = "DrawableSuitsMirrorSurfaceBake" };
+                var previousEnabled = source.enabled;
+                try
+                {
+                    source.enabled = true;
+                    source.BakeMesh(temporaryMesh, true);
+                }
+                finally
+                {
+                    source.enabled = previousEnabled;
+                }
+
+                if (temporaryMesh.vertexCount > 0)
+                {
+                    temporaryMesh.RecalculateBounds();
+                    mesh = temporaryMesh;
+                }
+            }
+
             if (mesh == null || mesh.vertexCount == 0)
             {
                 InvalidateMirrorSurfaceMap("no mesh");
                 return false;
             }
 
-            var key = $"{_selectedSuitId}|{_worldRendererSet?.GroupKey ?? _worldSourceRenderer?.name ?? "unknown"}|v={mesh.vertexCount}|sub={mesh.subMeshCount}|bounds={mesh.bounds}|texture={texture?.width ?? 0}x{texture?.height ?? 0}";
+            var key = $"{_selectedSuitId}|{source?.name ?? "unknown"}|v={mesh.vertexCount}|sub={mesh.subMeshCount}|bounds={mesh.bounds}|texture={texture?.width ?? 0}x{texture?.height ?? 0}";
             if (_mirrorSurfaceMap != null && string.Equals(_mirrorSurfaceMapKey, key, StringComparison.Ordinal))
             {
                 return true;
@@ -5778,6 +5705,10 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
         finally
         {
+            if (temporaryMesh != null)
+            {
+                Destroy(temporaryMesh);
+            }
         }
     }
 
@@ -8819,10 +8750,10 @@ internal sealed class SuitEditorController : MonoBehaviour
         DestroyPreview();
         var texture = _selectedSuitId >= 0 ? DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId) : null;
         var player = StartOfRound.Instance?.localPlayerController;
-        var rendererSet = BuildWorldSuitRendererSet(player);
-        if (texture == null || player == null || rendererSet == null || !rendererSet.HasEditableRenderers)
+        var source = FindBestSuitRenderer(player);
+        if (texture == null || player == null || source == null)
         {
-            DrawableSuitsDiagnostics.Warn($"WorldThirdPerson setup skipped [{context}]. texture={DescribeEditableTexture()}; player={DrawableSuitsPlugin.DescribeUnityObject(player)}; rendererSet={rendererSet?.Summary ?? "null"}");
+            DrawableSuitsDiagnostics.Warn($"WorldThirdPerson setup skipped [{context}]. texture={DescribeEditableTexture()}; player={DrawableSuitsPlugin.DescribeUnityObject(player)}; source={DrawableSuitsPlugin.DescribeUnityObject(source)}");
             return false;
         }
 
@@ -8845,11 +8776,10 @@ internal sealed class SuitEditorController : MonoBehaviour
                 DrawableSuitsDiagnostics.Info($"World camera state initialized for preview setup. context={context}; yaw={_worldCameraYaw:0.##}; pitch={_worldCameraPitch:0.##}; distance={_worldCameraDistance:0.##}");
             }
             _worldPaintLayer = SelectWorldPaintLayer();
-            _worldRendererSet = rendererSet;
-            _worldSourceRenderer = rendererSet.PrimaryEditableRenderer;
-            _worldSourceRendererSummary = rendererSet.Summary;
+            _worldSourceRenderer = source;
+            _worldSourceRendererSummary = DescribeRendererCandidate(source, "selected");
             SetUvFallbackVisible(false);
-            CaptureAndHideLocalPlayerRenderers(player, rendererSet);
+            CaptureAndHideLocalPlayerRenderers(player, source);
 
             _worldEditorCameraObject = new GameObject("DrawableSuitsThirdPersonCamera");
             _worldEditorCameraObject.hideFlags = HideFlags.HideAndDontSave;
@@ -8866,15 +8796,13 @@ internal sealed class SuitEditorController : MonoBehaviour
 
             _worldPaintProxyObject = new GameObject("DrawableSuitsWorldAvatarProxy");
             _worldPaintProxyObject.hideFlags = HideFlags.HideAndDontSave;
-            _worldPaintProxyObject.transform.position = Vector3.zero;
-            _worldPaintProxyObject.transform.rotation = Quaternion.identity;
-            _worldPaintProxyObject.transform.localScale = Vector3.one;
+            _worldPaintProxyObject.transform.SetParent(source.transform, false);
             _worldPaintProxyObject.layer = _worldPaintLayer;
             _worldPaintMesh = new Mesh { name = "DrawableSuitsWorldPaintMesh" };
             _worldAvatarMeshFilter = _worldPaintProxyObject.AddComponent<MeshFilter>();
             _worldAvatarMeshFilter.sharedMesh = _worldPaintMesh;
             _worldAvatarRenderer = _worldPaintProxyObject.AddComponent<MeshRenderer>();
-            _worldAvatarRenderer.sharedMaterials = BuildWorldProxyMaterials(_worldSourceRenderer, true);
+            _worldAvatarRenderer.sharedMaterials = BuildWorldProxyMaterials(source, true);
             _worldPaintCollider = _worldPaintProxyObject.AddComponent<MeshCollider>();
             _worldPaintCollider.convex = false;
 
@@ -8905,7 +8833,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             _hasPreviewCollider = _worldPaintCollider != null;
             _canPaint = texture != null && _worldPreviewReady;
             SetStatus(_canPaint ? "Ready. Third-person paint mode is active." : "Third-person editor opened, but paint proxy is not ready.", !_canPaint);
-            DrawableSuitsDiagnostics.Info($"WorldThirdPerson setup complete. context={context}; ready={_worldPreviewReady}; player={player.name}; rendererSet={_worldSourceRendererSummary}; hiddenRenderers={_rendererRestoreStates.Count}; layer={_worldPaintLayer}; camera={DrawableSuitsPlugin.DescribeUnityObject(_worldEditorCamera)}; cameraMask={_worldEditorCamera.cullingMask}; avatarProxy={DrawableSuitsPlugin.DescribeUnityObject(_worldPaintProxyObject)}; proxyRenderer={DrawableSuitsPlugin.DescribeUnityObject(_worldAvatarRenderer)}; proxyMaterial={_worldAvatarRenderer?.sharedMaterial?.name ?? "null"}; proxyCollider={_worldPaintCollider != null}; editable={DescribeEditableTexture()}");
+            DrawableSuitsDiagnostics.Info($"WorldThirdPerson setup complete. context={context}; ready={_worldPreviewReady}; player={player.name}; selectedRenderer={_worldSourceRendererSummary}; hiddenRenderers={_rendererRestoreStates.Count}; layer={_worldPaintLayer}; camera={DrawableSuitsPlugin.DescribeUnityObject(_worldEditorCamera)}; cameraMask={_worldEditorCamera.cullingMask}; avatarProxy={DrawableSuitsPlugin.DescribeUnityObject(_worldPaintProxyObject)}; proxyRenderer={DrawableSuitsPlugin.DescribeUnityObject(_worldAvatarRenderer)}; proxyMaterial={_worldAvatarRenderer?.sharedMaterial?.name ?? "null"}; proxyCollider={_worldPaintCollider != null}; editable={DescribeEditableTexture()}");
             return _worldPreviewReady;
         }
         catch (Exception ex)
@@ -8942,133 +8870,51 @@ internal sealed class SuitEditorController : MonoBehaviour
         return mask;
     }
 
-    private WorldSuitRendererSet BuildWorldSuitRendererSet(PlayerControllerB player)
+    private SkinnedMeshRenderer FindBestSuitRenderer(PlayerControllerB player)
     {
         if (player == null)
         {
             return null;
         }
 
-        var candidates = CollectWorldRendererCandidates(player);
-        var editableGroups = new Dictionary<string, List<WorldRendererCandidate>>(StringComparer.Ordinal);
+        var candidates = new List<SkinnedMeshRenderer>();
+        AddRendererCandidate(candidates, player.thisPlayerModel as SkinnedMeshRenderer);
+        AddRendererCandidate(candidates, player.thisPlayerModelLOD1 as SkinnedMeshRenderer);
+        AddRendererCandidate(candidates, player.thisPlayerModelLOD2 as SkinnedMeshRenderer);
+
+        var childRenderers = player.GetComponentsInChildren<SkinnedMeshRenderer>(true);
+        for (var i = 0; i < childRenderers.Length; i++)
+        {
+            AddRendererCandidate(candidates, childRenderers[i]);
+        }
+
+        SkinnedMeshRenderer best = null;
+        var bestScore = int.MinValue;
         for (var i = 0; i < candidates.Count; i++)
         {
-            var candidate = EvaluateWorldRendererCandidate(player, candidates[i]);
-            candidates[i] = candidate;
-            DrawableSuitsDiagnostics.Info($"World renderer candidate: {DescribeWorldRendererCandidate(candidate)}");
-            if (!candidate.EditableCandidate)
+            var renderer = candidates[i];
+            var score = ScoreSuitRenderer(player, renderer, out var reason, out var rejected);
+            DrawableSuitsDiagnostics.Info($"World renderer candidate: {DescribeRendererCandidate(renderer, rejected ? "rejected" : "candidate")}; score={score}; reason={reason}");
+            if (!rejected && score > bestScore)
             {
-                continue;
-            }
-
-            if (!editableGroups.TryGetValue(candidate.GroupKey, out var group))
-            {
-                group = new List<WorldRendererCandidate>();
-                editableGroups[candidate.GroupKey] = group;
-            }
-            group.Add(candidate);
-        }
-
-        List<WorldRendererCandidate> selectedGroup = null;
-        var selectedGroupKey = string.Empty;
-        var selectedScore = int.MinValue;
-        foreach (var pair in editableGroups)
-        {
-            var score = ScoreRendererGroup(pair.Key, pair.Value);
-            if (score > selectedScore)
-            {
-                selectedScore = score;
-                selectedGroup = pair.Value;
-                selectedGroupKey = pair.Key;
+                best = renderer;
+                bestScore = score;
             }
         }
 
-        if (selectedGroup == null || selectedGroup.Count == 0)
+        if (best != null)
         {
-            DrawableSuitsDiagnostics.Warn($"No editable world suit renderer set found. candidates={candidates.Count}; selectedSuitId={_selectedSuitId}; editableTexture={DescribeEditableTexture()}");
-            return null;
+            DrawableSuitsDiagnostics.Info($"World renderer selected: {DescribeRendererCandidate(best, "selected")}; score={bestScore}");
+        }
+        else
+        {
+            DrawableSuitsDiagnostics.Warn($"No valid world suit renderer found. candidates={candidates.Count}");
         }
 
-        var set = new WorldSuitRendererSet
-        {
-            GroupKey = selectedGroupKey,
-            Score = selectedScore
-        };
-
-        for (var i = 0; i < candidates.Count; i++)
-        {
-            var candidate = candidates[i];
-            if (!string.Equals(candidate.GroupKey, selectedGroupKey, StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            if (candidate.EditableCandidate)
-            {
-                candidate.Role = "Editable";
-                set.Editable.Add(candidate);
-                continue;
-            }
-
-            if (candidate.ReadOnlyCandidate)
-            {
-                candidate.Role = "ReadOnlyAccessory";
-                set.ReadOnly.Add(candidate);
-            }
-        }
-
-        if (set.Editable.Count == 0)
-        {
-            DrawableSuitsDiagnostics.Warn($"Selected world renderer group has no editable renderers. group={selectedGroupKey}; score={selectedScore}");
-            return null;
-        }
-
-        set.Sort();
-        set.Summary = $"group={selectedGroupKey}; score={selectedScore}; editable={set.Editable.Count}; readOnly={set.ReadOnly.Count}; primary={DescribeRendererCandidate(set.PrimaryEditableRenderer, "primary")}";
-        DrawableSuitsDiagnostics.Info($"World renderer set selected. {set.Summary}; editable=[{DescribeRendererList(set.Editable)}]; readOnly=[{DescribeRendererList(set.ReadOnly)}]");
-        return set;
+        return best;
     }
 
-    private List<WorldRendererCandidate> CollectWorldRendererCandidates(PlayerControllerB player)
-    {
-        var candidates = new List<WorldRendererCandidate>();
-        AddRendererCandidate(candidates, player.thisPlayerModel as Renderer, true, player);
-        AddRendererCandidate(candidates, player.thisPlayerModelLOD1 as Renderer, true, player);
-        AddRendererCandidate(candidates, player.thisPlayerModelLOD2 as Renderer, true, player);
-        AddRendererCandidate(candidates, player.thisPlayerModelArms as Renderer, true, player);
-
-        var playerRenderers = player.GetComponentsInChildren<Renderer>(true);
-        for (var i = 0; i < playerRenderers.Length; i++)
-        {
-            AddRendererCandidate(candidates, playerRenderers[i], true, player);
-        }
-
-        var playerPosition = player.transform.position;
-        var allRenderers = Resources.FindObjectsOfTypeAll<Renderer>();
-        for (var i = 0; i < allRenderers.Length; i++)
-        {
-            var renderer = allRenderers[i];
-            if (renderer == null
-                || renderer.gameObject.name.IndexOf("DrawableSuits", StringComparison.OrdinalIgnoreCase) >= 0
-                || !renderer.gameObject.scene.IsValid()
-                || !renderer.gameObject.activeInHierarchy)
-            {
-                continue;
-            }
-
-            var distance = SafeRendererDistance(renderer, playerPosition);
-            if (distance > 4.75f)
-            {
-                continue;
-            }
-
-            AddRendererCandidate(candidates, renderer, false, player);
-        }
-
-        return candidates;
-    }
-
-    private void AddRendererCandidate(List<WorldRendererCandidate> candidates, Renderer renderer, bool explicitPlayerRenderer, PlayerControllerB player)
+    private static void AddRendererCandidate(List<SkinnedMeshRenderer> candidates, SkinnedMeshRenderer renderer)
     {
         if (renderer == null)
         {
@@ -9077,121 +8923,96 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         for (var i = 0; i < candidates.Count; i++)
         {
-            if (ReferenceEquals(candidates[i].Renderer, renderer))
+            if (ReferenceEquals(candidates[i], renderer))
             {
-                candidates[i].ExplicitPlayerRenderer |= explicitPlayerRenderer;
                 return;
             }
         }
 
-        candidates.Add(new WorldRendererCandidate
-        {
-            Renderer = renderer,
-            ExplicitPlayerRenderer = explicitPlayerRenderer,
-            Path = GetTransformPath(renderer.transform),
-            DistanceToPlayer = player != null ? SafeRendererDistance(renderer, player.transform.position) : float.MaxValue
-        });
+        candidates.Add(renderer);
     }
 
-    private WorldRendererCandidate EvaluateWorldRendererCandidate(PlayerControllerB player, WorldRendererCandidate candidate)
+    private int ScoreSuitRenderer(PlayerControllerB player, SkinnedMeshRenderer renderer, out string reason, out bool rejected)
     {
-        var renderer = candidate.Renderer;
-        candidate.GroupKey = GetSuitRendererGroupKey(renderer);
-        candidate.VertexCount = GetRendererVertexCount(renderer);
-        candidate.MaterialSummary = DescribeMaterials(renderer != null ? renderer.sharedMaterials : null);
+        rejected = false;
         if (renderer == null)
         {
-            candidate.Role = "Rejected";
-            candidate.Reason = "renderer null";
-            candidate.Score = int.MinValue;
-            return candidate;
+            reason = "renderer null";
+            rejected = true;
+            return int.MinValue;
         }
 
-        if (candidate.VertexCount < 24 || !RendererHasUsableMesh(renderer))
+        var mesh = renderer.sharedMesh;
+        var vertexCount = mesh != null ? mesh.vertexCount : 0;
+        var path = GetTransformPath(renderer.transform);
+        var lowerPath = path.ToLowerInvariant();
+        if (mesh == null || vertexCount < 300)
         {
-            candidate.Role = "Rejected";
-            candidate.Reason = $"mesh missing or too small vertices={candidate.VertexCount}";
-            candidate.Score = -10000;
-            return candidate;
+            reason = $"mesh missing or too small vertices={vertexCount}";
+            rejected = true;
+            return -10000;
         }
 
-        if (LooksFirstPersonRenderer(renderer, candidate.Path, player))
+        if (LooksFirstPersonOnly(lowerPath))
         {
-            candidate.Role = "FirstPersonHidden";
-            candidate.Reason = "camera/viewmodel/arms/held-item path";
-            candidate.Score = -9000 + Mathf.Clamp(candidate.VertexCount / 100, 0, 100);
-            return candidate;
+            reason = "name/path indicates first-person arms, hands, held item, camera, or viewmodel";
+            rejected = true;
+            return -9000 + vertexCount / 100;
         }
 
         var boundsSize = renderer.bounds.size;
         var largest = Mathf.Max(boundsSize.x, Mathf.Max(boundsSize.y, boundsSize.z));
         var smallest = Mathf.Min(boundsSize.x, Mathf.Min(boundsSize.y, boundsSize.z));
-        if (largest < 0.08f || smallest < 0.005f)
+        if (largest < 0.45f || smallest < 0.02f)
         {
-            candidate.Role = "Rejected";
-            candidate.Reason = $"bounds too small size={boundsSize}";
-            candidate.Score = -8000 + Mathf.Clamp(candidate.VertexCount / 100, 0, 100);
-            return candidate;
+            reason = $"bounds too small size={boundsSize}";
+            rejected = true;
+            return -8000 + vertexCount / 100;
         }
 
-        var materialScore = ScoreRendererMaterialCompatibility(renderer, out var materialReason);
-        var bodyScore = ScoreBodyLikeRenderer(renderer, candidate.Path, player);
-        var lowerPath = (candidate.Path ?? string.Empty).ToLowerInvariant();
-        var shadowBonus = lowerPath.Contains("shadow") ? 280 : 0;
-        var vanillaBonus = candidate.ExplicitPlayerRenderer ? 80 : 0;
-        var enabledBonus = renderer.enabled ? 20 : 0;
-        var meshBonus = Mathf.Clamp(candidate.VertexCount / 100, 0, 140);
-        var boundsBonus = Mathf.RoundToInt(Mathf.Clamp(largest * 30f, 0f, 120f));
-        candidate.Score = materialScore + bodyScore + shadowBonus + vanillaBonus + enabledBonus + meshBonus + boundsBonus;
-        candidate.MaterialScore = materialScore;
-        candidate.BodyScore = bodyScore;
-        candidate.EditableCandidate = materialScore >= 100 || (shadowBonus > 0 && bodyScore > 0 && RendererHasAnyTexture(renderer));
-        candidate.ReadOnlyCandidate = !candidate.EditableCandidate && bodyScore > 0 && (candidate.ExplicitPlayerRenderer || lowerPath.Contains("shadow") || RendererHasAnyTexture(renderer));
-        candidate.Role = candidate.EditableCandidate ? "EditableCandidate" : candidate.ReadOnlyCandidate ? "ReadOnlyCandidate" : "Rejected";
-        candidate.Reason = $"material={materialScore}({materialReason}); body={bodyScore}; shadow={shadowBonus}; explicit={candidate.ExplicitPlayerRenderer}; bounds={boundsSize}; distance={candidate.DistanceToPlayer:0.##}";
-        return candidate;
-    }
-
-    private int ScoreRendererGroup(string groupKey, List<WorldRendererCandidate> group)
-    {
         var score = 0;
-        var best = int.MinValue;
-        var vertices = 0;
-        for (var i = 0; i < group.Count; i++)
-        {
-            var candidate = group[i];
-            best = Mathf.Max(best, candidate.Score);
-            vertices += Mathf.Max(0, candidate.VertexCount);
-            score += Mathf.Max(0, candidate.Score / 2);
-        }
-
-        score += best;
-        score += Mathf.Clamp(vertices / 100, 0, 240);
-        var lowerGroup = (groupKey ?? string.Empty).ToLowerInvariant();
-        if (lowerGroup.Contains("shadow")) score += 420;
-        if (lowerGroup.Contains("viewmodel")) score -= 1000;
-        if (lowerGroup.Contains("scavengermodel")) score += 80;
+        if (ReferenceEquals(renderer, player.thisPlayerModel)) score += 220;
+        if (ReferenceEquals(renderer, player.thisPlayerModelLOD1)) score += 160;
+        if (ReferenceEquals(renderer, player.thisPlayerModelLOD2)) score += 80;
+        if (renderer.enabled) score += 20;
+        score += Mathf.Clamp(vertexCount / 100, 0, 120);
+        score += Mathf.RoundToInt(Mathf.Clamp(largest * 25f, 0f, 90f));
+        if (lowerPath.Contains("lod1")) score += 70;
+        if (lowerPath.Contains("lod2")) score += 30;
+        if (lowerPath.Contains("body") || lowerPath.Contains("player") || lowerPath.Contains("suit")) score += 25;
+        if (RendererMaterialLooksCompatible(renderer)) score += 40;
+        reason = $"accepted vertices={vertexCount}; bounds={boundsSize}; materialCompatible={RendererMaterialLooksCompatible(renderer)}";
         return score;
     }
 
-    private int ScoreRendererMaterialCompatibility(Renderer renderer, out string reason)
+    private static bool LooksFirstPersonOnly(string lowerPath)
     {
-        reason = "none";
-        if (renderer == null || DrawableSuitsPlugin.Registry == null || _selectedSuitId < 0)
+        return lowerPath.Contains("arms")
+            || lowerPath.Contains("arm.")
+            || lowerPath.Contains("/arm")
+            || lowerPath.Contains("hand")
+            || lowerPath.Contains("finger")
+            || lowerPath.Contains("firstperson")
+            || lowerPath.Contains("first person")
+            || lowerPath.Contains("viewmodel")
+            || lowerPath.Contains("view model")
+            || lowerPath.Contains("helmet")
+            || lowerPath.Contains("visor")
+            || lowerPath.Contains("mask")
+            || lowerPath.Contains("camera")
+            || lowerPath.Contains("held")
+            || lowerPath.Contains("item")
+            || lowerPath.Contains("weapon");
+    }
+
+    private bool RendererMaterialLooksCompatible(Renderer renderer)
+    {
+        if (renderer == null)
         {
-            return 0;
+            return false;
         }
 
-        var state = DrawableSuitsPlugin.Registry.GetOrCreateState(_selectedSuitId);
-        var runtimeMaterial = state?.RuntimeMaterial;
-        var originalMaterial = state?.OriginalMaterial;
-        var originalTexture = state?.OriginalTexture;
-        var editableTexture = state?.EditableTexture;
-        var baseTexture = state?.BaseTexture;
-        var suitName = NormalizeMaterialToken(state?.SuitName);
-        var originalName = NormalizeMaterialToken(originalMaterial != null ? originalMaterial.name : string.Empty);
-        var best = 0;
-        var bestReason = "none";
+        var runtimeMaterial = _selectedSuitId >= 0 ? DrawableSuitsPlugin.Registry.GetRuntimeMaterial(_selectedSuitId) : null;
         var materials = renderer.sharedMaterials;
         for (var i = 0; i < materials.Length; i++)
         {
@@ -9201,108 +9022,14 @@ internal sealed class SuitEditorController : MonoBehaviour
                 continue;
             }
 
-            var materialName = NormalizeMaterialToken(material.name);
-            var texture = material.mainTexture;
-            var score = 0;
-            var localReason = "generic";
             if (runtimeMaterial != null && ReferenceEquals(material, runtimeMaterial))
             {
-                score = 260;
-                localReason = "runtime material";
-            }
-            else if (originalMaterial != null && ReferenceEquals(material, originalMaterial))
-            {
-                score = 250;
-                localReason = "original material";
-            }
-            else if (texture != null && (ReferenceEquals(texture, originalTexture) || ReferenceEquals(texture, editableTexture) || ReferenceEquals(texture, baseTexture)))
-            {
-                score = 230;
-                localReason = "state texture";
-            }
-            else if (!string.IsNullOrEmpty(originalName) && !string.IsNullOrEmpty(materialName) && (materialName.Contains(originalName) || originalName.Contains(materialName)))
-            {
-                score = 180;
-                localReason = $"material name matches original '{originalName}'";
-            }
-            else if (!string.IsNullOrEmpty(suitName) && !string.IsNullOrEmpty(materialName) && (materialName.Contains(suitName) || suitName.Contains(materialName)))
-            {
-                score = 160;
-                localReason = $"material name matches suit '{suitName}'";
-            }
-            else if (texture != null && materialName.IndexOf("suit", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                score = 100;
-                localReason = "textured suit material";
+                return true;
             }
 
-            if (score > best)
-            {
-                best = score;
-                bestReason = localReason;
-            }
-        }
-
-        reason = bestReason;
-        return best;
-    }
-
-    private static string NormalizeMaterialToken(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return string.Empty;
-        }
-
-        var chars = new List<char>(value.Length);
-        for (var i = 0; i < value.Length; i++)
-        {
-            var c = char.ToLowerInvariant(value[i]);
-            if (char.IsLetterOrDigit(c))
-            {
-                chars.Add(c);
-            }
-        }
-
-        return new string(chars.ToArray());
-    }
-
-    private int ScoreBodyLikeRenderer(Renderer renderer, string path, PlayerControllerB player)
-    {
-        if (renderer == null)
-        {
-            return 0;
-        }
-
-        var lowerPath = (path ?? string.Empty).ToLowerInvariant();
-        var score = 0;
-        if (lowerPath.Contains("body")) score += 180;
-        if (lowerPath.Contains("shadow")) score += 150;
-        if (lowerPath.Contains("suit")) score += 80;
-        if (lowerPath.Contains("player") || lowerPath.Contains("scavenger")) score += 60;
-        if (lowerPath.Contains("lod1")) score += 70;
-        if (lowerPath.Contains("lod2")) score += 30;
-
-        var size = renderer.bounds.size;
-        var largest = Mathf.Max(size.x, Mathf.Max(size.y, size.z));
-        var height = Mathf.Max(size.y, Mathf.Max(size.x, size.z));
-        if (largest >= 0.65f) score += 70;
-        if (height >= 0.8f) score += 80;
-        if (player != null && SafeRendererDistance(renderer, player.transform.position) <= 2.25f) score += 70;
-        return score;
-    }
-
-    private static bool RendererHasAnyTexture(Renderer renderer)
-    {
-        if (renderer?.sharedMaterials == null)
-        {
-            return false;
-        }
-
-        var materials = renderer.sharedMaterials;
-        for (var i = 0; i < materials.Length; i++)
-        {
-            if (materials[i]?.mainTexture != null)
+            var texture = material.mainTexture;
+            var materialName = material.name ?? string.Empty;
+            if (texture != null || materialName.IndexOf("suit", StringComparison.OrdinalIgnoreCase) >= 0)
             {
                 return true;
             }
@@ -9311,141 +9038,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         return false;
     }
 
-    private static bool LooksFirstPersonRenderer(Renderer renderer, string path, PlayerControllerB player)
-    {
-        if (renderer == null)
-        {
-            return true;
-        }
-
-        if (player != null && ReferenceEquals(renderer, player.thisPlayerModelArms))
-        {
-            return true;
-        }
-
-        var camera = Camera.main;
-        if (camera != null && renderer.transform.IsChildOf(camera.transform))
-        {
-            return true;
-        }
-
-        var lowerPath = (path ?? string.Empty).ToLowerInvariant();
-        return lowerPath.Contains("viewmodel")
-            || lowerPath.Contains("view model")
-            || lowerPath.Contains("firstperson")
-            || lowerPath.Contains("first person")
-            || lowerPath.Contains("armsonly")
-            || lowerPath.Contains("arms only")
-            || lowerPath.Contains("localphonemodel")
-            || lowerPath.Contains("serverphonemodel")
-            || lowerPath.Contains("copyheldprop")
-            || lowerPath.Contains("held")
-            || lowerPath.Contains("weapon")
-            || lowerPath.Contains("playerhudhelmetmodel")
-            || lowerPath.Contains("fixfogrendering")
-            || lowerPath.Contains("/maincamera")
-            || lowerPath.Contains("cameracontainer");
-    }
-
-    private static bool RendererHasUsableMesh(Renderer renderer)
-    {
-        return GetRendererVertexCount(renderer) > 0;
-    }
-
-    private static int GetRendererVertexCount(Renderer renderer)
-    {
-        if (renderer is SkinnedMeshRenderer skinned)
-        {
-            return skinned.sharedMesh != null ? skinned.sharedMesh.vertexCount : 0;
-        }
-
-        var meshFilter = renderer != null ? renderer.GetComponent<MeshFilter>() : null;
-        return meshFilter?.sharedMesh != null ? meshFilter.sharedMesh.vertexCount : 0;
-    }
-
-    private static float SafeRendererDistance(Renderer renderer, Vector3 point)
-    {
-        if (renderer == null)
-        {
-            return float.MaxValue;
-        }
-
-        try
-        {
-            return Vector3.Distance(renderer.bounds.center, point);
-        }
-        catch
-        {
-            return float.MaxValue;
-        }
-    }
-
-    private static string GetSuitRendererGroupKey(Renderer renderer)
-    {
-        if (renderer == null)
-        {
-            return "null";
-        }
-
-        var current = renderer.transform;
-        Transform shadow = null;
-        Transform scavenger = null;
-        while (current != null)
-        {
-            var name = current.name ?? string.Empty;
-            if (name.IndexOf("Shadow", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                shadow = current;
-                break;
-            }
-            if (name.IndexOf("ScavengerModel", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                scavenger = current;
-            }
-            current = current.parent;
-        }
-
-        if (shadow != null)
-        {
-            return GetTransformPath(shadow);
-        }
-
-        if (scavenger != null)
-        {
-            return GetTransformPath(scavenger);
-        }
-
-        return GetTransformPath(renderer.transform.parent != null ? renderer.transform.parent : renderer.transform);
-    }
-
-    private static string DescribeRendererList(List<WorldRendererCandidate> candidates)
-    {
-        if (candidates == null || candidates.Count == 0)
-        {
-            return "none";
-        }
-
-        var parts = new List<string>();
-        for (var i = 0; i < candidates.Count; i++)
-        {
-            var candidate = candidates[i];
-            parts.Add($"{candidate.Renderer?.name ?? "null"}:score={candidate.Score}:mat={candidate.MaterialScore}:body={candidate.BodyScore}:v={candidate.VertexCount}");
-        }
-
-        return string.Join(" | ", parts);
-    }
-
-    private static string DescribeWorldRendererCandidate(WorldRendererCandidate candidate)
-    {
-        if (candidate == null)
-        {
-            return "null";
-        }
-
-        return $"{candidate.Role}:{candidate.Renderer?.name ?? "null"}:path={candidate.Path}:group={candidate.GroupKey}:enabled={candidate.Renderer?.enabled.ToString() ?? "null"}:active={candidate.Renderer?.gameObject.activeInHierarchy.ToString() ?? "null"}:layer={candidate.Renderer?.gameObject.layer.ToString() ?? "null"}:vertices={candidate.VertexCount}:bounds={(candidate.Renderer != null ? candidate.Renderer.bounds.ToString() : "null")}:materials=[{candidate.MaterialSummary}]:score={candidate.Score}:reason={candidate.Reason}";
-    }
-
-    private void CaptureAndHideLocalPlayerRenderers(PlayerControllerB player, WorldSuitRendererSet rendererSet)
+    private void CaptureAndHideLocalPlayerRenderers(PlayerControllerB player, SkinnedMeshRenderer selectedSource)
     {
         RestorePlayerRenderers();
         if (player == null)
@@ -9465,14 +9058,6 @@ internal sealed class SuitEditorController : MonoBehaviour
             hidden += CaptureAndHideRenderer(playerRenderers[i], "local player child");
         }
 
-        if (rendererSet != null)
-        {
-            for (var i = 0; i < rendererSet.AllRenderers.Count; i++)
-            {
-                hidden += CaptureAndHideRenderer(rendererSet.AllRenderers[i], "world renderer set source");
-            }
-        }
-
         var mainCamera = Camera.main;
         if (mainCamera != null)
         {
@@ -9483,25 +9068,19 @@ internal sealed class SuitEditorController : MonoBehaviour
             }
         }
 
-        if (rendererSet != null)
+        if (selectedSource != null)
         {
-            for (var i = 0; i < rendererSet.Editable.Count; i++)
-            {
-                if (rendererSet.Editable[i].Renderer is SkinnedMeshRenderer skinned)
-                {
-                    CaptureRendererState(skinned);
-                    skinned.updateWhenOffscreen = true;
-                    skinned.enabled = false;
-                }
-            }
+            CaptureRendererState(selectedSource);
+            selectedSource.updateWhenOffscreen = true;
+            selectedSource.enabled = false;
         }
 
-        hidden += CaptureAndHideNearbyFirstPersonOverlayRenderers(player, rendererSet);
+        hidden += CaptureAndHideNearbyFirstPersonOverlayRenderers(player, selectedSource);
 
-        DrawableSuitsDiagnostics.Info($"Hidden local renderers for third-person avatar proxy. hidden={hidden}; rendererSet={rendererSet?.Summary ?? "null"}; main={DescribeRendererState(player.thisPlayerModel)}; lod1={DescribeRendererState(player.thisPlayerModelLOD1)}; lod2={DescribeRendererState(player.thisPlayerModelLOD2)}; arms={DescribeRendererState(player.thisPlayerModelArms)}");
+        DrawableSuitsDiagnostics.Info($"Hidden local renderers for third-person avatar proxy. hidden={hidden}; selectedSource={DescribeRendererCandidate(selectedSource, "selected")}; main={DescribeRendererState(player.thisPlayerModel)}; lod1={DescribeRendererState(player.thisPlayerModelLOD1)}; lod2={DescribeRendererState(player.thisPlayerModelLOD2)}; arms={DescribeRendererState(player.thisPlayerModelArms)}");
     }
 
-    private int CaptureAndHideNearbyFirstPersonOverlayRenderers(PlayerControllerB player, WorldSuitRendererSet rendererSet)
+    private int CaptureAndHideNearbyFirstPersonOverlayRenderers(PlayerControllerB player, Renderer selectedSource)
     {
         if (player == null)
         {
@@ -9516,7 +9095,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             var renderer = renderers[i];
             if (renderer == null
-                || (rendererSet != null && rendererSet.Contains(renderer))
+                || ReferenceEquals(renderer, selectedSource)
                 || renderer.gameObject.name.IndexOf("DrawableSuits", StringComparison.OrdinalIgnoreCase) >= 0
                 || !renderer.gameObject.scene.IsValid()
                 || !renderer.gameObject.activeInHierarchy)
@@ -9547,15 +9126,21 @@ internal sealed class SuitEditorController : MonoBehaviour
     private static bool LooksFirstPersonOverlayRenderer(Renderer renderer, string path)
     {
         var lowerPath = (path ?? string.Empty).ToLowerInvariant();
-        if (LooksFirstPersonRenderer(renderer, path, StartOfRound.Instance?.localPlayerController)
+        if (LooksFirstPersonOnly(lowerPath)
             || lowerPath.Contains("local")
-            || lowerPath.Contains("view"))
+            || lowerPath.Contains("view")
+            || lowerPath.Contains("helmet")
+            || lowerPath.Contains("visor")
+            || lowerPath.Contains("mask")
+            || lowerPath.Contains("head"))
         {
             return true;
         }
 
         var materialName = renderer?.sharedMaterial?.name ?? string.Empty;
-        return materialName.IndexOf("glass", StringComparison.OrdinalIgnoreCase) >= 0
+        return materialName.IndexOf("helmet", StringComparison.OrdinalIgnoreCase) >= 0
+            || materialName.IndexOf("visor", StringComparison.OrdinalIgnoreCase) >= 0
+            || materialName.IndexOf("glass", StringComparison.OrdinalIgnoreCase) >= 0
             || materialName.IndexOf("view", StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
@@ -9625,15 +9210,16 @@ internal sealed class SuitEditorController : MonoBehaviour
         return renderer != null ? $"{renderer.name}:enabled={renderer.enabled}:active={renderer.gameObject.activeInHierarchy}:layer={renderer.gameObject.layer}:path={GetTransformPath(renderer.transform)}" : "null";
     }
 
-    private static string DescribeRendererCandidate(Renderer renderer, string state)
+    private static string DescribeRendererCandidate(SkinnedMeshRenderer renderer, string state)
     {
         if (renderer == null)
         {
             return $"{state}:null";
         }
 
+        var mesh = renderer.sharedMesh;
         var material = renderer.sharedMaterial;
-        return $"{state}:{renderer.name}:path={GetTransformPath(renderer.transform)}:enabled={renderer.enabled}:active={renderer.gameObject.activeInHierarchy}:layer={renderer.gameObject.layer}:vertices={GetRendererVertexCount(renderer)}:bounds={renderer.bounds}:material={material?.name ?? "null"}";
+        return $"{state}:{renderer.name}:path={GetTransformPath(renderer.transform)}:enabled={renderer.enabled}:active={renderer.gameObject.activeInHierarchy}:layer={renderer.gameObject.layer}:vertices={mesh?.vertexCount ?? 0}:bounds={renderer.bounds}:material={material?.name ?? "null"}";
     }
 
     private static string GetTransformPath(Transform transform)
@@ -9656,43 +9242,48 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private bool UpdateWorldPaintProxy(bool forceLog)
     {
-        var rendererSet = _worldRendererSet ?? BuildWorldSuitRendererSet(StartOfRound.Instance?.localPlayerController);
-        if (rendererSet == null || !rendererSet.HasEditableRenderers || _worldPaintCollider == null || _worldPaintMesh == null || _worldPaintProxyObject == null || _worldAvatarMeshFilter == null || _worldAvatarRenderer == null)
+        var source = _worldSourceRenderer ?? FindBestSuitRenderer(StartOfRound.Instance?.localPlayerController);
+        if (source == null || _worldPaintCollider == null || _worldPaintMesh == null || _worldPaintProxyObject == null || _worldAvatarMeshFilter == null || _worldAvatarRenderer == null)
         {
             return false;
         }
 
-        var previousEnabledStates = CaptureTemporaryEnabledStates(rendererSet.Editable);
+        var previousEnabled = source.enabled;
         try
         {
-            _worldRendererSet = rendererSet;
-            _worldSourceRenderer = rendererSet.PrimaryEditableRenderer;
-            _worldSourceRendererSummary = rendererSet.Summary;
-            if (!BuildCombinedEditableWorldMesh(rendererSet, _worldPaintMesh, out var combineSummary))
+            _worldSourceRenderer = source;
+            _worldPaintMesh.Clear();
+            source.enabled = true;
+            source.BakeMesh(_worldPaintMesh, true);
+            source.enabled = false;
+            if (_worldPaintMesh.vertexCount == 0)
             {
                 if (forceLog)
                 {
-                    DrawableSuitsDiagnostics.Warn($"World paint proxy combined mesh build failed. rendererSet={rendererSet.Summary}");
+                    DrawableSuitsDiagnostics.Warn("World paint proxy BakeMesh produced zero vertices.");
                 }
                 return false;
             }
 
             _worldPaintMesh.RecalculateBounds();
-            _lastWorldProxyMeshSummary = $"mode=RendererSet; vertices={_worldPaintMesh.vertexCount}; subMeshes={_worldPaintMesh.subMeshCount}; bounds={_worldPaintMesh.bounds}; {combineSummary}";
-            _worldPaintProxyObject.transform.SetParent(null, false);
-            _worldPaintProxyObject.transform.position = Vector3.zero;
-            _worldPaintProxyObject.transform.rotation = Quaternion.identity;
+            _lastWorldProxyMeshSummary = $"mode=Full; vertices={_worldPaintMesh.vertexCount}; subMeshes={_worldPaintMesh.subMeshCount}; bounds={_worldPaintMesh.bounds}";
+            if (_worldPaintProxyObject.transform.parent != source.transform)
+            {
+                _worldPaintProxyObject.transform.SetParent(source.transform, false);
+            }
+            _worldPaintProxyObject.transform.localPosition = Vector3.zero;
+            _worldPaintProxyObject.transform.localRotation = Quaternion.identity;
             _worldPaintProxyObject.transform.localScale = Vector3.one;
             _worldPaintProxyObject.layer = _worldPaintLayer;
             _worldAvatarMeshFilter.sharedMesh = _worldPaintMesh;
-            _worldAvatarRenderer.sharedMaterials = BuildWorldProxyMaterials(_worldSourceRenderer, forceLog);
+            _worldAvatarRenderer.sharedMaterials = BuildWorldProxyMaterials(source, forceLog);
             _worldPaintCollider.sharedMesh = null;
             _worldPaintCollider.sharedMesh = _worldPaintMesh;
-            RebuildWorldReadOnlyProxyObjects(rendererSet, forceLog);
+            source.enabled = false;
             if (forceLog)
             {
-                DrawableSuitsDiagnostics.Info($"WorldAvatarProxy updated. mesh={_lastWorldProxyMeshSummary}; rendererSet={rendererSet.Summary}; vertices={_worldPaintMesh.vertexCount}; subMeshes={_worldPaintMesh.subMeshCount}; bounds={_worldPaintMesh.bounds}; proxyPos={_worldPaintProxyObject.transform.position}; proxyRot={_worldPaintProxyObject.transform.rotation.eulerAngles}; proxyScale={_worldPaintProxyObject.transform.localScale}; layer={_worldPaintLayer}; rendererEnabled={_worldAvatarRenderer.enabled}; proxyMaterials=[{DescribeMaterials(_worldAvatarRenderer.sharedMaterials)}]; collider={_worldPaintCollider != null}; readOnlyProxyObjects={_worldReadOnlyProxyObjects.Count}");
-                LogVisibleEditorCameraRenderers(_worldSourceRenderer);
+                DrawableSuitsDiagnostics.Info($"WorldAvatarProxy updated. mesh={_lastWorldProxyMeshSummary}; renderer={DescribeRendererCandidate(source, "source")}; vertices={_worldPaintMesh.vertexCount}; subMeshes={_worldPaintMesh.subMeshCount}; bounds={_worldPaintMesh.bounds}; proxyPos={_worldPaintProxyObject.transform.position}; proxyRot={_worldPaintProxyObject.transform.rotation.eulerAngles}; proxyScale={_worldPaintProxyObject.transform.localScale}; layer={_worldPaintLayer}; rendererEnabled={_worldAvatarRenderer.enabled}; proxyMaterials=[{DescribeMaterials(_worldAvatarRenderer.sharedMaterials)}]; collider={_worldPaintCollider != null}");
+                LogVisibleEditorCameraRenderers(source);
             }
             return true;
         }
@@ -9703,297 +9294,27 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
         finally
         {
-            RestoreTemporaryEnabledStates(previousEnabledStates);
-        }
-    }
-
-    private static List<RendererEnabledState> CaptureTemporaryEnabledStates(List<WorldRendererCandidate> candidates)
-    {
-        var states = new List<RendererEnabledState>();
-        if (candidates == null)
-        {
-            return states;
-        }
-
-        for (var i = 0; i < candidates.Count; i++)
-        {
-            var renderer = candidates[i].Renderer;
-            if (renderer == null)
+            if (source != null)
             {
-                continue;
-            }
-
-            var skinned = renderer as SkinnedMeshRenderer;
-            states.Add(new RendererEnabledState
-            {
-                Renderer = renderer,
-                Enabled = renderer.enabled,
-                HasUpdateWhenOffscreen = skinned != null,
-                UpdateWhenOffscreen = skinned != null && skinned.updateWhenOffscreen
-            });
-            if (skinned != null)
-            {
-                skinned.updateWhenOffscreen = true;
-            }
-            renderer.enabled = true;
-        }
-
-        return states;
-    }
-
-    private static void RestoreTemporaryEnabledStates(List<RendererEnabledState> states)
-    {
-        if (states == null)
-        {
-            return;
-        }
-
-        for (var i = 0; i < states.Count; i++)
-        {
-            var state = states[i];
-            if (state.Renderer != null)
-            {
-                state.Renderer.enabled = DrawableSuitsPlugin.IsEditorOpen ? false : state.Enabled;
-                if (state.HasUpdateWhenOffscreen && state.Renderer is SkinnedMeshRenderer skinned)
-                {
-                    skinned.updateWhenOffscreen = state.UpdateWhenOffscreen;
-                }
+                source.enabled = DrawableSuitsPlugin.IsEditorOpen ? false : previousEnabled;
             }
         }
     }
 
-    private bool BuildCombinedEditableWorldMesh(WorldSuitRendererSet rendererSet, Mesh targetMesh, out string summary)
-    {
-        summary = "none";
-        if (rendererSet == null || targetMesh == null || rendererSet.Editable.Count == 0)
-        {
-            return false;
-        }
-
-        var combines = new List<CombineInstance>();
-        var temporaryMeshes = new List<Mesh>();
-        try
-        {
-            for (var i = 0; i < rendererSet.Editable.Count; i++)
-            {
-                var candidate = rendererSet.Editable[i];
-                if (!TryCreateRendererMeshSnapshot(candidate.Renderer, $"DrawableSuitsEditableSnapshot_{i}", out var mesh, out var matrix, out var temporary))
-                {
-                    DrawableSuitsDiagnostics.Warn($"Editable renderer snapshot failed. renderer={DescribeWorldRendererCandidate(candidate)}");
-                    continue;
-                }
-
-                if (temporary)
-                {
-                    temporaryMeshes.Add(mesh);
-                }
-
-                combines.Add(new CombineInstance
-                {
-                    mesh = mesh,
-                    transform = matrix
-                });
-            }
-
-            if (combines.Count == 0)
-            {
-                targetMesh.Clear();
-                return false;
-            }
-
-            targetMesh.Clear();
-            targetMesh.CombineMeshes(combines.ToArray(), true, true, false);
-            targetMesh.name = "DrawableSuitsWorldPaintMesh";
-            targetMesh.RecalculateBounds();
-            if (targetMesh.vertexCount <= 0)
-            {
-                return false;
-            }
-
-            summary = $"editableSources={rendererSet.Editable.Count}; combinedSources={combines.Count}; readOnlySources={rendererSet.ReadOnly.Count}";
-            InvalidateMirrorSurfaceMap("world editable mesh rebuilt");
-            InvalidateDecalPreview("world editable mesh rebuilt");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            DrawableSuitsDiagnostics.Exception("BuildCombinedEditableWorldMesh failed", ex);
-            targetMesh.Clear();
-            return false;
-        }
-        finally
-        {
-            for (var i = 0; i < temporaryMeshes.Count; i++)
-            {
-                if (temporaryMeshes[i] != null)
-                {
-                    Destroy(temporaryMeshes[i]);
-                }
-            }
-        }
-    }
-
-    private bool TryCreateRendererMeshSnapshot(Renderer renderer, string meshName, out Mesh mesh, out Matrix4x4 localToWorld, out bool temporary)
-    {
-        mesh = null;
-        localToWorld = Matrix4x4.identity;
-        temporary = false;
-        if (renderer == null)
-        {
-            return false;
-        }
-
-        if (renderer is SkinnedMeshRenderer skinned)
-        {
-            mesh = new Mesh { name = meshName };
-            temporary = true;
-            var previousEnabled = skinned.enabled;
-            try
-            {
-                skinned.enabled = true;
-                skinned.BakeMesh(mesh, true);
-            }
-            finally
-            {
-                skinned.enabled = previousEnabled;
-            }
-
-            if (mesh.vertexCount <= 0)
-            {
-                return false;
-            }
-
-            localToWorld = skinned.transform.localToWorldMatrix;
-            return true;
-        }
-
-        var meshFilter = renderer.GetComponent<MeshFilter>();
-        if (meshFilter?.sharedMesh == null || meshFilter.sharedMesh.vertexCount <= 0)
-        {
-            return false;
-        }
-
-        mesh = meshFilter.sharedMesh;
-        localToWorld = renderer.transform.localToWorldMatrix;
-        return true;
-    }
-
-    private void RebuildWorldReadOnlyProxyObjects(WorldSuitRendererSet rendererSet, bool forceLog)
-    {
-        var proxyKey = BuildWorldReadOnlyProxyKey(rendererSet);
-        if (!string.IsNullOrEmpty(proxyKey)
-            && string.Equals(proxyKey, _worldReadOnlyProxyKey, StringComparison.Ordinal)
-            && _worldReadOnlyProxyObjects.Count == (rendererSet?.ReadOnly.Count ?? 0))
-        {
-            if (forceLog)
-            {
-                DrawableSuitsDiagnostics.Info($"World read-only proxies reused. key={proxyKey}; count={_worldReadOnlyProxyObjects.Count}; rendererSet={rendererSet?.Summary ?? "null"}");
-            }
-            return;
-        }
-
-        DestroyWorldReadOnlyProxyObjects();
-        if (rendererSet == null || _worldPaintProxyObject == null || rendererSet.ReadOnly.Count == 0)
-        {
-            return;
-        }
-
-        for (var i = 0; i < rendererSet.ReadOnly.Count; i++)
-        {
-            var candidate = rendererSet.ReadOnly[i];
-            var source = candidate.Renderer;
-            if (source == null)
-            {
-                continue;
-            }
-
-            if (!TryCreateRendererMeshSnapshot(source, $"DrawableSuitsReadOnlyProxyMesh_{i}", out var mesh, out _, out _))
-            {
-                DrawableSuitsDiagnostics.Warn($"Read-only renderer snapshot failed. renderer={DescribeWorldRendererCandidate(candidate)}");
-                continue;
-            }
-
-            var proxy = new GameObject($"DrawableSuitsReadOnlyProxy_{source.name}");
-            proxy.hideFlags = HideFlags.HideAndDontSave;
-            proxy.layer = _worldPaintLayer;
-            proxy.transform.SetParent(source.transform, false);
-            proxy.transform.localPosition = Vector3.zero;
-            proxy.transform.localRotation = Quaternion.identity;
-            proxy.transform.localScale = Vector3.one;
-            proxy.AddComponent<MeshFilter>().sharedMesh = mesh;
-            var proxyRenderer = proxy.AddComponent<MeshRenderer>();
-            proxyRenderer.sharedMaterials = CopyMaterialsArray(source.sharedMaterials);
-            _worldReadOnlyProxyObjects.Add(proxy);
-            if (forceLog)
-            {
-                DrawableSuitsDiagnostics.Info($"World read-only proxy created. source={DescribeWorldRendererCandidate(candidate)}; proxy={DrawableSuitsPlugin.DescribeUnityObject(proxy)}; meshVertices={mesh.vertexCount}; materials=[{DescribeMaterials(proxyRenderer.sharedMaterials)}]");
-            }
-        }
-
-        _worldReadOnlyProxyKey = proxyKey;
-    }
-
-    private void DestroyWorldReadOnlyProxyObjects()
-    {
-        for (var i = 0; i < _worldReadOnlyProxyObjects.Count; i++)
-        {
-            var proxy = _worldReadOnlyProxyObjects[i];
-            if (proxy != null)
-            {
-                var meshFilter = proxy.GetComponent<MeshFilter>();
-                var mesh = meshFilter != null ? meshFilter.sharedMesh : null;
-                if (mesh != null && mesh.name.StartsWith("DrawableSuitsReadOnlyProxyMesh_", StringComparison.Ordinal))
-                {
-                    meshFilter.sharedMesh = null;
-                    Destroy(mesh);
-                }
-                Destroy(proxy);
-            }
-        }
-
-        _worldReadOnlyProxyObjects.Clear();
-        _worldReadOnlyProxyKey = string.Empty;
-    }
-
-    private static string BuildWorldReadOnlyProxyKey(WorldSuitRendererSet rendererSet)
-    {
-        if (rendererSet == null || rendererSet.ReadOnly.Count == 0)
-        {
-            return string.Empty;
-        }
-
-        var parts = new List<string>(rendererSet.ReadOnly.Count + 1) { rendererSet.GroupKey ?? string.Empty };
-        for (var i = 0; i < rendererSet.ReadOnly.Count; i++)
-        {
-            var renderer = rendererSet.ReadOnly[i].Renderer;
-            parts.Add(renderer != null ? renderer.GetInstanceID().ToString(CultureInfo.InvariantCulture) : "null");
-        }
-
-        return string.Join("|", parts);
-    }
-
-    private static Material[] CopyMaterialsArray(Material[] materials)
-    {
-        if (materials == null || materials.Length == 0)
-        {
-            return Array.Empty<Material>();
-        }
-
-        var copy = new Material[materials.Length];
-        Array.Copy(materials, copy, materials.Length);
-        return copy;
-    }
-
-    private Material[] BuildWorldProxyMaterials(Renderer source, bool forceLog = false)
+    private Material[] BuildWorldProxyMaterials(SkinnedMeshRenderer source, bool forceLog = false)
     {
         var runtimeMaterial = DrawableSuitsPlugin.Registry.GetRuntimeMaterial(_selectedSuitId) ?? source?.sharedMaterial;
-        var subMeshCount = Mathf.Max(1, _worldPaintMesh != null ? _worldPaintMesh.subMeshCount : 1);
+        var sourceMaterials = source?.sharedMaterials;
+        var subMeshCount = Mathf.Max(1, _worldPaintMesh != null ? _worldPaintMesh.subMeshCount : (sourceMaterials?.Length ?? 1));
         var result = new Material[subMeshCount];
         var logParts = new string[subMeshCount];
         for (var i = 0; i < result.Length; i++)
         {
-            result[i] = runtimeMaterial;
-            logParts[i] = $"{i}->{result[i]?.name ?? "null"}";
+            var sourceMaterial = sourceMaterials != null && sourceMaterials.Length > 0
+                ? sourceMaterials[Mathf.Min(i, sourceMaterials.Length - 1)]
+                : null;
+            result[i] = MaterialLooksFirstPersonOverlay(sourceMaterial) ? EnsureWorldHiddenSubmeshMaterial() : runtimeMaterial;
+            logParts[i] = $"{i}:{sourceMaterial?.name ?? "null"}->{result[i]?.name ?? "null"}:hidden={ReferenceEquals(result[i], _worldHiddenSubmeshMaterial)}";
         }
 
         var logKey = $"{_selectedSuitId}:{source?.name ?? "null"}:{string.Join("|", logParts)}";
@@ -10003,7 +9324,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             _lastWorldProxyMaterialLogKey = logKey;
             _lastWorldProxyMaterialLogTime = Time.unscaledTime;
-            DrawableSuitsDiagnostics.Info($"World proxy materials assigned. selectedSuitId={_selectedSuitId}; source={source?.name ?? "null"}; runtime={runtimeMaterial?.name ?? "null"}; slots=[{string.Join(", ", logParts)}]; rendererSet={_worldRendererSet?.Summary ?? "null"}");
+            DrawableSuitsDiagnostics.Info($"World proxy materials assigned. selectedSuitId={_selectedSuitId}; source={source?.name ?? "null"}; runtime={runtimeMaterial?.name ?? "null"}; slots=[{string.Join(", ", logParts)}]");
         }
 
         return result;
@@ -10155,10 +9476,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         var ray = _worldEditorCamera.ScreenPointToRay(_cursor);
         if (!Physics.Raycast(ray, out hit, 25f, 1 << _worldPaintLayer, QueryTriggerInteraction.Ignore))
         {
-            if (TryGetReadOnlyProxyBoundsHit(ray, out var readOnlyName))
-            {
-                SetStatus($"Surface is read-only: {readOnlyName}", true);
-            }
             return false;
         }
 
@@ -10167,36 +9484,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         _lastWorldHitPoint = hit.point;
         _lastWorldHitNormal = hit.normal;
         return true;
-    }
-
-    private bool TryGetReadOnlyProxyBoundsHit(Ray ray, out string proxyName)
-    {
-        proxyName = string.Empty;
-        var bestDistance = float.MaxValue;
-        for (var i = 0; i < _worldReadOnlyProxyObjects.Count; i++)
-        {
-            var proxy = _worldReadOnlyProxyObjects[i];
-            if (proxy == null || !proxy.activeInHierarchy)
-            {
-                continue;
-            }
-
-            var renderer = proxy.GetComponent<Renderer>();
-            if (renderer == null || !renderer.enabled)
-            {
-                continue;
-            }
-
-            if (!renderer.bounds.IntersectRay(ray, out var distance) || distance > 25f || distance >= bestDistance)
-            {
-                continue;
-            }
-
-            bestDistance = distance;
-            proxyName = renderer.name;
-        }
-
-        return bestDistance < float.MaxValue;
     }
 
     private void UpdateWorldBrushMarker()
@@ -10229,7 +9516,6 @@ internal sealed class SuitEditorController : MonoBehaviour
             Destroy(_worldPaintProxyObject);
             _worldPaintProxyObject = null;
         }
-        DestroyWorldReadOnlyProxyObjects();
         if (_worldPaintMesh != null)
         {
             Destroy(_worldPaintMesh);
@@ -10256,7 +9542,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         _worldAvatarMeshFilter = null;
         _worldAvatarRenderer = null;
         _worldSourceRenderer = null;
-        _worldRendererSet = null;
         _worldSourceRendererSummary = "none";
         _worldPreviewReady = false;
         _lastWorldRaycastHit = false;
