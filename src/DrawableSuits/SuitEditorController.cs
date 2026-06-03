@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Reflection;
 using GameNetcodeStuff;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -38,6 +39,12 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         Dot,
         BrushRing
+    }
+
+    private enum WorldProxySourceMode
+    {
+        VanillaLod,
+        ModelReplacementApi
     }
 
     private const int EditorCanvasSortingOrder = 32760;
@@ -162,9 +169,16 @@ internal sealed class SuitEditorController : MonoBehaviour
     private MeshFilter _worldAvatarMeshFilter;
     private MeshRenderer _worldAvatarRenderer;
     private SkinnedMeshRenderer _worldSourceRenderer;
+    private WorldProxySourceMode _worldProxySourceMode = WorldProxySourceMode.VanillaLod;
     private string _worldSourceRendererSummary = "none";
     private bool _worldSourceRequiresMeshCleanup;
     private string _worldSourceValidationSummary = "none";
+    private ModelReplacementProxySource _modelReplacementProxySource;
+    private readonly List<GameObject> _modelReplacementReadOnlyProxyObjects = new();
+    private readonly List<MeshCollider> _modelReplacementReadOnlyColliders = new();
+    private int _worldReadOnlyLayer = 29;
+    private string _lastModelReplacementReadOnlyHitKey = string.Empty;
+    private float _lastModelReplacementReadOnlyHitTime;
     private GameObject _worldBrushMarker;
     private Material _worldBrushMarkerMaterial;
     private Material _worldHiddenSubmeshMaterial;
@@ -346,6 +360,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         internal int Layer;
         internal bool UpdateWhenOffscreen;
         internal bool HasUpdateWhenOffscreen;
+        internal string Reason = string.Empty;
     }
 
     private sealed class AnchoredListRow
@@ -363,6 +378,24 @@ internal sealed class SuitEditorController : MonoBehaviour
         internal string ScoreReason;
         internal bool Rejected;
         internal ProxyMeshValidation Validation;
+    }
+
+    private sealed class ModelReplacementProxySource
+    {
+        internal Component Component;
+        internal Transform Root;
+        internal readonly List<Renderer> EditableRenderers = new();
+        internal readonly List<Renderer> ReadOnlyRenderers = new();
+        internal string Summary = "none";
+        internal int Score;
+    }
+
+    private sealed class ModelReplacementRootCandidate
+    {
+        internal Component Component;
+        internal Transform Root;
+        internal int Score;
+        internal string Reason;
     }
 
     private sealed class ProxyCleanupPlan
@@ -4998,7 +5031,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void ShowWorldPlacementPreview(Texture2D sourceTexture, RaycastHit hit, MirrorPaintTarget mirrorTarget, Texture2D stampTexture)
     {
-        if (_worldAvatarRenderer == null || _worldSourceRenderer == null || sourceTexture == null || stampTexture == null || _worldPaintCollider == null)
+        if (_worldAvatarRenderer == null || sourceTexture == null || stampTexture == null || _worldPaintCollider == null)
         {
             HideDecalPlacementPreview("world dependencies missing", false);
             return;
@@ -5074,7 +5107,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void ShowWorldTextPlacementPreview(Texture2D sourceTexture, RaycastHit hit, MirrorPaintTarget mirrorTarget, Texture2D stampTexture)
     {
-        if (_worldAvatarRenderer == null || _worldSourceRenderer == null || sourceTexture == null || stampTexture == null || _worldPaintCollider == null)
+        if (_worldAvatarRenderer == null || sourceTexture == null || stampTexture == null || _worldPaintCollider == null)
         {
             HideDecalPlacementPreview("world text dependencies missing", false);
             return;
@@ -5306,7 +5339,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        if (_worldAvatarRenderer != null && _worldSourceRenderer != null)
+        if (_worldAvatarRenderer != null)
         {
             _worldAvatarRenderer.sharedMaterials = BuildWorldProxyMaterials(_worldSourceRenderer, false);
         }
@@ -8908,10 +8941,11 @@ internal sealed class SuitEditorController : MonoBehaviour
         DestroyPreview();
         var texture = _selectedSuitId >= 0 ? DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId) : null;
         var player = StartOfRound.Instance?.localPlayerController;
-        var source = FindBestSuitRenderer(player);
-        if (texture == null || player == null || source == null)
+        var modelReplacementSource = texture != null && player != null ? TryFindModelReplacementProxySource(player, texture) : null;
+        var source = modelReplacementSource == null ? FindBestSuitRenderer(player) : null;
+        if (texture == null || player == null || (modelReplacementSource == null && source == null))
         {
-            DrawableSuitsDiagnostics.Warn($"WorldThirdPerson setup skipped [{context}]. texture={DescribeEditableTexture()}; player={DrawableSuitsPlugin.DescribeUnityObject(player)}; source={DrawableSuitsPlugin.DescribeUnityObject(source)}");
+            DrawableSuitsDiagnostics.Warn($"WorldThirdPerson setup skipped [{context}]. texture={DescribeEditableTexture()}; player={DrawableSuitsPlugin.DescribeUnityObject(player)}; source={DrawableSuitsPlugin.DescribeUnityObject(source)}; modelReplacement={modelReplacementSource?.Summary ?? "none"}");
             return false;
         }
 
@@ -8934,8 +8968,13 @@ internal sealed class SuitEditorController : MonoBehaviour
                 DrawableSuitsDiagnostics.Info($"World camera state initialized for preview setup. context={context}; yaw={_worldCameraYaw:0.##}; pitch={_worldCameraPitch:0.##}; distance={_worldCameraDistance:0.##}");
             }
             _worldPaintLayer = SelectWorldPaintLayer();
+            _worldReadOnlyLayer = SelectWorldProxyLayer(_worldPaintLayer);
+            _worldProxySourceMode = modelReplacementSource != null ? WorldProxySourceMode.ModelReplacementApi : WorldProxySourceMode.VanillaLod;
+            _modelReplacementProxySource = modelReplacementSource;
             _worldSourceRenderer = source;
-            _worldSourceRendererSummary = DescribeRendererCandidate(source, "selected");
+            _worldSourceRendererSummary = modelReplacementSource != null
+                ? $"ModelReplacementAPI:{modelReplacementSource.Summary}"
+                : DescribeRendererCandidate(source, "selected");
             RefreshTexturePanelPreview($"{context}:world texture panel", true);
             CaptureAndHideLocalPlayerRenderers(player, source);
             StartFirstPersonOverlaySuppressionWindow(context);
@@ -8955,7 +8994,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
             _worldPaintProxyObject = new GameObject("DrawableSuitsWorldAvatarProxy");
             _worldPaintProxyObject.hideFlags = HideFlags.HideAndDontSave;
-            _worldPaintProxyObject.transform.SetParent(source.transform, false);
+            _worldPaintProxyObject.transform.SetParent(modelReplacementSource?.Root ?? source.transform, false);
             _worldPaintProxyObject.layer = _worldPaintLayer;
             _worldPaintMesh = new Mesh { name = "DrawableSuitsWorldPaintMesh" };
             _worldAvatarMeshFilter = _worldPaintProxyObject.AddComponent<MeshFilter>();
@@ -8984,15 +9023,23 @@ internal sealed class SuitEditorController : MonoBehaviour
             _worldBrushMarker.SetActive(false);
 
             var proxyReady = UpdateWorldPaintProxy(true);
-            _worldPreviewReady = proxyReady && _worldEditorCamera != null && _worldPaintCollider != null;
+            var replacementVisualOnlyReady = _worldProxySourceMode == WorldProxySourceMode.ModelReplacementApi && _modelReplacementReadOnlyProxyObjects.Count > 0;
+            _worldPreviewReady = proxyReady && _worldEditorCamera != null && (_worldPaintCollider != null || replacementVisualOnlyReady);
             if (_worldPreviewReady)
             {
                 UpdateWorldEditorCamera(true);
             }
-            _hasPreviewCollider = _worldPaintCollider != null;
+            _hasPreviewCollider = _worldPaintCollider != null || replacementVisualOnlyReady;
             _canPaint = texture != null && _worldPreviewReady;
-            SetStatus(_canPaint ? "Ready. Third-person and UV panel are active." : "Third-person editor opened, but paint proxy is not ready.", !_canPaint);
-            DrawableSuitsDiagnostics.Info($"WorldThirdPerson setup complete. context={context}; ready={_worldPreviewReady}; player={player.name}; selectedRenderer={_worldSourceRendererSummary}; hiddenRenderers={_rendererRestoreStates.Count}; layer={_worldPaintLayer}; camera={DrawableSuitsPlugin.DescribeUnityObject(_worldEditorCamera)}; cameraMask={_worldEditorCamera.cullingMask}; avatarProxy={DrawableSuitsPlugin.DescribeUnityObject(_worldPaintProxyObject)}; proxyRenderer={DrawableSuitsPlugin.DescribeUnityObject(_worldAvatarRenderer)}; proxyMaterial={_worldAvatarRenderer?.sharedMaterial?.name ?? "null"}; proxyCollider={_worldPaintCollider != null}; editable={DescribeEditableTexture()}");
+            if (_worldProxySourceMode == WorldProxySourceMode.ModelReplacementApi && _worldPaintCollider == null && replacementVisualOnlyReady)
+            {
+                SetStatus("Ready. ModelReplacementAPI model is visible read-only; use the UV panel to edit this suit texture.", false);
+            }
+            else
+            {
+                SetStatus(_canPaint ? "Ready. Third-person and UV panel are active." : "Third-person editor opened, but paint proxy is not ready.", !_canPaint);
+            }
+            DrawableSuitsDiagnostics.Info($"WorldThirdPerson setup complete. context={context}; ready={_worldPreviewReady}; player={player.name}; selectedRenderer={_worldSourceRendererSummary}; proxyMode={_worldProxySourceMode}; modelReplacement={modelReplacementSource?.Summary ?? "none"}; hiddenRenderers={_rendererRestoreStates.Count}; layer={_worldPaintLayer}; readOnlyLayer={_worldReadOnlyLayer}; camera={DrawableSuitsPlugin.DescribeUnityObject(_worldEditorCamera)}; cameraMask={_worldEditorCamera.cullingMask}; avatarProxy={DrawableSuitsPlugin.DescribeUnityObject(_worldPaintProxyObject)}; proxyRenderer={DrawableSuitsPlugin.DescribeUnityObject(_worldAvatarRenderer)}; proxyMaterial={_worldAvatarRenderer?.sharedMaterial?.name ?? "null"}; proxyCollider={_worldPaintCollider != null}; readOnlyParts={_modelReplacementReadOnlyProxyObjects.Count}; editable={DescribeEditableTexture()}");
             return _worldPreviewReady;
         }
         catch (Exception ex)
@@ -9005,18 +9052,28 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private static int SelectWorldPaintLayer()
     {
+        return SelectWorldProxyLayer(-1);
+    }
+
+    private static int SelectWorldProxyLayer(int excludedLayer)
+    {
         var mainCamera = Camera.main;
         var mainMask = mainCamera != null ? mainCamera.cullingMask : -1;
         for (var layer = 30; layer >= 0; layer--)
         {
+            if (layer == excludedLayer)
+            {
+                continue;
+            }
+
             if ((mainMask & (1 << layer)) == 0)
             {
-                DrawableSuitsDiagnostics.Info($"Selected world paint proxy layer {layer}; mainCamera={mainCamera?.name ?? "null"}; mainMask={mainMask}");
+                DrawableSuitsDiagnostics.Info($"Selected world proxy layer {layer}; excludedLayer={excludedLayer}; mainCamera={mainCamera?.name ?? "null"}; mainMask={mainMask}");
                 return layer;
             }
         }
 
-        DrawableSuitsDiagnostics.Warn($"No layer outside Camera.main culling mask was available for paint proxy; using layer 2. mainCamera={mainCamera?.name ?? "null"}; mainMask={mainMask}");
+        DrawableSuitsDiagnostics.Warn($"No layer outside Camera.main culling mask was available for proxy; using layer 2. excludedLayer={excludedLayer}; mainCamera={mainCamera?.name ?? "null"}; mainMask={mainMask}");
         return 2;
     }
 
@@ -9024,9 +9081,385 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         var worldMask = mainCamera != null ? mainCamera.cullingMask : ~0;
         var proxyMask = 1 << _worldPaintLayer;
-        var mask = worldMask | proxyMask;
-        DrawableSuitsDiagnostics.Info($"World editor camera mask built. mainCamera={mainCamera?.name ?? "null"}; mainMask={worldMask}; proxyLayer={_worldPaintLayer}; proxyMask={proxyMask}; finalMask={mask}");
+        var readOnlyMask = 1 << _worldReadOnlyLayer;
+        var mask = worldMask | proxyMask | readOnlyMask;
+        DrawableSuitsDiagnostics.Info($"World editor camera mask built. mainCamera={mainCamera?.name ?? "null"}; mainMask={worldMask}; proxyLayer={_worldPaintLayer}; proxyMask={proxyMask}; readOnlyLayer={_worldReadOnlyLayer}; readOnlyMask={readOnlyMask}; finalMask={mask}");
         return mask;
+    }
+
+    private ModelReplacementProxySource TryFindModelReplacementProxySource(PlayerControllerB player, Texture2D editableTexture)
+    {
+        if (player == null)
+        {
+            return null;
+        }
+
+        var components = player.GetComponentsInChildren<Component>(true);
+        var rootCandidates = new List<ModelReplacementRootCandidate>();
+        for (var i = 0; i < components.Length; i++)
+        {
+            var component = components[i];
+            if (component == null || !IsModelReplacementComponent(component.GetType()))
+            {
+                continue;
+            }
+
+            DrawableSuitsDiagnostics.Info($"ModelReplacementApiDetected: component={component.GetType().FullName}; assembly={component.GetType().Assembly.GetName().Name}; path={GetTransformPath(component.transform)}");
+            AddModelReplacementRootCandidate(rootCandidates, component, component.transform, "component transform");
+            AddModelReplacementRootCandidate(rootCandidates, component, FindPreferredModelReplacementChild(component.transform), "preferred child");
+            AddModelReplacementReflectionRootCandidates(rootCandidates, component);
+        }
+
+        if (rootCandidates.Count == 0)
+        {
+            return null;
+        }
+
+        ModelReplacementProxySource best = null;
+        for (var i = 0; i < rootCandidates.Count; i++)
+        {
+            var candidate = rootCandidates[i];
+            if (candidate.Root == null)
+            {
+                continue;
+            }
+
+            var source = BuildModelReplacementProxySource(candidate, editableTexture);
+            if (source == null)
+            {
+                continue;
+            }
+
+            ApplyModelReplacementRootSafetyScore(player, candidate, source);
+            if (best == null || source.Score > best.Score)
+            {
+                best = source;
+            }
+        }
+
+        if (best != null)
+        {
+            DrawableSuitsDiagnostics.Info($"ModelReplacementProxyRootSelected: component={best.Component?.GetType().FullName ?? "null"}; root={GetTransformPath(best.Root)}; score={best.Score}; editable={best.EditableRenderers.Count}; readOnly={best.ReadOnlyRenderers.Count}; summary={best.Summary}");
+        }
+
+        return best;
+    }
+
+    private static void ApplyModelReplacementRootSafetyScore(PlayerControllerB player, ModelReplacementRootCandidate candidate, ModelReplacementProxySource source)
+    {
+        if (player == null || candidate == null || source == null || candidate.Root == null)
+        {
+            return;
+        }
+
+        var rootPath = GetTransformPath(candidate.Root);
+        var lowerRootPath = rootPath.ToLowerInvariant();
+        var broadPlayerRoot = ReferenceEquals(candidate.Root, player.transform);
+        var containsVanillaLocalRenderer =
+            RootContainsRenderer(candidate.Root, player.thisPlayerModel)
+            || RootContainsRenderer(candidate.Root, player.thisPlayerModelLOD1)
+            || RootContainsRenderer(candidate.Root, player.thisPlayerModelLOD2)
+            || RootContainsRenderer(candidate.Root, player.thisPlayerModelArms);
+
+        if (broadPlayerRoot)
+        {
+            source.Score -= 800;
+            source.Summary += "; broadPlayerRootPenalty=true";
+        }
+
+        if (containsVanillaLocalRenderer && !lowerRootPath.Contains("shadow"))
+        {
+            source.Score -= 1500;
+            source.Summary += "; vanillaRendererRootPenalty=true";
+            DrawableSuitsDiagnostics.Warn($"ModelReplacementProxyRootCandidate penalized because it includes vanilla local renderers. root={rootPath}; score={source.Score}; reason={candidate.Reason}");
+        }
+    }
+
+    private static bool RootContainsRenderer(Transform root, Renderer renderer)
+    {
+        return root != null && renderer != null && renderer.transform.IsChildOf(root);
+    }
+
+    private static bool IsModelReplacementComponent(Type type)
+    {
+        while (type != null)
+        {
+            var name = type.Name ?? string.Empty;
+            var fullName = type.FullName ?? string.Empty;
+            var assembly = type.Assembly.GetName().Name ?? string.Empty;
+            if (string.Equals(name, "BodyReplacementBase", StringComparison.OrdinalIgnoreCase)
+                || fullName.IndexOf("BodyReplacementBase", StringComparison.OrdinalIgnoreCase) >= 0
+                || fullName.IndexOf("ModelReplacement", StringComparison.OrdinalIgnoreCase) >= 0
+                || assembly.IndexOf("ModelReplacement", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return true;
+            }
+
+            type = type.BaseType;
+        }
+
+        return false;
+    }
+
+    private static Transform FindPreferredModelReplacementChild(Transform root)
+    {
+        if (root == null)
+        {
+            return null;
+        }
+
+        Transform fallback = null;
+        var renderers = root.GetComponentsInChildren<Renderer>(true);
+        for (var i = 0; i < renderers.Length; i++)
+        {
+            var renderer = renderers[i];
+            if (renderer == null)
+            {
+                continue;
+            }
+
+            var current = renderer.transform;
+            while (current != null && current != root)
+            {
+                var path = GetTransformPath(current).ToLowerInvariant();
+                if (path.Contains("shadow"))
+                {
+                    return current;
+                }
+
+                if (fallback == null && !path.Contains("viewmodel") && !path.Contains("view model") && !path.Contains("firstperson"))
+                {
+                    fallback = current;
+                }
+
+                current = current.parent;
+            }
+        }
+
+        return fallback;
+    }
+
+    private static void AddModelReplacementReflectionRootCandidates(List<ModelReplacementRootCandidate> candidates, Component component)
+    {
+        if (component == null)
+        {
+            return;
+        }
+
+        var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        var type = component.GetType();
+        while (type != null && type != typeof(MonoBehaviour) && type != typeof(Component))
+        {
+            var fields = type.GetFields(flags);
+            for (var i = 0; i < fields.Length; i++)
+            {
+                var field = fields[i];
+                if (TryReadModelReplacementRootValue(field.FieldType, () => field.GetValue(component), out var root))
+                {
+                    AddModelReplacementRootCandidate(candidates, component, root, $"field {field.Name}");
+                    AddModelReplacementRootCandidate(candidates, component, FindPreferredModelReplacementChild(root), $"field {field.Name} preferred child");
+                }
+            }
+
+            var properties = type.GetProperties(flags);
+            for (var i = 0; i < properties.Length; i++)
+            {
+                var property = properties[i];
+                if (property.GetIndexParameters().Length != 0 || !property.CanRead)
+                {
+                    continue;
+                }
+
+                if (TryReadModelReplacementRootValue(property.PropertyType, () => property.GetValue(component, null), out var root))
+                {
+                    AddModelReplacementRootCandidate(candidates, component, root, $"property {property.Name}");
+                    AddModelReplacementRootCandidate(candidates, component, FindPreferredModelReplacementChild(root), $"property {property.Name} preferred child");
+                }
+            }
+
+            type = type.BaseType;
+        }
+    }
+
+    private static bool TryReadModelReplacementRootValue(Type valueType, Func<object> reader, out Transform root)
+    {
+        root = null;
+        if (reader == null || valueType == null || (!typeof(GameObject).IsAssignableFrom(valueType) && !typeof(Transform).IsAssignableFrom(valueType)))
+        {
+            return false;
+        }
+
+        try
+        {
+            var value = reader();
+            root = value switch
+            {
+                GameObject gameObject => gameObject.transform,
+                Transform transform => transform,
+                _ => null
+            };
+            return root != null && root.GetComponentsInChildren<Renderer>(true).Length > 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static void AddModelReplacementRootCandidate(List<ModelReplacementRootCandidate> candidates, Component component, Transform root, string reason)
+    {
+        if (candidates == null || component == null || root == null)
+        {
+            return;
+        }
+
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            if (ReferenceEquals(candidates[i].Root, root))
+            {
+                return;
+            }
+        }
+
+        var renderers = root.GetComponentsInChildren<Renderer>(true);
+        if (renderers.Length == 0)
+        {
+            return;
+        }
+
+        var lowerPath = GetTransformPath(root).ToLowerInvariant();
+        var score = renderers.Length * 20;
+        if (lowerPath.Contains("shadow")) score += 500;
+        if (lowerPath.Contains("replacement")) score += 120;
+        if (lowerPath.Contains("model")) score += 50;
+        if (lowerPath.Contains("viewmodel") || lowerPath.Contains("view model") || lowerPath.Contains("firstperson")) score -= 900;
+        if (root.gameObject.activeInHierarchy) score += 50;
+        candidates.Add(new ModelReplacementRootCandidate
+        {
+            Component = component,
+            Root = root,
+            Score = score,
+            Reason = reason
+        });
+        DrawableSuitsDiagnostics.Info($"ModelReplacementProxyRootCandidate: component={component.GetType().FullName}; root={GetTransformPath(root)}; reason={reason}; score={score}; renderers={renderers.Length}; active={root.gameObject.activeInHierarchy}");
+    }
+
+    private ModelReplacementProxySource BuildModelReplacementProxySource(ModelReplacementRootCandidate candidate, Texture2D editableTexture)
+    {
+        var root = candidate.Root;
+        if (root == null)
+        {
+            return null;
+        }
+
+        var source = new ModelReplacementProxySource
+        {
+            Component = candidate.Component,
+            Root = root,
+            Score = candidate.Score
+        };
+
+        var renderers = root.GetComponentsInChildren<Renderer>(true);
+        var runtimeMaterial = _selectedSuitId >= 0 ? DrawableSuitsPlugin.Registry.GetRuntimeMaterial(_selectedSuitId) : null;
+        var state = _selectedSuitId >= 0 ? DrawableSuitsPlugin.Registry.GetOrCreateState(_selectedSuitId) : null;
+        var totalVertices = 0;
+        for (var i = 0; i < renderers.Length; i++)
+        {
+            var renderer = renderers[i];
+            if (renderer == null || renderer.gameObject.name.IndexOf("DrawableSuits", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                continue;
+            }
+
+            var vertexCount = GetRendererVertexCount(renderer);
+            totalVertices += vertexCount;
+            var path = GetTransformPath(renderer.transform);
+            var firstPerson = LooksModelReplacementFirstPersonOnly(path.ToLowerInvariant());
+            if (firstPerson)
+            {
+                DrawableSuitsDiagnostics.Info($"ModelReplacementRendererCandidate: root={GetTransformPath(root)}; role=RejectedFirstPerson; renderer={DescribeRendererState(renderer)}; path={path}; vertices={vertexCount}; materials=[{DescribeMaterials(renderer.sharedMaterials)}]");
+                continue;
+            }
+
+            var editable = RendererIsEditableForModelReplacement(renderer, editableTexture, runtimeMaterial, state, out var editReason);
+            if (editable)
+            {
+                source.EditableRenderers.Add(renderer);
+            }
+            else
+            {
+                source.ReadOnlyRenderers.Add(renderer);
+            }
+
+            DrawableSuitsDiagnostics.Info($"ModelReplacementRendererCandidate: root={GetTransformPath(root)}; role={(editable ? "Editable" : "ReadOnly")}; reason={editReason}; renderer={DescribeRendererState(renderer)}; path={path}; vertices={vertexCount}; materials=[{DescribeMaterials(renderer.sharedMaterials)}]");
+        }
+
+        if (source.EditableRenderers.Count == 0 && source.ReadOnlyRenderers.Count == 0)
+        {
+            return null;
+        }
+
+        source.Score += Mathf.Clamp(totalVertices / 20, 0, 400);
+        source.Score += source.EditableRenderers.Count * 250 + source.ReadOnlyRenderers.Count * 40;
+        source.Summary = $"component={candidate.Component?.GetType().FullName ?? "null"}; root={GetTransformPath(root)}; reason={candidate.Reason}; score={source.Score}; editable={source.EditableRenderers.Count}; readOnly={source.ReadOnlyRenderers.Count}; vertices={totalVertices}";
+        return source;
+    }
+
+    private bool RendererIsEditableForModelReplacement(Renderer renderer, Texture2D editableTexture, Material runtimeMaterial, SuitTextureState state, out string reason)
+    {
+        reason = "no compatible material";
+        if (renderer == null)
+        {
+            reason = "renderer null";
+            return false;
+        }
+
+        var materials = renderer.sharedMaterials;
+        for (var i = 0; i < materials.Length; i++)
+        {
+            var material = materials[i];
+            if (material == null)
+            {
+                continue;
+            }
+
+            if (runtimeMaterial != null && ReferenceEquals(material, runtimeMaterial))
+            {
+                reason = $"runtime material slot={i}";
+                return true;
+            }
+
+            var texture = material.mainTexture;
+            if (texture != null && (ReferenceEquals(texture, editableTexture) || ReferenceEquals(texture, state?.OriginalTexture)))
+            {
+                reason = $"suit texture slot={i} texture={texture.name}";
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool LooksModelReplacementFirstPersonOnly(string lowerPath)
+    {
+        return lowerPath.Contains("firstperson")
+            || lowerPath.Contains("first person")
+            || lowerPath.Contains("viewmodel")
+            || lowerPath.Contains("view model")
+            || lowerPath.Contains("camera")
+            || lowerPath.Contains("held")
+            || lowerPath.Contains("item")
+            || lowerPath.Contains("weapon");
+    }
+
+    private static int GetRendererVertexCount(Renderer renderer)
+    {
+        return renderer switch
+        {
+            SkinnedMeshRenderer skinned when skinned.sharedMesh != null => skinned.sharedMesh.vertexCount,
+            MeshRenderer meshRenderer when meshRenderer.GetComponent<MeshFilter>()?.sharedMesh != null => meshRenderer.GetComponent<MeshFilter>().sharedMesh.vertexCount,
+            _ => 0
+        };
     }
 
     private SkinnedMeshRenderer FindBestSuitRenderer(PlayerControllerB player)
@@ -10193,7 +10626,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         if (selectedSource != null)
         {
-            CaptureRendererState(selectedSource);
+            CaptureRendererState(selectedSource, $"{context}:selected source updateWhenOffscreen");
             selectedSource.updateWhenOffscreen = true;
             hidden += CaptureAndHideRenderer(selectedSource, $"{context}:selected source");
         }
@@ -10365,7 +10798,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return 0;
         }
 
-        CaptureRendererState(renderer);
+        CaptureRendererState(renderer, reason);
         renderer.enabled = false;
         LogFirstPersonOverlaySuppressed(renderer, reason, distanceToPlayer, distanceToCamera);
         return 1;
@@ -10381,7 +10814,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         return distance >= 0f && distance < float.MaxValue ? distance.ToString("0.##", CultureInfo.InvariantCulture) : "n/a";
     }
 
-    private void CaptureRendererState(Renderer renderer)
+    private void CaptureRendererState(Renderer renderer, string reason)
     {
         if (renderer == null)
         {
@@ -10403,7 +10836,8 @@ internal sealed class SuitEditorController : MonoBehaviour
             Enabled = renderer.enabled,
             Layer = renderer.gameObject.layer,
             HasUpdateWhenOffscreen = skinned != null,
-            UpdateWhenOffscreen = skinned != null && skinned.updateWhenOffscreen
+            UpdateWhenOffscreen = skinned != null && skinned.updateWhenOffscreen,
+            Reason = reason ?? string.Empty
         });
     }
 
@@ -10419,6 +10853,11 @@ internal sealed class SuitEditorController : MonoBehaviour
                 if (state.HasUpdateWhenOffscreen && state.Renderer is SkinnedMeshRenderer skinned)
                 {
                     skinned.updateWhenOffscreen = state.UpdateWhenOffscreen;
+                }
+
+                if (state.Reason.IndexOf("ModelReplacementAPI", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    DrawableSuitsDiagnostics.Info($"ModelReplacementRendererRestored: renderer={DescribeRendererState(state.Renderer)}; reason={state.Reason}");
                 }
             }
         }
@@ -10467,6 +10906,11 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private bool UpdateWorldPaintProxy(bool forceLog)
     {
+        if (_worldProxySourceMode == WorldProxySourceMode.ModelReplacementApi)
+        {
+            return UpdateModelReplacementWorldPaintProxy(forceLog);
+        }
+
         var source = _worldSourceRenderer ?? FindBestSuitRenderer(StartOfRound.Instance?.localPlayerController);
         if (source == null || _worldPaintCollider == null || _worldPaintMesh == null || _worldPaintProxyObject == null || _worldAvatarMeshFilter == null || _worldAvatarRenderer == null)
         {
@@ -10528,6 +10972,323 @@ internal sealed class SuitEditorController : MonoBehaviour
                 source.enabled = DrawableSuitsPlugin.IsEditorOpen ? false : previousEnabled;
             }
         }
+    }
+
+    private bool UpdateModelReplacementWorldPaintProxy(bool forceLog)
+    {
+        var source = _modelReplacementProxySource;
+        if (source == null || source.Root == null || _worldPaintProxyObject == null || _worldPaintMesh == null || _worldAvatarMeshFilter == null || _worldAvatarRenderer == null || _worldPaintCollider == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            ClearModelReplacementReadOnlyProxyObjects();
+            if (_worldPaintProxyObject.transform.parent != source.Root)
+            {
+                _worldPaintProxyObject.transform.SetParent(source.Root, false);
+            }
+            _worldPaintProxyObject.transform.localPosition = Vector3.zero;
+            _worldPaintProxyObject.transform.localRotation = Quaternion.identity;
+            _worldPaintProxyObject.transform.localScale = Vector3.one;
+            _worldPaintProxyObject.layer = _worldPaintLayer;
+
+            var editableBuilt = BuildModelReplacementEditableMesh(source, forceLog);
+            var readOnlyBuilt = BuildModelReplacementReadOnlyProxyObjects(source, forceLog);
+            var hidden = CaptureAndHideModelReplacementSourceRenderers(source, forceLog);
+            _lastWorldProxyMeshSummary = $"mode=ModelReplacementApi; editableRenderers={source.EditableRenderers.Count}; readOnlyRenderers={source.ReadOnlyRenderers.Count}; vertices={_worldPaintMesh.vertexCount}; subMeshes={_worldPaintMesh.subMeshCount}; bounds={_worldPaintMesh.bounds}; readOnlyParts={_modelReplacementReadOnlyProxyObjects.Count}; hiddenLiveRenderers={hidden}";
+
+            if (forceLog)
+            {
+                var analysis = _worldPaintMesh.vertexCount > 0 ? AnalyzeProxyMesh(_worldPaintMesh) : null;
+                DrawableSuitsDiagnostics.Info($"ModelReplacementProxyBuilt: root={GetTransformPath(source.Root)}; component={source.Component?.GetType().FullName ?? "null"}; editableBuilt={editableBuilt}; readOnlyBuilt={readOnlyBuilt}; hiddenLiveRenderers={hidden}; mesh={_lastWorldProxyMeshSummary}; collider={_worldPaintCollider.sharedMesh != null}; proxyLayer={_worldPaintLayer}; readOnlyLayer={_worldReadOnlyLayer}; componentSummary=[{(analysis != null ? DescribeProxyComponents(analysis, 6) : "none")}]");
+                LogVisibleEditorCameraRenderers(null);
+                StartFirstPersonOverlaySuppressionWindow("model replacement proxy rebuild");
+            }
+
+            return editableBuilt || readOnlyBuilt;
+        }
+        catch (Exception ex)
+        {
+            DrawableSuitsDiagnostics.Exception("ModelReplacementAPI world paint proxy update failed", ex);
+            return false;
+        }
+    }
+
+    private bool BuildModelReplacementEditableMesh(ModelReplacementProxySource source, bool forceLog)
+    {
+        _worldPaintMesh.Clear();
+        var vertices = new List<Vector3>();
+        var normals = new List<Vector3>();
+        var uvs = new List<Vector2>();
+        var triangles = new List<int>();
+        for (var i = 0; i < source.EditableRenderers.Count; i++)
+        {
+            var renderer = source.EditableRenderers[i];
+            if (!AppendRendererMeshToCombined(renderer, source.Root, vertices, normals, uvs, triangles, out var reason) && forceLog)
+            {
+                DrawableSuitsDiagnostics.Warn($"ModelReplacementRendererCandidate: role=EditableBuildSkipped; renderer={DescribeRendererState(renderer)}; reason={reason}");
+            }
+        }
+
+        if (vertices.Count == 0 || triangles.Count == 0)
+        {
+            _worldAvatarRenderer.enabled = false;
+            _worldAvatarMeshFilter.sharedMesh = _worldPaintMesh;
+            _worldPaintCollider.sharedMesh = null;
+            return false;
+        }
+
+        _worldPaintMesh.name = "DrawableSuitsModelReplacementEditableMesh";
+        _worldPaintMesh.SetVertices(vertices);
+        _worldPaintMesh.SetNormals(normals);
+        _worldPaintMesh.SetUVs(0, uvs);
+        _worldPaintMesh.subMeshCount = 1;
+        _worldPaintMesh.SetTriangles(triangles, 0);
+        _worldPaintMesh.RecalculateBounds();
+        _worldAvatarMeshFilter.sharedMesh = _worldPaintMesh;
+        _worldAvatarRenderer.enabled = true;
+        _worldAvatarRenderer.sharedMaterials = BuildWorldProxyMaterials(null, forceLog);
+        _worldPaintCollider.sharedMesh = null;
+        _worldPaintCollider.sharedMesh = _worldPaintMesh;
+        return true;
+    }
+
+    private bool BuildModelReplacementReadOnlyProxyObjects(ModelReplacementProxySource source, bool forceLog)
+    {
+        var built = 0;
+        for (var i = 0; i < source.ReadOnlyRenderers.Count; i++)
+        {
+            var renderer = source.ReadOnlyRenderers[i];
+            if (!TryBuildRendererMeshInRootSpace(renderer, source.Root, out var mesh, out var reason))
+            {
+                if (forceLog)
+                {
+                    DrawableSuitsDiagnostics.Warn($"ModelReplacementRendererCandidate: role=ReadOnlyBuildSkipped; renderer={DescribeRendererState(renderer)}; reason={reason}");
+                }
+                continue;
+            }
+
+            var child = new GameObject($"DrawableSuitsModelReplacementReadOnly_{built}_{renderer.name}");
+            child.hideFlags = HideFlags.HideAndDontSave;
+            child.transform.SetParent(_worldPaintProxyObject.transform, false);
+            child.transform.localPosition = Vector3.zero;
+            child.transform.localRotation = Quaternion.identity;
+            child.transform.localScale = Vector3.one;
+            child.layer = _worldReadOnlyLayer;
+            var filter = child.AddComponent<MeshFilter>();
+            filter.sharedMesh = mesh;
+            var meshRenderer = child.AddComponent<MeshRenderer>();
+            meshRenderer.sharedMaterials = renderer.sharedMaterials;
+            var collider = child.AddComponent<MeshCollider>();
+            collider.sharedMesh = mesh;
+            collider.convex = false;
+            _modelReplacementReadOnlyProxyObjects.Add(child);
+            _modelReplacementReadOnlyColliders.Add(collider);
+            built++;
+        }
+
+        return built > 0;
+    }
+
+    private void ClearModelReplacementReadOnlyProxyObjects()
+    {
+        for (var i = 0; i < _modelReplacementReadOnlyProxyObjects.Count; i++)
+        {
+            var proxyObject = _modelReplacementReadOnlyProxyObjects[i];
+            if (proxyObject != null)
+            {
+                var filter = proxyObject.GetComponent<MeshFilter>();
+                if (filter != null && filter.sharedMesh != null)
+                {
+                    Destroy(filter.sharedMesh);
+                    filter.sharedMesh = null;
+                }
+                Destroy(proxyObject);
+            }
+        }
+
+        _modelReplacementReadOnlyProxyObjects.Clear();
+        _modelReplacementReadOnlyColliders.Clear();
+    }
+
+    private int CaptureAndHideModelReplacementSourceRenderers(ModelReplacementProxySource source, bool forceLog)
+    {
+        if (source == null || source.Root == null)
+        {
+            return 0;
+        }
+
+        var hidden = 0;
+        var renderers = source.Root.GetComponentsInChildren<Renderer>(true);
+        for (var i = 0; i < renderers.Length; i++)
+        {
+            var renderer = renderers[i];
+            if (renderer == null || renderer.gameObject.name.IndexOf("DrawableSuits", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                continue;
+            }
+
+            hidden += CaptureAndHideRenderer(renderer, "ModelReplacementAPI live renderer hidden while editor proxy is active");
+        }
+
+        if (forceLog || hidden > 0)
+        {
+            DrawableSuitsDiagnostics.Info($"ModelReplacementAPI live renderers hidden. root={GetTransformPath(source.Root)}; hidden={hidden}; editable={source.EditableRenderers.Count}; readOnly={source.ReadOnlyRenderers.Count}");
+        }
+
+        return hidden;
+    }
+
+    private bool AppendRendererMeshToCombined(Renderer renderer, Transform root, List<Vector3> vertices, List<Vector3> normals, List<Vector2> uvs, List<int> triangles, out string reason)
+    {
+        reason = string.Empty;
+        if (!TryBuildRendererMeshInRootSpace(renderer, root, out var mesh, out reason))
+        {
+            return false;
+        }
+
+        try
+        {
+            var meshVertices = mesh.vertices;
+            var meshNormals = mesh.normals;
+            var meshUv = mesh.uv;
+            if (meshUv == null || meshUv.Length != meshVertices.Length)
+            {
+                reason = "mesh has no matching UVs";
+                return false;
+            }
+
+            var baseIndex = vertices.Count;
+            vertices.AddRange(meshVertices);
+            if (meshNormals != null && meshNormals.Length == meshVertices.Length)
+            {
+                normals.AddRange(meshNormals);
+            }
+            else
+            {
+                for (var i = 0; i < meshVertices.Length; i++)
+                {
+                    normals.Add(Vector3.up);
+                }
+            }
+            uvs.AddRange(meshUv);
+            for (var subMesh = 0; subMesh < Mathf.Max(1, mesh.subMeshCount); subMesh++)
+            {
+                var indices = mesh.GetTriangles(subMesh);
+                for (var i = 0; i < indices.Length; i++)
+                {
+                    triangles.Add(baseIndex + indices[i]);
+                }
+            }
+
+            reason = "combined";
+            return true;
+        }
+        finally
+        {
+            Destroy(mesh);
+        }
+    }
+
+    private static bool TryBuildRendererMeshInRootSpace(Renderer renderer, Transform root, out Mesh mesh, out string reason)
+    {
+        mesh = null;
+        reason = string.Empty;
+        if (renderer == null || root == null)
+        {
+            reason = "renderer or root null";
+            return false;
+        }
+
+        Mesh sourceMesh = null;
+        Mesh temporaryMesh = null;
+        var sourceTransform = renderer.transform;
+        if (renderer is SkinnedMeshRenderer skinned)
+        {
+            temporaryMesh = new Mesh { name = $"DrawableSuitsBake_{renderer.name}" };
+            if (!TryBakeRendererMesh(skinned, temporaryMesh, out reason))
+            {
+                Destroy(temporaryMesh);
+                return false;
+            }
+
+            sourceMesh = temporaryMesh;
+        }
+        else if (renderer is MeshRenderer)
+        {
+            var filter = renderer.GetComponent<MeshFilter>();
+            sourceMesh = filter != null ? filter.sharedMesh : null;
+            if (sourceMesh == null)
+            {
+                reason = "static renderer has no MeshFilter/sharedMesh";
+                return false;
+            }
+        }
+        else
+        {
+            reason = $"unsupported renderer type {renderer.GetType().Name}";
+            return false;
+        }
+
+        try
+        {
+            mesh = ConvertMeshToRootSpace(sourceMesh, sourceTransform, root, $"DrawableSuitsProxy_{renderer.name}");
+            reason = mesh.vertexCount > 0 && CountMeshTriangles(mesh) > 0 ? "built" : "empty converted mesh";
+            return mesh.vertexCount > 0 && CountMeshTriangles(mesh) > 0;
+        }
+        finally
+        {
+            if (temporaryMesh != null)
+            {
+                Destroy(temporaryMesh);
+            }
+        }
+    }
+
+    private static Mesh ConvertMeshToRootSpace(Mesh source, Transform sourceTransform, Transform root, string name)
+    {
+        var mesh = new Mesh { name = name };
+        var sourceVertices = source.vertices;
+        var sourceNormals = source.normals;
+        var sourceUv = source.uv;
+        var sourceTangents = source.tangents;
+        var hasNormals = sourceNormals != null && sourceNormals.Length == sourceVertices.Length;
+        var hasUv = sourceUv != null && sourceUv.Length == sourceVertices.Length;
+        var hasTangents = sourceTangents != null && sourceTangents.Length == sourceVertices.Length;
+        var vertices = new Vector3[sourceVertices.Length];
+        var normals = hasNormals ? new Vector3[sourceVertices.Length] : null;
+        var tangents = hasTangents ? new Vector4[sourceVertices.Length] : null;
+        for (var i = 0; i < sourceVertices.Length; i++)
+        {
+            vertices[i] = root.InverseTransformPoint(sourceTransform.TransformPoint(sourceVertices[i]));
+            if (hasNormals)
+            {
+                normals[i] = root.InverseTransformDirection(sourceTransform.TransformDirection(sourceNormals[i])).normalized;
+            }
+            if (hasTangents)
+            {
+                var tangentDirection = root.InverseTransformDirection(sourceTransform.TransformDirection(new Vector3(sourceTangents[i].x, sourceTangents[i].y, sourceTangents[i].z))).normalized;
+                tangents[i] = new Vector4(tangentDirection.x, tangentDirection.y, tangentDirection.z, sourceTangents[i].w);
+            }
+        }
+
+        mesh.vertices = vertices;
+        if (hasNormals) mesh.normals = normals;
+        if (hasUv) mesh.uv = sourceUv;
+        if (hasTangents) mesh.tangents = tangents;
+        mesh.subMeshCount = Mathf.Max(1, source.subMeshCount);
+        for (var subMesh = 0; subMesh < mesh.subMeshCount; subMesh++)
+        {
+            mesh.SetTriangles(source.GetTriangles(subMesh), subMesh);
+        }
+        if (!hasNormals)
+        {
+            mesh.RecalculateNormals();
+        }
+        mesh.RecalculateBounds();
+        return mesh;
     }
 
     private Material[] BuildWorldProxyMaterials(SkinnedMeshRenderer source, bool forceLog = false)
@@ -10724,6 +11485,12 @@ internal sealed class SuitEditorController : MonoBehaviour
         var ray = _worldEditorCamera.ScreenPointToRay(_cursor);
         if (!Physics.Raycast(ray, out hit, 25f, 1 << _worldPaintLayer, QueryTriggerInteraction.Ignore))
         {
+            if (_worldProxySourceMode == WorldProxySourceMode.ModelReplacementApi && TryGetModelReplacementReadOnlyHit(ray, out var readOnlyName))
+            {
+                SetStatus("This replacement model surface is not editable. Use the UV panel or a compatible suit texture.", true);
+                LogModelReplacementReadOnlyHit(readOnlyName);
+            }
+
             return false;
         }
 
@@ -10732,6 +11499,44 @@ internal sealed class SuitEditorController : MonoBehaviour
         _lastWorldHitPoint = hit.point;
         _lastWorldHitNormal = hit.normal;
         return true;
+    }
+
+    private bool TryGetModelReplacementReadOnlyHit(Ray ray, out string readOnlyName)
+    {
+        readOnlyName = string.Empty;
+        var bestDistance = float.MaxValue;
+        for (var i = 0; i < _modelReplacementReadOnlyColliders.Count; i++)
+        {
+            var collider = _modelReplacementReadOnlyColliders[i];
+            if (collider == null || !collider.enabled)
+            {
+                continue;
+            }
+
+            if (!collider.Raycast(ray, out var hit, 25f) || hit.distance >= bestDistance)
+            {
+                continue;
+            }
+
+            bestDistance = hit.distance;
+            readOnlyName = collider.name;
+        }
+
+        return !string.IsNullOrEmpty(readOnlyName);
+    }
+
+    private void LogModelReplacementReadOnlyHit(string readOnlyName)
+    {
+        var key = $"{readOnlyName}:{_tool}:{_cursor}";
+        if (string.Equals(key, _lastModelReplacementReadOnlyHitKey, StringComparison.Ordinal)
+            && Time.unscaledTime - _lastModelReplacementReadOnlyHitTime < 1f)
+        {
+            return;
+        }
+
+        _lastModelReplacementReadOnlyHitKey = key;
+        _lastModelReplacementReadOnlyHitTime = Time.unscaledTime;
+        DrawableSuitsDiagnostics.Info($"ModelReplacementReadOnlyHit: renderer={readOnlyName}; tool={_tool}; pointerSource={_pointerSource}; cursor={_cursor}; root={GetTransformPath(_modelReplacementProxySource?.Root)}");
     }
 
     private void UpdateWorldBrushMarker()
@@ -10750,6 +11555,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         DestroyDecalPlacementPreviewResources();
         InvalidateMirrorSurfaceMap("destroy world third-person preview");
+        ClearModelReplacementReadOnlyProxyObjects();
         if (_worldEditorCamera != null)
         {
             _worldEditorCamera.enabled = false;
@@ -10790,6 +11596,9 @@ internal sealed class SuitEditorController : MonoBehaviour
         _worldAvatarMeshFilter = null;
         _worldAvatarRenderer = null;
         _worldSourceRenderer = null;
+        _worldProxySourceMode = WorldProxySourceMode.VanillaLod;
+        _modelReplacementProxySource = null;
+        _lastModelReplacementReadOnlyHitKey = string.Empty;
         _worldSourceRendererSummary = "none";
         _worldSourceRequiresMeshCleanup = false;
         _worldSourceValidationSummary = "none";

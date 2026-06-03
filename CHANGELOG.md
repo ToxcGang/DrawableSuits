@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.30
+
+- Added optional reflection-based ModelReplacementAPI compatibility without making it a hard dependency.
+- Added a scoped ModelReplacementAPI proxy path that renders detected replacement models through DrawableSuits-owned editable and read-only proxy parts.
+- Kept non-compatible replacement model surfaces visible but read-only, with the always-visible UV panel available for editing the selected suit texture.
+- Added `ModelReplacementApiDetected`, `ModelReplacementProxyRootSelected`, `ModelReplacementRendererCandidate`, `ModelReplacementProxyBuilt`, `ModelReplacementReadOnlyHit`, and `ModelReplacementRendererRestored` diagnostics.
+
 ## 0.5.29
 
 - Made proxy helmet cleanup fail-safe so ambiguous or body-sized welded components are no longer removed from the editor avatar.

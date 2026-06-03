@@ -16,6 +16,7 @@ DrawableSuits is a Lethal Company v81 BepInEx mod that lets players draw on suit
 - Controller support: left stick moves the editor cursor, `A` clicks exactly the UI control under the cursor, right trigger paints only, right stick/bumpers orbit the camera, D-pad up/down zooms, `Y` cycles tools, `X` undoes, and Start saves.
 - Direct surface painting: the editor bakes a hidden mesh collider from the local player model and paints by raycasting from the third-person camera to suit UV coordinates.
 - Always-visible UV texture panel: while third-person editing is active, the right-column texture panel stays visible and editable without toggling views. Texture-only fallback is still available for diagnostics or third-person setup failures.
+- Optional ModelReplacementAPI compatibility: when an active replacement model is detected, the editor uses a DrawableSuits proxy built from that replacement model instead of the vanilla LOD proxy. Compatible replacement surfaces can be painted; custom materials that do not share the editable suit texture stay visible as read-only.
 - PNG/JPG decals from `BepInEx/config/DrawableSuits/Decals`. The in-game OS file dialog is disabled for stability in Gale/Unity.
 - Reusable saved designs stored as JSON metadata plus PNG texture files.
 - Compact lossless `DSUIT2:` design codes for copy/paste import and export between profiles or players, with legacy `DSUIT1:` import compatibility.
@@ -91,6 +92,8 @@ New exports use the shorter lossless `DSUIT2:` format. Older `DSUIT1:` codes sti
 
 DrawableSuits works with modded suits by detecting unlockables that expose a `suitMaterial`. Saved designs are reusable on any suit, but loading a design onto a suit with a different UV layout can stretch or misplace drawings and decals.
 
+ModelReplacementAPI is supported through optional reflection. If a local player has an active `BodyReplacementBase`-style replacement, DrawableSuits tries to render that replacement model in the editor. Replacement renderers whose material or texture matches the selected editable suit texture are paintable; other custom parts remain visible as read-only accessories. The UV texture panel remains available beside the third-person view for non-compatible replacement textures.
+
 ## Configuration
 
 The BepInEx config file controls:
@@ -117,13 +120,14 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.29 behavior:
+Expected 0.5.30 behavior:
 
 - Opening the editor shows a compact side overlay and a third-person camera view of the local player.
 - The diagnostics text should show `Preview mode: WorldThirdPerson` when the default path succeeds.
 - The UV texture panel is visible at the same time as the third-person suit and can be edited directly by moving the cursor over it.
 - The visible editor model is `DrawableSuitsWorldAvatarProxy`, a baked suit/body proxy on an isolated layer, not the live first-person local rig. First-person helmet/viewmodel renderers are hidden during editing, re-suppressed for the first few frames after opening, and restored on close.
 - The baked proxy source is validated before use. If high-detail `LOD1`, `LOD2`, or another candidate contains a suspected giant first-person helmet shell, DrawableSuits uses welded-position component analysis to prefer a cleaner compatible LOD or remove only clearly safe detached shell components. If cleanup would remove body-sized geometry, it keeps the full mesh and logs a fail-safe warning instead of deleting the suit body.
+- With ModelReplacementAPI active, DrawableSuits detects `BodyReplacementBase`-style replacement components by reflection and builds the editor avatar from the replacement model root. Compatible replacement renderers are paintable; incompatible custom materials are shown as read-only proxy parts and should show a short status when aimed at.
 - Normal session startup should log `SessionSafetyCheck` with `EditorOpen=False`, no active DrawableSuits cameras, `Camera.main` state, local player state, prompt context, and `jetpackWarningGuard` status.
 - If third-person setup fails, the editor falls back to texture-only `TextureFallback` and logs the reason.
 - The UV texture panel shows the editable texture in a reserved right-column preview slot below the decal list. It should not cover the color picker, brush controls, tools, design controls, or saved-design rows.
@@ -171,6 +175,7 @@ Troubleshooting:
 - If entering a session starts on a black screen before opening DrawableSuits, check `SessionSafetyCheck` lines. They list `Camera.main`, active cameras, camera target textures, local player flags, prompt context such as grab/hover fields, local renderer materials, and any repaired DrawableSuits objects. DrawableSuits should report no active DrawableSuits cameras while `EditorOpen=False`.
 - If the black screen shows `Grab: [E]` and `SessionSafetyCheck` reports `Camera.main=null`, inspect `LogOutput.log` for repeated `JetpackWarning` `PlayerControllerB.LateUpdate` `NullReferenceException`. By default, DrawableSuits disables only `JetpackWarning.Patches.PlayerControllerB_LateUpdate_Postfix` after repeated failures and logs the unpatch result in `diagnostics.log`. Set `AutoDisableBrokenJetpackWarningLateUpdatePatch=false` to turn this compatibility guard off.
 - If third person shows first-person arms, a giant helmet, held items, another partial rig, or missing body geometry, confirm the installed package is 0.5.29 or newer, then check `WorldProxyMeshValidation`, `WorldProxyWeldedComponent`, `WorldProxyHelmetShellRejected`, `WorldProxySourceFallback`, `WorldProxyCleanupSkippedUnsafe`, `WorldProxyCleanupFailSafeFullMesh`, `FirstPersonOverlaySuppressed`, `FirstPersonOverlayStillVisible`, `World editor visible renderer candidate`, and `WorldAvatarProxy updated` lines. Diagnostics should show shared and welded component counts; cleanup should be skipped whenever suspect components are too large or body-like to remove safely.
+- If a ModelReplacementAPI suit shows the wrong model or a duplicate viewmodel, confirm the installed package is 0.5.30 or newer, then check `ModelReplacementApiDetected`, `ModelReplacementProxyRootSelected`, `ModelReplacementRendererCandidate`, `ModelReplacementProxyBuilt`, `ModelReplacementReadOnlyHit`, `ModelReplacementRendererRestored`, and `FirstPersonOverlaySuppressed` diagnostics. DrawableSuits should prefer replacement roots such as `Shadow` over `ViewModel`, hide live replacement renderers while editing, and restore them on close.
 - If action buttons such as Reset, Save, or Load also select decal/save rows, confirm the installed package is 0.4.7 or newer. Lists now use stable row pools and log `ListRowsUpdated` instead of rebuilding/destroying row buttons during normal UI refresh.
 - If controller `A` clicks the wrong UI item, confirm the installed package is 0.4.7 or newer, move the left stick before the first `A` press, then check `Virtual cursor A press` and `Virtual cursor A release` diagnostics. They should show the same resolved button or control that is visually under the cursor.
 - If button highlights stick around, confirm the installed package is 0.4.7 or newer. Normal button selected colors are neutral.
