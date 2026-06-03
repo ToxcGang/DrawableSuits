@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.33
+
+- Added a Brush Shape dropdown for Paint and Erase.
+- Added Circle, Square, Pixel, Spray Paint, Soft Airbrush, and Noise/Scatter brush shapes.
+- Updated third-person surface painting, UV panel painting, Mirror, cursor visuals, and diagnostics to respect the selected brush shape.
+
 ## 0.5.32
 
 - Removed the manual suit selector from the editor.

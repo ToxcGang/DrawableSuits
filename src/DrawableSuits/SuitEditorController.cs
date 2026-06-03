@@ -37,7 +37,19 @@ internal sealed class SuitEditorController : MonoBehaviour
     private enum CursorVisualMode
     {
         Dot,
-        BrushRing
+        BrushRing,
+        BrushSquare,
+        BrushPixel
+    }
+
+    private enum BrushShape
+    {
+        Circle,
+        Square,
+        Pixel,
+        SprayPaint,
+        SoftAirbrush,
+        NoiseScatter
     }
 
     private const int EditorCanvasSortingOrder = 32760;
@@ -58,6 +70,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private string _designName = "MyDrawableSuit";
     private EditorTool _tool = EditorTool.Paint;
     private EditorTool _previousToolBeforeEyedropper = EditorTool.Paint;
+    private BrushShape _brushShape = BrushShape.Circle;
     private Color _brushColor = Color.red;
     private float _brushSize = 16f;
     private float _brushOpacity = 1f;
@@ -69,6 +82,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private float _textRotation;
     private bool _mirrorEnabled;
     private bool _strokeActive;
+    private int _brushStrokeSeed = 1;
+    private int _brushStrokeSequence;
     private bool _decalStampArmed = true;
     private bool _suppressPaintInputUntilRelease;
     private string _statusMessage = string.Empty;
@@ -268,6 +283,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Text _fallbackDiagnosticsLabel;
     private Text _brushSizeLabel;
     private Text _brushOpacityLabel;
+    private Text _brushShapeLabel;
     private Text _decalSizeLabel;
     private Text _decalRotationLabel;
     private Text _placementHeaderLabel;
@@ -289,6 +305,9 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Button _eyedropperButton;
     private Button _textButton;
     private Button _mirrorButton;
+    private Button _brushShapeButton;
+    private GameObject _brushShapeMenuObject;
+    private readonly List<Button> _brushShapeOptionButtons = new();
     private Button _applyButton;
     private Button _saveButton;
     private Button _loadButton;
@@ -390,10 +409,12 @@ internal sealed class SuitEditorController : MonoBehaviour
         internal int WrittenPixels;
         internal int SkippedPixels;
         internal int ProjectionSamples;
+        internal int AcceptedSamples;
         internal int SurfaceHits;
         internal int RasterizedCells;
         internal int SeamSkippedCells;
         internal int OffSuitSamples;
+        internal int RandomSkippedSamples;
         internal float WorldWidth;
         internal float WorldHeight;
         internal bool Mirrored;
@@ -407,6 +428,16 @@ internal sealed class SuitEditorController : MonoBehaviour
         internal int TouchedSkippedPixels;
         internal Vector2Int SeedPixel;
         internal Color32 SeedColor;
+        internal bool Mirrored;
+    }
+
+    private struct BrushShapeStats
+    {
+        internal bool Available;
+        internal int CheckedSamples;
+        internal int AcceptedSamples;
+        internal int RandomSkippedSamples;
+        internal int WrittenPixels;
         internal bool Mirrored;
     }
 
@@ -1925,15 +1956,18 @@ internal sealed class SuitEditorController : MonoBehaviour
         _eyedropperButton = CreateAnchoredButton(panel.transform, "Eyedropper", new Rect(leftX + 140f, 346f, 134f, 30f), () => SetTool(EditorTool.Eyedropper));
 
         CreateAnchoredText(panel.transform, "BrushHeader", "Brush", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 394f, leftW, 24f), Color.white);
-        _brushSizeLabel = CreateAnchoredText(panel.transform, "BrushSizeLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 424f, 94f, 24f), Color.white);
-        _brushSizeSlider = CreateAnchoredSlider(panel.transform, "BrushSize", 1f, 96f, _brushSize, new Rect(leftX + 100f, 426f, 174f, 24f), value => _brushSize = value);
-        _brushOpacityLabel = CreateAnchoredText(panel.transform, "BrushOpacityLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 458f, 94f, 24f), Color.white);
-        _brushOpacitySlider = CreateAnchoredSlider(panel.transform, "BrushOpacity", 0.05f, 1f, _brushOpacity, new Rect(leftX + 100f, 460f, 174f, 24f), value => _brushOpacity = value);
-        _fillToleranceLabel = CreateAnchoredText(panel.transform, "FillToleranceLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 492f, 104f, 24f), Color.white);
-        _fillToleranceSlider = CreateAnchoredSlider(panel.transform, "FillTolerance", 0f, 0.5f, _fillTolerance, new Rect(leftX + 110f, 494f, 164f, 24f), value => _fillTolerance = value);
+        _brushShapeLabel = CreateAnchoredText(panel.transform, "BrushShapeLabel", "Shape", 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 424f, 94f, 24f), Color.white);
+        _brushShapeButton = CreateAnchoredButton(panel.transform, BrushShapeDisplayName(_brushShape), new Rect(leftX + 100f, 420f, 174f, 30f), ToggleBrushShapeMenu);
+        BuildBrushShapeMenu(panel.transform, new Rect(leftX + 100f, 452f, 174f, 178f));
+        _brushSizeLabel = CreateAnchoredText(panel.transform, "BrushSizeLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 458f, 94f, 24f), Color.white);
+        _brushSizeSlider = CreateAnchoredSlider(panel.transform, "BrushSize", 1f, 96f, _brushSize, new Rect(leftX + 100f, 460f, 174f, 24f), value => _brushSize = value);
+        _brushOpacityLabel = CreateAnchoredText(panel.transform, "BrushOpacityLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 492f, 94f, 24f), Color.white);
+        _brushOpacitySlider = CreateAnchoredSlider(panel.transform, "BrushOpacity", 0.05f, 1f, _brushOpacity, new Rect(leftX + 100f, 494f, 174f, 24f), value => _brushOpacity = value);
+        _fillToleranceLabel = CreateAnchoredText(panel.transform, "FillToleranceLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 526f, 104f, 24f), Color.white);
+        _fillToleranceSlider = CreateAnchoredSlider(panel.transform, "FillTolerance", 0f, 0.5f, _fillTolerance, new Rect(leftX + 110f, 528f, 164f, 24f), value => _fillTolerance = value);
 
-        CreateAnchoredText(panel.transform, "ColorHeader", "Color", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 530f, leftW, 24f), Color.white);
-        _colorPicker = CreateAnchoredColorPicker(panel.transform, new Rect(leftX, 554f, leftW, 104f), _brushColor, color =>
+        CreateAnchoredText(panel.transform, "ColorHeader", "Color", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 564f, leftW, 24f), Color.white);
+        _colorPicker = CreateAnchoredColorPicker(panel.transform, new Rect(leftX, 588f, leftW, 104f), _brushColor, color =>
         {
             _brushColor = color;
             UpdateColorUi();
@@ -2313,6 +2347,26 @@ internal sealed class SuitEditorController : MonoBehaviour
         labelRect.offsetMin = Vector2.zero;
         labelRect.offsetMax = Vector2.zero;
         return button;
+    }
+
+    private void BuildBrushShapeMenu(Transform parent, Rect rect)
+    {
+        _brushShapeOptionButtons.Clear();
+        _brushShapeMenuObject = CreateUiObject("BrushShapeDropdown", parent, typeof(RectTransform), typeof(Image));
+        SetAnchoredRect(_brushShapeMenuObject.GetComponent<RectTransform>(), rect);
+        var image = _brushShapeMenuObject.GetComponent<Image>();
+        image.color = new Color(0.04f, 0.05f, 0.06f, 0.98f);
+        image.raycastTarget = true;
+
+        var values = (BrushShape[])Enum.GetValues(typeof(BrushShape));
+        for (var i = 0; i < values.Length; i++)
+        {
+            var shape = values[i];
+            var row = CreateAnchoredButton(_brushShapeMenuObject.transform, BrushShapeDisplayName(shape), new Rect(6f, 6f + i * 28f, rect.width - 12f, 26f), () => SelectBrushShape(shape));
+            _brushShapeOptionButtons.Add(row);
+        }
+
+        _brushShapeMenuObject.SetActive(false);
     }
 
     private static void ClearSelectedNormalButton()
@@ -3069,6 +3123,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         SetInteractable(_eyedropperButton, _canPaint && hasEditableTexture);
         SetInteractable(_textButton, _canPaint && hasEditableTexture);
         SetInteractable(_mirrorButton, _canPaint && hasEditableTexture);
+        SetInteractable(_brushShapeButton, _canPaint && hasEditableTexture);
         SetInteractable(_applyButton, _canPaint && hasEditableTexture);
         SetInteractable(_saveButton, hasEditableTexture);
         SetInteractable(_exportCodeButton, hasEditableTexture);
@@ -3080,6 +3135,10 @@ internal sealed class SuitEditorController : MonoBehaviour
             var showFallbackButton = _uvFallbackMode || !IsWorldThirdPersonMode;
             _uvFallbackButton.gameObject.SetActive(showFallbackButton);
             SetButtonLabel(_uvFallbackButton, _uvFallbackMode ? "Use Third Person" : "UV Panel Active");
+        }
+        if ((!_canPaint || !hasEditableTexture) && _brushShapeMenuObject != null && _brushShapeMenuObject.activeSelf)
+        {
+            _brushShapeMenuObject.SetActive(false);
         }
 
         UpdateToolButtons();
@@ -3101,6 +3160,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             $"Editable texture: {DescribeEditableTexture()}",
             $"Preview UI texture: {DescribePreviewImageTexture()}",
             $"Tool: {_tool}",
+            $"Brush shape: {_brushShape}",
             $"Mirror enabled: {_mirrorEnabled}",
             $"Mirror map: {(_mirrorSurfaceMap != null ? $"{_mirrorSurfaceMap.TriangleCount} tris" : "none")}",
             $"Texture-only mode: {_uvFallbackMode}",
@@ -3143,14 +3203,27 @@ internal sealed class SuitEditorController : MonoBehaviour
     private void UpdateLabels()
     {
         var fillActive = _tool == EditorTool.FillBucket;
+        var pixelBrush = _brushShape == BrushShape.Pixel;
+        if (fillActive)
+        {
+            HideBrushShapeMenu();
+        }
+        if (_brushShapeLabel != null)
+        {
+            _brushShapeLabel.gameObject.SetActive(!fillActive);
+        }
+        if (_brushShapeButton != null)
+        {
+            _brushShapeButton.gameObject.SetActive(!fillActive);
+        }
         if (_brushSizeLabel != null)
         {
-            _brushSizeLabel.text = $"Size: {Mathf.RoundToInt(_brushSize)} px";
+            _brushSizeLabel.text = pixelBrush ? "Size: 1 px" : $"Size: {Mathf.RoundToInt(_brushSize)} px";
             _brushSizeLabel.gameObject.SetActive(!fillActive);
         }
         if (_brushSizeSlider != null)
         {
-            _brushSizeSlider.gameObject.SetActive(!fillActive);
+            _brushSizeSlider.gameObject.SetActive(!fillActive && !pixelBrush);
         }
         if (_brushOpacityLabel != null) _brushOpacityLabel.text = $"Opacity: {Mathf.RoundToInt(_brushOpacity * 100f)}%";
         if (_fillToleranceLabel != null)
@@ -3276,6 +3349,28 @@ internal sealed class SuitEditorController : MonoBehaviour
         SetToolButtonColor(_eyedropperButton, _tool == EditorTool.Eyedropper);
         SetToolButtonColor(_textButton, _tool == EditorTool.Text);
         SetToolButtonColor(_mirrorButton, _mirrorEnabled);
+        UpdateBrushShapeButton();
+    }
+
+    private void UpdateBrushShapeButton()
+    {
+        if (_brushShapeButton != null)
+        {
+            SetButtonLabel(_brushShapeButton, BrushShapeDisplayName(_brushShape));
+        }
+
+        for (var i = 0; i < _brushShapeOptionButtons.Count; i++)
+        {
+            var button = _brushShapeOptionButtons[i];
+            if (button == null)
+            {
+                continue;
+            }
+
+            var values = (BrushShape[])Enum.GetValues(typeof(BrushShape));
+            var selected = i < values.Length && values[i] == _brushShape;
+            SetToolButtonColor(button, selected);
+        }
     }
 
     private static void SetToolButtonColor(Button button, bool selected)
@@ -3294,6 +3389,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void SetTool(EditorTool tool)
     {
+        HideBrushShapeMenu();
         if (tool == EditorTool.Eyedropper)
         {
             _previousToolBeforeEyedropper = IsReturnableEyedropperTool(_tool) ? _tool : EditorTool.Paint;
@@ -3378,6 +3474,55 @@ internal sealed class SuitEditorController : MonoBehaviour
             : "Mirror disabled.", false);
         UpdateToolButtons();
         DrawableSuitsDiagnostics.Info($"Mirror painting toggled. enabled={_mirrorEnabled}; tool={_tool}; suit={_selectedSuitId}; previewMode={_previewMode}");
+    }
+
+    private void ToggleBrushShapeMenu()
+    {
+        if (_brushShapeMenuObject == null)
+        {
+            return;
+        }
+
+        var nextState = !_brushShapeMenuObject.activeSelf;
+        _brushShapeMenuObject.SetActive(nextState);
+        if (nextState)
+        {
+            _brushShapeMenuObject.transform.SetAsLastSibling();
+            _canvasCursorObject?.transform.SetAsLastSibling();
+        }
+        DrawableSuitsDiagnostics.Info($"Brush shape dropdown toggled. open={nextState}; shape={_brushShape}; tool={_tool}; cursor={_cursor}");
+    }
+
+    private void HideBrushShapeMenu()
+    {
+        if (_brushShapeMenuObject != null && _brushShapeMenuObject.activeSelf)
+        {
+            _brushShapeMenuObject.SetActive(false);
+        }
+    }
+
+    private void SelectBrushShape(BrushShape shape)
+    {
+        _brushShape = shape;
+        HideBrushShapeMenu();
+        UpdateBrushShapeButton();
+        UpdateLabels();
+        UpdateCanvasCursor(true, "brush shape changed");
+        DrawableSuitsDiagnostics.Info($"Brush shape selected. shape={_brushShape}; tool={_tool}; brushSize={_brushSize:0.#}; suit={_selectedSuitId}");
+    }
+
+    private static string BrushShapeDisplayName(BrushShape shape)
+    {
+        return shape switch
+        {
+            BrushShape.Circle => "Circle",
+            BrushShape.Square => "Square",
+            BrushShape.Pixel => "Pixel",
+            BrushShape.SprayPaint => "Spray Paint",
+            BrushShape.SoftAirbrush => "Soft Airbrush",
+            BrushShape.NoiseScatter => "Noise/Scatter",
+            _ => shape.ToString()
+        };
     }
 
     private void CycleTool()
@@ -3812,7 +3957,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         var fallbackReason = string.Empty;
         if (TryResolveBrushCursor(out var brushDiameter, out var brushColor, out targetMode, out triangleIndex, out uv, out fallbackReason))
         {
-            mode = CursorVisualMode.BrushRing;
+            mode = CursorVisualModeForBrushShape(_brushShape);
             diameter = ClampCursorDiameter(brushDiameter);
             color = brushColor;
         }
@@ -3918,7 +4063,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         var fallbackReason = string.Empty;
         if (TryResolveBrushCursor(out var brushDiameter, out var brushColor, out targetMode, out triangleIndex, out uv, out fallbackReason))
         {
-            mode = CursorVisualMode.BrushRing;
+            mode = CursorVisualModeForBrushShape(_brushShape);
             diameter = ClampCursorDiameter(brushDiameter);
             color = brushColor;
         }
@@ -3932,7 +4077,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             fallbackReason = AppendFallbackReason(fallbackReason, "screen-to-canvas fallback");
         }
 
-        var rootSize = mode == CursorVisualMode.BrushRing
+        var rootSize = IsBrushCursorMode(mode)
             ? Mathf.Clamp(diameter + 10f, 22f, 300f)
             : DotCursorRootSize;
 
@@ -4385,7 +4530,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         var scaleX = screenSize.x / Mathf.Max(1f, texture.width);
         var scaleY = screenSize.y / Mathf.Max(1f, texture.height);
-        return ScreenPixelsToCanvasUnits(_brushSize * 2f * Mathf.Max(scaleX, scaleY));
+        return ScreenPixelsToCanvasUnits(EffectiveBrushRadiusPixels() * 2f * Mathf.Max(scaleX, scaleY));
     }
 
     private static Vector2 GetRectTransformScreenSize(RectTransform rectTransform)
@@ -4461,8 +4606,9 @@ internal sealed class SuitEditorController : MonoBehaviour
         var dPdu = (edge1 * duv2.y - edge2 * duv1.y) * inverse;
         var dPdv = (edge2 * duv1.x - edge1 * duv2.x) * inverse;
         var localCenter = _worldPaintProxyObject.transform.InverseTransformPoint(hit.point);
-        var du = _brushSize / Mathf.Max(1f, texture.width);
-        var dv = _brushSize / Mathf.Max(1f, texture.height);
+        var brushRadius = EffectiveBrushRadiusPixels();
+        var du = brushRadius / Mathf.Max(1f, texture.width);
+        var dv = brushRadius / Mathf.Max(1f, texture.height);
         var transform = _worldPaintProxyObject.transform;
         var uPlus = ProjectToScreen(transform.TransformPoint(localCenter + dPdu * du));
         var uMinus = ProjectToScreen(transform.TransformPoint(localCenter - dPdu * du));
@@ -4535,6 +4681,23 @@ internal sealed class SuitEditorController : MonoBehaviour
     private static float ClampCursorDiameter(float diameter)
     {
         return Mathf.Clamp(diameter, 18f, 280f);
+    }
+
+    private static CursorVisualMode CursorVisualModeForBrushShape(BrushShape shape)
+    {
+        return shape switch
+        {
+            BrushShape.Square => CursorVisualMode.BrushSquare,
+            BrushShape.Pixel => CursorVisualMode.BrushPixel,
+            _ => CursorVisualMode.BrushRing
+        };
+    }
+
+    private static bool IsBrushCursorMode(CursorVisualMode mode)
+    {
+        return mode == CursorVisualMode.BrushRing
+            || mode == CursorVisualMode.BrushSquare
+            || mode == CursorVisualMode.BrushPixel;
     }
 
     private bool IsDesignCodePanelOpen()
@@ -4664,7 +4827,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private void LogCanvasCursorUpdated(bool force, string context, CursorVisualMode mode, string targetMode, float diameter, int triangleIndex, Vector2 uv, string fallbackReason, Vector2 screenPosition, Vector2 localPosition, float rootSize)
     {
         var siblingIndex = _canvasCursorObject != null ? _canvasCursorObject.transform.GetSiblingIndex() : -1;
-        var key = $"mode={mode}|tool={_tool}|source={_pointerSource}|target={targetMode}|brush={Mathf.RoundToInt(_brushSize)}|diameter={diameter:0.#}|tri={triangleIndex}|uv={uv.x:0.###},{uv.y:0.###}|fallback={fallbackReason}|screen={screenPosition.x:0.#},{screenPosition.y:0.#}|local={localPosition.x:0.#},{localPosition.y:0.#}|size={rootSize:0.#}|context={context}";
+        var key = $"mode={mode}|tool={_tool}|shape={_brushShape}|source={_pointerSource}|target={targetMode}|brush={Mathf.RoundToInt(EffectiveBrushRadiusPixels())}|diameter={diameter:0.#}|tri={triangleIndex}|uv={uv.x:0.###},{uv.y:0.###}|fallback={fallbackReason}|screen={screenPosition.x:0.#},{screenPosition.y:0.#}|local={localPosition.x:0.#},{localPosition.y:0.#}|size={rootSize:0.#}|context={context}";
         if (!force && Time.unscaledTime - _lastCanvasCursorLogTime < 0.75f && string.Equals(key, _lastCanvasCursorLogKey, StringComparison.Ordinal))
         {
             return;
@@ -6296,6 +6459,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         if (!painting)
         {
             _strokeActive = false;
+            _brushStrokeSeed = 1;
             _decalStampArmed = true;
             _suppressPaintInputUntilRelease = false;
             _suppressDecalPreviewUntilRelease = false;
@@ -6350,9 +6514,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         if (!_strokeActive)
         {
-            SaveUndo();
-            _redo.Clear();
-            _strokeActive = true;
+            BeginBrushStroke();
         }
 
         PaintAtCursor(texture, uv, mirrorTarget);
@@ -6366,6 +6528,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         if (!painting)
         {
             _strokeActive = false;
+            _brushStrokeSeed = 1;
             _decalStampArmed = true;
             _suppressPaintInputUntilRelease = false;
             _suppressDecalPreviewUntilRelease = false;
@@ -6437,12 +6600,29 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         if (!_strokeActive)
         {
-            SaveUndo();
-            _redo.Clear();
-            _strokeActive = true;
+            BeginBrushStroke();
         }
 
         PaintWorldSurfaceBrush(texture, hit, mirrorTarget);
+    }
+
+    private void BeginBrushStroke()
+    {
+        SaveUndo();
+        _redo.Clear();
+        _strokeActive = true;
+        unchecked
+        {
+            _brushStrokeSequence++;
+            _brushStrokeSeed = (_brushStrokeSequence * 1103515245)
+                ^ Mathf.RoundToInt(Time.unscaledTime * 1000f)
+                ^ (_selectedSuitId * 397)
+                ^ ((int)_brushShape * 7919);
+            if (_brushStrokeSeed == 0)
+            {
+                _brushStrokeSeed = 1;
+            }
+        }
     }
 
     private void HandleEyedropperInput(Texture2D texture, bool targetAvailable, Vector2 uv, string mode)
@@ -6923,7 +7103,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         var mirror = uvAvailable ? DescribeMirrorTarget(texture, mirrorTarget) : $"mirrorEnabled={_mirrorEnabled}";
-        var key = $"{reason}|tool={_tool}|over={overPreview}|uv={uvAvailable}:{uv}|pixel={pixel}|{mirror}|brush={Mathf.RoundToInt(_brushSize)}|opacity={_brushOpacity:0.##}|decal={_loadedDecal != null}|source={_pointerSource}";
+        var key = $"{reason}|tool={_tool}|shape={_brushShape}|seed={_brushStrokeSeed}|over={overPreview}|uv={uvAvailable}:{uv}|pixel={pixel}|{mirror}|brush={Mathf.RoundToInt(EffectiveBrushRadiusPixels())}|opacity={_brushOpacity:0.##}|decal={_loadedDecal != null}|source={_pointerSource}";
         if (!force && Time.unscaledTime - _lastPaintDiagnosticsTime < 0.75f && string.Equals(key, _lastPaintDiagnosticsKey, StringComparison.Ordinal))
         {
             return;
@@ -6936,11 +7116,14 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawableSuitsDiagnostics.Info($"PaintAttempt: {key}; cursor={_cursor}; texture={DescribeEditableTexture()}; mouseDown={DrawableSuitsInput.IsLeftMousePressed()}; trigger={trigger}");
     }
 
-    private void LogPaintApplied(Texture2D texture, Vector2 uv, MirrorPaintTarget mirrorTarget)
+    private void LogPaintApplied(Texture2D texture, Vector2 uv, MirrorPaintTarget mirrorTarget, BrushShapeStats primaryBrushStats = default, BrushShapeStats mirrorBrushStats = default)
     {
         var px = Mathf.RoundToInt(uv.x * (texture.width - 1));
         var py = Mathf.RoundToInt(uv.y * (texture.height - 1));
-        var key = $"applied|tool={_tool}|pixel={px},{py}|{DescribeMirrorTarget(texture, mirrorTarget)}|brush={Mathf.RoundToInt(_brushSize)}|opacity={_brushOpacity:0.##}|decal={_loadedDecal != null}";
+        var shapeStats = primaryBrushStats.Available || mirrorBrushStats.Available
+            ? $"|primaryAccepted={primaryBrushStats.AcceptedSamples}|primaryRandomSkipped={primaryBrushStats.RandomSkippedSamples}|primaryWritten={primaryBrushStats.WrittenPixels}|mirrorAccepted={mirrorBrushStats.AcceptedSamples}|mirrorRandomSkipped={mirrorBrushStats.RandomSkippedSamples}|mirrorWritten={mirrorBrushStats.WrittenPixels}"
+            : string.Empty;
+        var key = $"applied|tool={_tool}|shape={_brushShape}|seed={_brushStrokeSeed}|pixel={px},{py}|{DescribeMirrorTarget(texture, mirrorTarget)}|brush={Mathf.RoundToInt(EffectiveBrushRadiusPixels())}|opacity={_brushOpacity:0.##}|decal={_loadedDecal != null}{shapeStats}";
         if (Time.unscaledTime - _lastPaintDiagnosticsTime < 0.5f && string.Equals(key, _lastPaintDiagnosticsKey, StringComparison.Ordinal))
         {
             return;
@@ -6959,7 +7142,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         var pixel = TexturePixel(texture, hit.textureCoord);
-        var key = $"applied|tool={_tool}|pixel={pixel.x},{pixel.y}|mirror={DescribeMirrorTarget(texture, mirrorTarget)}|brush={Mathf.RoundToInt(_brushSize)}|opacity={_brushOpacity:0.##}|primaryWritten={primaryStats.WrittenPixels}|mirrorWritten={mirrorStats.WrittenPixels}|primaryCells={primaryStats.RasterizedCells}|mirrorCells={mirrorStats.RasterizedCells}|primarySeams={primaryStats.SeamSkippedCells}|mirrorSeams={mirrorStats.SeamSkippedCells}|radius={primaryRadius:0.####}";
+        var key = $"applied|tool={_tool}|shape={_brushShape}|seed={_brushStrokeSeed}|pixel={pixel.x},{pixel.y}|mirror={DescribeMirrorTarget(texture, mirrorTarget)}|brush={Mathf.RoundToInt(EffectiveBrushRadiusPixels())}|opacity={_brushOpacity:0.##}|primaryWritten={primaryStats.WrittenPixels}|mirrorWritten={mirrorStats.WrittenPixels}|primaryAccepted={primaryStats.AcceptedSamples}|mirrorAccepted={mirrorStats.AcceptedSamples}|primaryRandomSkipped={primaryStats.RandomSkippedSamples}|mirrorRandomSkipped={mirrorStats.RandomSkippedSamples}|primaryCells={primaryStats.RasterizedCells}|mirrorCells={mirrorStats.RasterizedCells}|primarySeams={primaryStats.SeamSkippedCells}|mirrorSeams={mirrorStats.SeamSkippedCells}|radius={primaryRadius:0.####}";
         if (Time.unscaledTime - _lastBrushSurfaceDiagnosticsTime < 0.5f && string.Equals(key, _lastBrushSurfaceDiagnosticsKey, StringComparison.Ordinal))
         {
             return;
@@ -6973,7 +7156,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private void LogBrushSurfaceStrokeSkipped(string reason, Texture2D texture, RaycastHit hit, MirrorPaintTarget mirrorTarget, TextSurfaceStampStats primaryStats, TextSurfaceStampStats mirrorStats, float primaryRadius, float mirrorRadius, string fallbackReason)
     {
         var pixel = texture != null ? TexturePixel(texture, hit.textureCoord) : new Vector2Int(-1, -1);
-        var key = $"skipped|reason={reason}|tool={_tool}|pixel={pixel.x},{pixel.y}|mirror={DescribeMirrorTarget(texture, mirrorTarget)}|brush={Mathf.RoundToInt(_brushSize)}|primaryWritten={primaryStats.WrittenPixels}|mirrorWritten={mirrorStats.WrittenPixels}|primaryCells={primaryStats.RasterizedCells}|mirrorCells={mirrorStats.RasterizedCells}";
+        var key = $"skipped|reason={reason}|tool={_tool}|shape={_brushShape}|seed={_brushStrokeSeed}|pixel={pixel.x},{pixel.y}|mirror={DescribeMirrorTarget(texture, mirrorTarget)}|brush={Mathf.RoundToInt(EffectiveBrushRadiusPixels())}|primaryWritten={primaryStats.WrittenPixels}|mirrorWritten={mirrorStats.WrittenPixels}|primaryAccepted={primaryStats.AcceptedSamples}|mirrorAccepted={mirrorStats.AcceptedSamples}|primaryRandomSkipped={primaryStats.RandomSkippedSamples}|mirrorRandomSkipped={mirrorStats.RandomSkippedSamples}|primaryCells={primaryStats.RasterizedCells}|mirrorCells={mirrorStats.RasterizedCells}";
         if (Time.unscaledTime - _lastBrushSurfaceDiagnosticsTime < 0.75f && string.Equals(key, _lastBrushSurfaceDiagnosticsKey, StringComparison.Ordinal))
         {
             return;
@@ -7046,20 +7229,22 @@ internal sealed class SuitEditorController : MonoBehaviour
         var applyMirror = ShouldApplyMirror(texture, uv, mirrorTarget);
         var touchedPixels = applyMirror ? new HashSet<int>() : null;
         var changed = true;
+        BrushShapeStats primaryBrushStats = default;
+        BrushShapeStats mirrorBrushStats = default;
         switch (_tool)
         {
             case EditorTool.Paint:
-                changed = PaintCircle(texture, uv, _brushColor, _brushSize, _brushOpacity, touchedPixels);
+                changed = ApplyDirectBrush(texture, uv, false, touchedPixels, out primaryBrushStats);
                 if (applyMirror)
                 {
-                    changed |= PaintCircle(texture, mirrorTarget.Uv, _brushColor, _brushSize, _brushOpacity, touchedPixels);
+                    changed |= ApplyDirectBrush(texture, mirrorTarget.Uv, true, touchedPixels, out mirrorBrushStats);
                 }
                 break;
             case EditorTool.Erase:
-                changed = EraseCircle(texture, uv, _brushSize, _brushOpacity, touchedPixels);
+                changed = ApplyDirectBrush(texture, uv, false, touchedPixels, out primaryBrushStats);
                 if (applyMirror)
                 {
-                    changed |= EraseCircle(texture, mirrorTarget.Uv, _brushSize, _brushOpacity, touchedPixels);
+                    changed |= ApplyDirectBrush(texture, mirrorTarget.Uv, true, touchedPixels, out mirrorBrushStats);
                 }
                 break;
             case EditorTool.Decal:
@@ -7102,7 +7287,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             SetStatus("Mirror target not found; applied primary only.", false);
         }
 
-        LogPaintApplied(texture, uv, mirrorTarget);
+        LogPaintApplied(texture, uv, mirrorTarget, primaryBrushStats, mirrorBrushStats);
         UpdateBrushIndicator();
         return true;
     }
@@ -7153,6 +7338,11 @@ internal sealed class SuitEditorController : MonoBehaviour
                 LogBrushSurfaceStrokeSkipped("base texture missing", texture, hit, mirrorTarget, default, default, 0f, 0f, "base texture missing");
                 return false;
             }
+        }
+
+        if (_brushShape == BrushShape.Pixel)
+        {
+            return PaintAtCursor(texture, hit.textureCoord, mirrorTarget);
         }
 
         var radiusFallback = string.Empty;
@@ -7251,8 +7441,9 @@ internal sealed class SuitEditorController : MonoBehaviour
         var inverse = 1f / determinant;
         var dPdu = (edge1 * duv2.y - edge2 * duv1.y) * inverse;
         var dPdv = (edge2 * duv1.x - edge1 * duv2.x) * inverse;
-        var du = _brushSize / Mathf.Max(1f, texture.width);
-        var dv = _brushSize / Mathf.Max(1f, texture.height);
+        var brushRadius = EffectiveBrushRadiusPixels();
+        var du = brushRadius / Mathf.Max(1f, texture.width);
+        var dv = brushRadius / Mathf.Max(1f, texture.height);
         var transform = _worldPaintProxyObject.transform;
         var radiusU = transform.TransformVector(dPdu * du).magnitude;
         var radiusV = transform.TransformVector(dPdv * dv).magnitude;
@@ -7282,7 +7473,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         var textureScale = texture != null ? Mathf.Max(1f, Mathf.Max(texture.width, texture.height)) : 1024f;
-        var radius = (_brushSize / textureScale) * boundsHeight;
+        var radius = (EffectiveBrushRadiusPixels() / textureScale) * boundsHeight;
         return Mathf.Clamp(radius, boundsHeight * 0.002f, boundsHeight * 0.28f);
     }
 
@@ -7375,7 +7566,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         stats.WorldWidth = frame.WorldWidth;
         stats.WorldHeight = frame.WorldHeight;
-        var sampleDiameter = Mathf.Clamp(Mathf.CeilToInt(_brushSize * 1.25f), 10, 96);
+        var sampleDiameter = Mathf.Clamp(Mathf.CeilToInt(EffectiveBrushRadiusPixels() * 1.25f), 10, 96);
         var gridWidth = sampleDiameter + 1;
         var gridHeight = sampleDiameter + 1;
         var grid = new SurfaceStampGridSample[gridWidth * gridHeight];
@@ -7383,7 +7574,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         var rayDistance = rayOffset * 2.5f;
         var projectedSamples = new Dictionary<int, SurfaceStampSample>();
         var seamThreshold = GetBrushProjectionSeamThreshold(target);
-        var opacity01 = Mathf.Clamp01(_brushOpacity);
+        var paint = _tool == EditorTool.Paint;
+        var shapeStats = new BrushShapeStats { Available = true, Mirrored = mirrored };
 
         for (var gy = 0; gy < gridHeight; gy++)
         {
@@ -7393,13 +7585,19 @@ internal sealed class SuitEditorController : MonoBehaviour
             {
                 var u = gx / Mathf.Max(1f, sampleDiameter);
                 var localX = (u - 0.5f) * frame.WorldWidth;
-                var normalizedDistance = Mathf.Sqrt((localX * localX) + (localY * localY)) / Mathf.Max(0.0001f, worldRadius);
-                if (normalizedDistance > 1f)
+                stats.ProjectionSamples++;
+                var previousRandomSkipped = shapeStats.RandomSkippedSamples;
+                if (!TryEvaluateBrushShape(localX, localY, worldRadius, gx - sampleDiameter / 2, gy - sampleDiameter / 2, paint, out var alpha, ref shapeStats))
                 {
+                    if (shapeStats.RandomSkippedSamples > previousRandomSkipped)
+                    {
+                        stats.RandomSkippedSamples++;
+                        stats.SkippedPixels++;
+                    }
                     continue;
                 }
 
-                stats.ProjectionSamples++;
+                stats.AcceptedSamples++;
                 var planePoint = frame.Center + (frame.Right * localX) + (frame.Up * localY);
                 if (!TryRaycastSurfaceStampPoint(planePoint, frame.Normal, rayOffset, rayDistance, out var surfaceHit))
                 {
@@ -7416,9 +7614,6 @@ internal sealed class SuitEditorController : MonoBehaviour
                     continue;
                 }
 
-                var alpha = _tool == EditorTool.Erase
-                    ? opacity01
-                    : opacity01 * Mathf.Clamp01(1f - normalizedDistance + 0.25f);
                 var sample = new SurfaceStampGridSample
                 {
                     Valid = true,
@@ -7435,28 +7630,31 @@ internal sealed class SuitEditorController : MonoBehaviour
             }
         }
 
-        for (var y = 0; y < sampleDiameter; y++)
+        if (BrushShapeUsesCoverageRasterization(_brushShape))
         {
-            for (var x = 0; x < sampleDiameter; x++)
+            for (var y = 0; y < sampleDiameter; y++)
             {
-                var s00 = grid[GridIndex(x, y, gridWidth)];
-                var s10 = grid[GridIndex(x + 1, y, gridWidth)];
-                var s01 = grid[GridIndex(x, y + 1, gridWidth)];
-                var s11 = grid[GridIndex(x + 1, y + 1, gridWidth)];
-                if (!s00.Valid || !s10.Valid || !s01.Valid || !s11.Valid)
+                for (var x = 0; x < sampleDiameter; x++)
                 {
-                    continue;
-                }
+                    var s00 = grid[GridIndex(x, y, gridWidth)];
+                    var s10 = grid[GridIndex(x + 1, y, gridWidth)];
+                    var s01 = grid[GridIndex(x, y + 1, gridWidth)];
+                    var s11 = grid[GridIndex(x + 1, y + 1, gridWidth)];
+                    if (!s00.Valid || !s10.Valid || !s01.Valid || !s11.Valid)
+                    {
+                        continue;
+                    }
 
-                if (CellCrossesProjectionSeam(s00, s10, s01, s11, seamThreshold))
-                {
-                    stats.SeamSkippedCells++;
-                    continue;
-                }
+                    if (CellCrossesProjectionSeam(s00, s10, s01, s11, seamThreshold))
+                    {
+                        stats.SeamSkippedCells++;
+                        continue;
+                    }
 
-                stats.RasterizedCells++;
-                RasterizeProjectedBrushTriangle(target, baseTexture, s00, s10, s01, projectedSamples, ref stats);
-                RasterizeProjectedBrushTriangle(target, baseTexture, s10, s11, s01, projectedSamples, ref stats);
+                    stats.RasterizedCells++;
+                    RasterizeProjectedBrushTriangle(target, baseTexture, s00, s10, s01, projectedSamples, ref stats);
+                    RasterizeProjectedBrushTriangle(target, baseTexture, s10, s11, s01, projectedSamples, ref stats);
+                }
             }
         }
 
@@ -7558,7 +7756,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        var key = $"tool={_tool}|mirrored={mirrored}|sample={sampleDiameter}|seam={stats.SeamSkippedCells}|cells={stats.RasterizedCells}|threshold={Mathf.RoundToInt(seamThreshold)}|brush={Mathf.RoundToInt(_brushSize)}";
+        var key = $"tool={_tool}|shape={_brushShape}|mirrored={mirrored}|sample={sampleDiameter}|seam={stats.SeamSkippedCells}|cells={stats.RasterizedCells}|threshold={Mathf.RoundToInt(seamThreshold)}|brush={Mathf.RoundToInt(EffectiveBrushRadiusPixels())}";
         if (Time.unscaledTime - _lastBrushSurfaceWarningTime < 2f && string.Equals(key, _lastBrushSurfaceWarningKey, StringComparison.Ordinal))
         {
             return;
@@ -7567,6 +7765,192 @@ internal sealed class SuitEditorController : MonoBehaviour
         _lastBrushSurfaceWarningTime = Time.unscaledTime;
         _lastBrushSurfaceWarningKey = key;
         DrawableSuitsDiagnostics.Warn($"BrushSurfaceProjectionWarning: {key}; projectionSamples={stats.ProjectionSamples}; surfaceHits={stats.SurfaceHits}; offSuit={stats.OffSuitSamples}; written={stats.WrittenPixels}; skipped={stats.SkippedPixels}; pointerSource={_pointerSource}");
+    }
+
+    private bool ApplyDirectBrush(Texture2D texture, Vector2 uv, bool mirrored, HashSet<int> touchedPixels, out BrushShapeStats stats)
+    {
+        stats = default;
+        stats.Available = true;
+        stats.Mirrored = mirrored;
+        if (texture == null)
+        {
+            return false;
+        }
+
+        var baseTexture = DrawableSuitsPlugin.Registry.GetOrCreateState(_selectedSuitId)?.BaseTexture;
+        if (_tool == EditorTool.Erase && baseTexture == null)
+        {
+            return false;
+        }
+
+        var cx = Mathf.RoundToInt(uv.x * (texture.width - 1));
+        var cy = Mathf.RoundToInt(uv.y * (texture.height - 1));
+        if (cx < 0 || cy < 0 || cx >= texture.width || cy >= texture.height)
+        {
+            return false;
+        }
+
+        if (_brushShape == BrushShape.Pixel)
+        {
+            stats.CheckedSamples = 1;
+            stats.AcceptedSamples = 1;
+            return ApplyDirectBrushPixel(texture, baseTexture, cx, cy, 1f, touchedPixels, ref stats);
+        }
+
+        var radius = Mathf.Max(1f, EffectiveBrushRadiusPixels());
+        var r = Mathf.CeilToInt(radius);
+        var xMin = Mathf.Max(0, cx - r);
+        var xMax = Mathf.Min(texture.width - 1, cx + r);
+        var yMin = Mathf.Max(0, cy - r);
+        var yMax = Mathf.Min(texture.height - 1, cy + r);
+        var changed = false;
+        for (var y = yMin; y <= yMax; y++)
+        {
+            for (var x = xMin; x <= xMax; x++)
+            {
+                var dx = x - cx;
+                var dy = y - cy;
+                if (!TryEvaluateBrushShape(dx, dy, radius, dx, dy, _tool == EditorTool.Paint, out var alpha, ref stats))
+                {
+                    continue;
+                }
+
+                changed |= ApplyDirectBrushPixel(texture, baseTexture, x, y, alpha, touchedPixels, ref stats);
+            }
+        }
+
+        return changed;
+    }
+
+    private bool ApplyDirectBrushPixel(Texture2D texture, Texture2D baseTexture, int x, int y, float alpha, HashSet<int> touchedPixels, ref BrushShapeStats stats)
+    {
+        if (texture == null || alpha <= 0.001f || x < 0 || y < 0 || x >= texture.width || y >= texture.height)
+        {
+            return false;
+        }
+
+        if (!TryMarkTouchedPixel(texture, x, y, touchedPixels))
+        {
+            return false;
+        }
+
+        var existing = texture.GetPixel(x, y);
+        var targetColor = _tool == EditorTool.Erase && baseTexture != null
+            ? baseTexture.GetPixel(x, y)
+            : _brushColor;
+        texture.SetPixel(x, y, Color.Lerp(existing, targetColor, Mathf.Clamp01(alpha)));
+        stats.WrittenPixels++;
+        return true;
+    }
+
+    private bool TryEvaluateBrushShape(float x, float y, float radius, int sampleX, int sampleY, bool paint, out float alpha, ref BrushShapeStats stats)
+    {
+        stats.CheckedSamples++;
+        alpha = 0f;
+        radius = Mathf.Max(0.0001f, radius);
+        var absX = Mathf.Abs(x);
+        var absY = Mathf.Abs(y);
+        var distance = Mathf.Sqrt((x * x) + (y * y));
+        var normalized = distance / radius;
+        var opacity = Mathf.Clamp01(_brushOpacity);
+
+        switch (_brushShape)
+        {
+            case BrushShape.Square:
+                if (absX > radius || absY > radius)
+                {
+                    return false;
+                }
+                alpha = opacity;
+                stats.AcceptedSamples++;
+                return true;
+            case BrushShape.SoftAirbrush:
+                if (normalized > 1f)
+                {
+                    return false;
+                }
+                alpha = paint
+                    ? opacity * Mathf.Pow(Mathf.Clamp01(1f - normalized), 2f)
+                    : opacity;
+                stats.AcceptedSamples++;
+                return alpha > 0.001f;
+            case BrushShape.SprayPaint:
+                if (normalized > 1f)
+                {
+                    return false;
+                }
+                if (BrushRandom01(_brushStrokeSeed, sampleX, sampleY, 17) > Mathf.Lerp(0.36f, 0.12f, Mathf.Clamp01(normalized)))
+                {
+                    stats.RandomSkippedSamples++;
+                    return false;
+                }
+                alpha = paint
+                    ? opacity * Mathf.Lerp(0.5f, 1f, BrushRandom01(_brushStrokeSeed, sampleX, sampleY, 23))
+                    : opacity;
+                stats.AcceptedSamples++;
+                return true;
+            case BrushShape.NoiseScatter:
+                if (normalized > 1f)
+                {
+                    return false;
+                }
+                if (BrushRandom01(_brushStrokeSeed, sampleX, sampleY, 31) > 0.58f)
+                {
+                    stats.RandomSkippedSamples++;
+                    return false;
+                }
+                alpha = paint
+                    ? opacity * Mathf.Lerp(0.35f, 1f, BrushRandom01(_brushStrokeSeed, sampleX, sampleY, 43))
+                    : opacity;
+                stats.AcceptedSamples++;
+                return true;
+            case BrushShape.Pixel:
+                if (absX > 0.5f || absY > 0.5f)
+                {
+                    return false;
+                }
+                alpha = opacity;
+                stats.AcceptedSamples++;
+                return true;
+            case BrushShape.Circle:
+            default:
+                if (normalized > 1f)
+                {
+                    return false;
+                }
+                alpha = paint
+                    ? opacity * Mathf.Clamp01(1f - normalized + 0.25f)
+                    : opacity;
+                stats.AcceptedSamples++;
+                return true;
+        }
+    }
+
+    private static float BrushRandom01(int seed, int x, int y, int salt)
+    {
+        unchecked
+        {
+            var hash = (uint)seed;
+            hash ^= (uint)(x * 73856093);
+            hash ^= (uint)(y * 19349663);
+            hash ^= (uint)(salt * 83492791);
+            hash ^= hash >> 13;
+            hash *= 1274126177u;
+            hash ^= hash >> 16;
+            return (hash & 0x00FFFFFF) / 16777215f;
+        }
+    }
+
+    private float EffectiveBrushRadiusPixels()
+    {
+        return _brushShape == BrushShape.Pixel ? 0.5f : Mathf.Max(1f, _brushSize);
+    }
+
+    private static bool BrushShapeUsesCoverageRasterization(BrushShape shape)
+    {
+        return shape == BrushShape.Circle
+            || shape == BrushShape.Square
+            || shape == BrushShape.SoftAirbrush;
     }
 
     private bool PaintCircle(Texture2D texture, Vector2 uv, Color color, float radius, float opacity, HashSet<int> touchedPixels = null)
@@ -10190,6 +10574,17 @@ internal sealed class SuitEditorController : MonoBehaviour
                 AddRing(vh, center, radius, frontThickness, ToColor32(_cursorColor));
                 return;
             }
+            if (_mode == CursorVisualMode.BrushSquare || _mode == CursorVisualMode.BrushPixel)
+            {
+                var size = _mode == CursorVisualMode.BrushPixel
+                    ? Mathf.Min(rect.width, rect.height) * 0.72f
+                    : Mathf.Max(6f, Mathf.Min(Mathf.Min(rect.width, rect.height) - 10f, _diameter));
+                var backingThickness = _mode == CursorVisualMode.BrushPixel ? 5f : Mathf.Clamp(_diameter * 0.13f, 4f, 10f);
+                var frontThickness = _mode == CursorVisualMode.BrushPixel ? 2f : Mathf.Clamp(_diameter * 0.065f, 2f, 6f);
+                AddSquareRing(vh, center, size, backingThickness, new Color32(0, 0, 0, 245));
+                AddSquareRing(vh, center, size, frontThickness, ToColor32(_cursorColor));
+                return;
+            }
 
             var outerRadius = Mathf.Min(rect.width, rect.height) * 0.5f;
             var innerRadius = outerRadius * 0.58f;
@@ -10235,6 +10630,29 @@ internal sealed class SuitEditorController : MonoBehaviour
                 vh.AddTriangle(outer0, outer1, inner1);
                 vh.AddTriangle(outer0, inner1, inner0);
             }
+        }
+
+        private static void AddSquareRing(VertexHelper vh, Vector2 center, float size, float thickness, Color32 color)
+        {
+            var halfOuter = Mathf.Max(1f, size * 0.5f + thickness * 0.5f);
+            var halfInner = Mathf.Max(0f, size * 0.5f - thickness * 0.5f);
+            var start = vh.currentVertCount;
+            AddVertex(vh, center + new Vector2(-halfOuter, -halfOuter), color);
+            AddVertex(vh, center + new Vector2(halfOuter, -halfOuter), color);
+            AddVertex(vh, center + new Vector2(halfOuter, halfOuter), color);
+            AddVertex(vh, center + new Vector2(-halfOuter, halfOuter), color);
+            AddVertex(vh, center + new Vector2(-halfInner, -halfInner), color);
+            AddVertex(vh, center + new Vector2(halfInner, -halfInner), color);
+            AddVertex(vh, center + new Vector2(halfInner, halfInner), color);
+            AddVertex(vh, center + new Vector2(-halfInner, halfInner), color);
+            vh.AddTriangle(start, start + 1, start + 5);
+            vh.AddTriangle(start, start + 5, start + 4);
+            vh.AddTriangle(start + 1, start + 2, start + 6);
+            vh.AddTriangle(start + 1, start + 6, start + 5);
+            vh.AddTriangle(start + 2, start + 3, start + 7);
+            vh.AddTriangle(start + 2, start + 7, start + 6);
+            vh.AddTriangle(start + 3, start, start + 4);
+            vh.AddTriangle(start + 3, start + 4, start + 7);
         }
 
         private static void AddVertex(VertexHelper vh, Vector2 position, Color32 color)

@@ -5,9 +5,10 @@ DrawableSuits is a Lethal Company v81 BepInEx mod that lets players draw on suit
 ## Features
 
 - Default third-person paint editor: opening DrawableSuits switches to an editor camera around the local player so you can paint directly on the visible suit.
-- Compact side overlay with Paint, Erase, Fill, Decal, Text, Eyedropper, a UI-only Mirror toggle, brush/fill sliders, a hue/SV color picker, decal/text controls, design name, visible decal rows, visible saved-design rows, share-code import/export, Undo, Redo, Reset, Apply, Save, Load, and Close.
+- Compact side overlay with Paint, Erase, Fill, Decal, Text, Eyedropper, a UI-only Mirror toggle, brush shape selector, brush/fill sliders, a hue/SV color picker, decal/text controls, design name, visible decal rows, visible saved-design rows, share-code import/export, Undo, Redo, Reset, Apply, Save, Load, and Close.
 - The editor always edits the local player's currently worn suit. Manual cross-suit selection is not available in the editor.
 - Fill Bucket flood-fills contiguous matching texture regions under the cursor using the current brush color, opacity, and Fill Tolerance slider.
+- Brush shapes for Paint and Erase: Circle, Square, Pixel, Spray Paint, Soft Airbrush, and Noise/Scatter.
 - Mirror painting duplicates Paint, Erase, Fill, Decal, and Text edits onto the opposite suit surface using the editor's baked avatar mesh, without adding keyboard or controller shortcuts.
 - Decal placement preview: Decal mode shows a translucent live preview before stamping, then places one projected decal per click or right-trigger press in third-person mode.
 - Text stamping: Text mode previews typed single-line text on the suit as a transparent alpha-mask stamp, then bakes it into the texture once per click or right-trigger press. In third-person mode, text is projected onto the visible suit surface instead of stamped as a flat UV rectangle.
@@ -37,6 +38,7 @@ Keyboard and mouse:
 - `F8`: toggle editor.
 - `F10`: emergency open.
 - Left mouse: paint/erase continuously; in Fill mode, fill once per press; in Decal or Text mode, stamp one preview at the cursor location.
+- Brush Shape: choose Circle, Square, Pixel, Spray Paint, Soft Airbrush, or Noise/Scatter from the Brush dropdown. Pixel ignores the brush size slider and edits one texture pixel.
 - Fill: click the `Fill` UI button, adjust Fill Tolerance if needed, then left-click a contiguous color region on the suit.
 - Text: click the `Text` UI button, type up to 64 characters, then left-click the suit to stamp it. Text uses the current brush color and opacity.
 - Eyedropper: click the `Eyedropper` UI button, then left-click the suit to sample that texture color. It returns to the previous tool after one successful sample.
@@ -55,13 +57,14 @@ Controller:
 - `A`: click the button, field, slider, or color picker region directly under the cursor.
 - Text: move the virtual cursor over the `Text` UI button and press `A`, type text with the UI field, then aim at the suit and press right trigger once to stamp it.
 - Fill: move the virtual cursor over the `Fill` UI button and press `A`, adjust Fill Tolerance if needed, then aim at a matching color region and press right trigger once.
+- Brush Shape: move the virtual cursor over the Brush Shape dropdown and press `A`, then pick a shape with `A`.
 - Eyedropper: move the virtual cursor over the `Eyedropper` UI button, press `A`, then aim at the suit and press right trigger once to sample a color. It returns to the previous tool after one successful sample.
 - Mirror: move the virtual cursor over the `Mirror` UI button and press `A`; there is no controller shortcut for this modifier.
 - Export Code / Import Code: use `A` on the design code UI buttons. There are no shortcuts for import/export.
 - Right trigger: paint/erase continuously; in Fill mode, fill once per press; in Decal or Text mode, stamp one preview at the cursor location.
 - Right stick or bumpers: orbit the third-person editor camera.
 - D-pad up/down: zoom the third-person editor camera.
-- `Y`: cycle Paint/Erase/Decal. Fill, Text, Eyedropper, and Mirror are UI-only and are not part of this shortcut.
+- `Y`: cycle Paint/Erase/Decal. Fill, Text, Eyedropper, Mirror, and Brush Shape are UI-only and are not part of this shortcut.
 - `X`: undo.
 - Start: save.
 
@@ -163,6 +166,7 @@ Expected 0.5.32 behavior:
 - Eyedropper does not create undo entries and Mirror does not affect sampling.
 - The part picker is removed. Third-person mode always shows the full avatar proxy, and the UV panel always shows the full editable suit texture.
 - Paint and Erase in third-person mode project onto the visible suit surface and fill between valid projected samples, so brush strokes avoid UV-island cutoffs while still guarding against unrelated UV island bleeding. The UV panel keeps direct flat UV brush painting.
+- Brush Shape changes Paint and Erase only. Circle keeps the classic brush, Square paints a square footprint, Pixel edits one texture pixel, Spray Paint and Noise/Scatter use deterministic sparse coverage per stroke, and Soft Airbrush uses a softer circular falloff.
 - Paint, erase, decal preview, and decal stamping operate on the full editable texture.
 - Active editor diagnostics report full proxy mesh/collider state through `WorldAvatarProxy updated`; `PartClassifierBuilt` should not appear during normal editor use.
 
