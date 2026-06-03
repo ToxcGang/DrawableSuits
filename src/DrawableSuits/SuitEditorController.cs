@@ -369,7 +369,9 @@ internal sealed class SuitEditorController : MonoBehaviour
         internal bool RequiresCleanup;
         internal string Reason;
         internal string ComponentSummary;
+        internal string WeldedComponentSummary;
         internal int ComponentCount;
+        internal int WeldedComponentCount;
         internal int SuspectComponentCount;
         internal int TriangleCount;
         internal int VertexCount;
@@ -400,6 +402,43 @@ internal sealed class SuitEditorController : MonoBehaviour
         internal int TotalTriangles;
         internal int TotalVertices;
         internal Bounds Bounds;
+        internal bool Welded;
+    }
+
+    private struct WeldedVertexKey : IEquatable<WeldedVertexKey>
+    {
+        internal int X;
+        internal int Y;
+        internal int Z;
+
+        internal WeldedVertexKey(Vector3 vertex, float inverseTolerance)
+        {
+            X = Mathf.RoundToInt(vertex.x * inverseTolerance);
+            Y = Mathf.RoundToInt(vertex.y * inverseTolerance);
+            Z = Mathf.RoundToInt(vertex.z * inverseTolerance);
+        }
+
+        public bool Equals(WeldedVertexKey other)
+        {
+            return X == other.X && Y == other.Y && Z == other.Z;
+        }
+
+        public override bool Equals(object obj)
+        {
+            return obj is WeldedVertexKey other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                var hash = 17;
+                hash = hash * 31 + X;
+                hash = hash * 31 + Y;
+                hash = hash * 31 + Z;
+                return hash;
+            }
+        }
     }
 
     private struct MirrorPaintTarget
@@ -9031,7 +9070,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
             var lowerLodFallbackAvailable = HasLowerDetailProxyCandidate(candidates, candidate.Renderer);
             candidate.Validation = ValidateWorldProxyCandidate(candidate.Renderer, lowerLodFallbackAvailable);
-            DrawableSuitsDiagnostics.Info($"WorldProxyMeshValidation: renderer={DescribeRendererCandidate(candidate.Renderer, "candidate")}; score={candidate.Score}; accepted={candidate.Validation.Accepted}; cleanup={candidate.Validation.RequiresCleanup}; reason={candidate.Validation.Reason}; vertices={candidate.Validation.VertexCount}; triangles={candidate.Validation.TriangleCount}; components={candidate.Validation.ComponentCount}; suspectComponents={candidate.Validation.SuspectComponentCount}; componentSummary=[{candidate.Validation.ComponentSummary}]");
+            DrawableSuitsDiagnostics.Info($"WorldProxyMeshValidation: renderer={DescribeRendererCandidate(candidate.Renderer, "candidate")}; score={candidate.Score}; accepted={candidate.Validation.Accepted}; cleanup={candidate.Validation.RequiresCleanup}; reason={candidate.Validation.Reason}; vertices={candidate.Validation.VertexCount}; triangles={candidate.Validation.TriangleCount}; sharedComponents={candidate.Validation.ComponentCount}; weldedComponents={candidate.Validation.WeldedComponentCount}; suspectComponents={candidate.Validation.SuspectComponentCount}; sharedComponentSummary=[{candidate.Validation.ComponentSummary}]; weldedComponentSummary=[{candidate.Validation.WeldedComponentSummary}]");
 
             if (candidate.Validation.Accepted)
             {
@@ -9301,11 +9340,15 @@ internal sealed class SuitEditorController : MonoBehaviour
             mesh.RecalculateBounds();
             validation.VertexCount = mesh.vertexCount;
             validation.TriangleCount = CountMeshTriangles(mesh);
-            var analysis = AnalyzeProxyMesh(mesh);
-            validation.ComponentCount = analysis.Components.Length;
-            validation.ComponentSummary = DescribeProxyComponents(analysis, 6);
-            var suspectComponents = FindSuspectProxyHelmetComponents(mesh, analysis);
+            var sharedAnalysis = AnalyzeProxyMesh(mesh);
+            validation.ComponentCount = sharedAnalysis.Components.Length;
+            validation.ComponentSummary = DescribeProxyComponents(sharedAnalysis, 6);
+            var weldedAnalysis = AnalyzeProxyMeshWelded(mesh);
+            validation.WeldedComponentCount = weldedAnalysis.Components.Length;
+            validation.WeldedComponentSummary = DescribeProxyComponents(weldedAnalysis, 6);
+            var suspectComponents = FindSuspectProxyHelmetComponents(mesh, weldedAnalysis);
             validation.SuspectComponentCount = suspectComponents.Count;
+            LogWeldedProxyComponentDiagnostics(renderer, weldedAnalysis, suspectComponents);
 
             if (IsHighRiskLod1ProxySource(renderer, mesh, lowerLodFallbackAvailable))
             {
@@ -9320,6 +9363,7 @@ internal sealed class SuitEditorController : MonoBehaviour
                 validation.Accepted = false;
                 validation.RequiresCleanup = true;
                 validation.Reason = $"suspect detached helmet/viewmodel components={suspectComponents.Count}";
+                DrawableSuitsDiagnostics.Warn($"WorldProxyHelmetShellRejected: renderer={DescribeRendererCandidate(renderer, "candidate")}; suspects={suspectComponents.Count}; weldedComponents={weldedAnalysis.Components.Length}; suspectSummary=[{DescribeProxyComponentList(suspectComponents, 6)}]");
                 return validation;
             }
 
@@ -9407,11 +9451,22 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private static ProxyMeshAnalysis AnalyzeProxyMesh(Mesh mesh)
     {
+        return AnalyzeProxyMesh(mesh, false);
+    }
+
+    private static ProxyMeshAnalysis AnalyzeProxyMeshWelded(Mesh mesh)
+    {
+        return AnalyzeProxyMesh(mesh, true);
+    }
+
+    private static ProxyMeshAnalysis AnalyzeProxyMesh(Mesh mesh, bool welded)
+    {
         var empty = new ProxyMeshAnalysis
         {
             Triangles = Array.Empty<ProxyMeshTriangle>(),
             Components = Array.Empty<ProxyMeshComponent>(),
-            Bounds = new Bounds(Vector3.zero, Vector3.zero)
+            Bounds = new Bounds(Vector3.zero, Vector3.zero),
+            Welded = welded
         };
         if (mesh == null || mesh.vertexCount == 0)
         {
@@ -9451,12 +9506,15 @@ internal sealed class SuitEditorController : MonoBehaviour
             return empty;
         }
 
-        var vertexToTriangles = new List<int>[vertices.Length];
+        var vertexGroupCount = vertices.Length;
+        var vertexGroups = welded ? BuildWeldedVertexGroups(vertices, out vertexGroupCount) : null;
+        var adjacencySlotCount = welded ? vertexGroupCount : vertices.Length;
+        var vertexToTriangles = new List<int>[adjacencySlotCount];
         for (var i = 0; i < triangles.Count; i++)
         {
-            AddTriangleForVertex(vertexToTriangles, triangles[i].A, i);
-            AddTriangleForVertex(vertexToTriangles, triangles[i].B, i);
-            AddTriangleForVertex(vertexToTriangles, triangles[i].C, i);
+            AddTriangleForVertex(vertexToTriangles, welded ? vertexGroups[triangles[i].A] : triangles[i].A, i);
+            AddTriangleForVertex(vertexToTriangles, welded ? vertexGroups[triangles[i].B] : triangles[i].B, i);
+            AddTriangleForVertex(vertexToTriangles, welded ? vertexGroups[triangles[i].C] : triangles[i].C, i);
         }
 
         var visited = new bool[triangles.Count];
@@ -9481,9 +9539,9 @@ internal sealed class SuitEditorController : MonoBehaviour
                 AddComponentVertex(component, vertices, triangle.A, ref boundsInitialized);
                 AddComponentVertex(component, vertices, triangle.B, ref boundsInitialized);
                 AddComponentVertex(component, vertices, triangle.C, ref boundsInitialized);
-                EnqueueAdjacentTriangles(vertexToTriangles, visited, queue, triangle.A);
-                EnqueueAdjacentTriangles(vertexToTriangles, visited, queue, triangle.B);
-                EnqueueAdjacentTriangles(vertexToTriangles, visited, queue, triangle.C);
+                EnqueueAdjacentTriangles(vertexToTriangles, visited, queue, welded ? vertexGroups[triangle.A] : triangle.A);
+                EnqueueAdjacentTriangles(vertexToTriangles, visited, queue, welded ? vertexGroups[triangle.B] : triangle.B);
+                EnqueueAdjacentTriangles(vertexToTriangles, visited, queue, welded ? vertexGroups[triangle.C] : triangle.C);
             }
 
             component.TriangleCount = component.TriangleOrdinals.Count;
@@ -9497,8 +9555,30 @@ internal sealed class SuitEditorController : MonoBehaviour
             Components = components.ToArray(),
             TotalTriangles = triangles.Count,
             TotalVertices = vertices.Length,
-            Bounds = mesh.bounds
+            Bounds = mesh.bounds,
+            Welded = welded
         };
+    }
+
+    private static int[] BuildWeldedVertexGroups(Vector3[] vertices, out int groupCount)
+    {
+        var result = new int[vertices.Length];
+        var groups = new Dictionary<WeldedVertexKey, int>();
+        var inverseTolerance = 1f / 0.006f;
+        groupCount = 0;
+        for (var i = 0; i < vertices.Length; i++)
+        {
+            var key = new WeldedVertexKey(vertices[i], inverseTolerance);
+            if (!groups.TryGetValue(key, out var group))
+            {
+                group = groupCount++;
+                groups.Add(key, group);
+            }
+
+            result[i] = group;
+        }
+
+        return result;
     }
 
     private static void AddTriangleForVertex(List<int>[] vertexToTriangles, int vertex, int triangle)
@@ -9569,6 +9649,13 @@ internal sealed class SuitEditorController : MonoBehaviour
         var meshBounds = analysis.Bounds;
         var meshSize = meshBounds.size;
         var meshMagnitude = Mathf.Max(0.001f, meshSize.magnitude);
+        var heightAxis = GetDominantAxis(meshSize);
+        var lateralAxisA = heightAxis == 0 ? 1 : 0;
+        var lateralAxisB = heightAxis == 2 ? 1 : 2;
+        var meshHeight = Mathf.Max(0.001f, GetAxis(meshSize, heightAxis));
+        var meshLateralA = Mathf.Max(0.001f, GetAxis(meshSize, lateralAxisA));
+        var meshLateralB = Mathf.Max(0.001f, GetAxis(meshSize, lateralAxisB));
+        var upperLimit = GetAxis(meshBounds.center, heightAxis) + GetAxis(meshBounds.extents, heightAxis) * 0.18f;
         for (var i = 0; i < analysis.Components.Length; i++)
         {
             var component = analysis.Components[i];
@@ -9585,17 +9672,99 @@ internal sealed class SuitEditorController : MonoBehaviour
 
             var bounds = component.Bounds;
             var size = bounds.size;
-            var upper = bounds.max.y > meshBounds.center.y + meshBounds.extents.y * 0.18f;
-            var central = Mathf.Abs(bounds.center.x - meshBounds.center.x) < Mathf.Max(0.18f, meshBounds.extents.x * 0.8f);
+            var upper = GetAxis(bounds.max, heightAxis) > upperLimit;
+            var centralA = Mathf.Abs(GetAxis(bounds.center, lateralAxisA) - GetAxis(meshBounds.center, lateralAxisA)) < Mathf.Max(0.18f, GetAxis(meshBounds.extents, lateralAxisA) * 0.86f);
+            var centralB = Mathf.Abs(GetAxis(bounds.center, lateralAxisB) - GetAxis(meshBounds.center, lateralAxisB)) < Mathf.Max(0.18f, GetAxis(meshBounds.extents, lateralAxisB) * 0.86f);
             var largeEnough = size.magnitude > meshMagnitude * 0.12f;
-            var shellLike = size.y > meshSize.y * 0.12f && Mathf.Max(size.x, size.z) > Mathf.Max(0.12f, Mathf.Min(meshSize.x, meshSize.z) * 0.25f);
-            if (upper && central && largeEnough && shellLike)
+            var componentHeight = GetAxis(size, heightAxis);
+            var lateralSize = Mathf.Max(GetAxis(size, lateralAxisA), GetAxis(size, lateralAxisB));
+            var shellLike = componentHeight > meshHeight * 0.10f && lateralSize > Mathf.Max(0.12f, Mathf.Min(meshLateralA, meshLateralB) * 0.22f);
+            if (upper && centralA && centralB && largeEnough && shellLike)
             {
                 suspects.Add(component);
             }
         }
 
         return suspects;
+    }
+
+    private static int GetDominantAxis(Vector3 size)
+    {
+        var absX = Mathf.Abs(size.x);
+        var absY = Mathf.Abs(size.y);
+        var absZ = Mathf.Abs(size.z);
+        if (absX >= absY && absX >= absZ)
+        {
+            return 0;
+        }
+
+        return absY >= absZ ? 1 : 2;
+    }
+
+    private static float GetAxis(Vector3 value, int axis)
+    {
+        if (axis == 0)
+        {
+            return value.x;
+        }
+
+        return axis == 1 ? value.y : value.z;
+    }
+
+    private static void LogWeldedProxyComponentDiagnostics(SkinnedMeshRenderer renderer, ProxyMeshAnalysis analysis, List<ProxyMeshComponent> suspects)
+    {
+        if (renderer == null || analysis == null || analysis.Components == null || analysis.Components.Length == 0)
+        {
+            return;
+        }
+
+        var components = new List<ProxyMeshComponent>(analysis.Components);
+        components.Sort((a, b) => b.TriangleCount.CompareTo(a.TriangleCount));
+        var heightAxis = GetDominantAxis(analysis.Bounds.size);
+        var suspectIds = new HashSet<int>();
+        if (suspects != null)
+        {
+            for (var i = 0; i < suspects.Count; i++)
+            {
+                suspectIds.Add(suspects[i].Index);
+            }
+        }
+
+        var logged = 0;
+        for (var i = 0; i < components.Count && logged < 8; i++)
+        {
+            var component = components[i];
+            var suspect = suspectIds.Contains(component.Index);
+            if (!suspect && logged >= 5)
+            {
+                continue;
+            }
+
+            DrawableSuitsDiagnostics.Info($"WorldProxyWeldedComponent: renderer={DescribeRendererCandidate(renderer, "candidate")}; component={component.Index}; suspect={suspect}; rank={i}; triangles={component.TriangleCount}; vertices={component.VertexCount}; bounds={component.Bounds}; heightAxis={heightAxis}; totalWeldedComponents={analysis.Components.Length}");
+            logged++;
+        }
+    }
+
+    private static string DescribeProxyComponentList(List<ProxyMeshComponent> components, int limit)
+    {
+        if (components == null || components.Count == 0)
+        {
+            return "none";
+        }
+
+        var parts = new List<string>();
+        for (var i = 0; i < components.Count && i < limit; i++)
+        {
+            var component = components[i];
+            parts.Add($"{component.Index}:tri={component.TriangleCount}:verts={component.VertexCount}:bounds={component.Bounds}");
+        }
+
+        if (components.Count > limit)
+        {
+            parts.Add($"+{components.Count - limit} more");
+        }
+
+        return string.Join("; ", parts);
     }
 
     private static ProxyMeshComponent FindMainProxyComponent(ProxyMeshAnalysis analysis)
@@ -9648,11 +9817,12 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
-        var analysis = AnalyzeProxyMesh(mesh);
+        var sharedAnalysis = AnalyzeProxyMesh(mesh);
+        var analysis = AnalyzeProxyMeshWelded(mesh);
         var suspects = FindSuspectProxyHelmetComponents(mesh, analysis);
         if (suspects.Count == 0)
         {
-            cleanupSummary = "cleanup requested but no suspect components found";
+            cleanupSummary = $"cleanup requested but no welded suspect components found; sharedComponents={sharedAnalysis.Components.Length}; weldedComponents={analysis.Components.Length}";
             return false;
         }
 
@@ -9674,7 +9844,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
-        cleanupSummary = $"removedComponents={suspects.Count}; removedTriangles={removedTriangles}; removedVertices={removedVertices}; suspects=[{string.Join("; ", suspectDescriptions)}]";
+        cleanupSummary = $"removedComponents={suspects.Count}; removedTriangles={removedTriangles}; removedVertices={removedVertices}; sharedComponents={sharedAnalysis.Components.Length}; weldedComponents={analysis.Components.Length}; suspects=[{string.Join("; ", suspectDescriptions)}]";
         DrawableSuitsDiagnostics.Warn($"WorldProxyMeshCleaned: source={DescribeRendererCandidate(_worldSourceRenderer, "source")}; {cleanupSummary}; finalVertices={mesh.vertexCount}; finalTriangles={CountMeshTriangles(mesh)}; finalBounds={mesh.bounds}");
         return true;
     }

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.28
+
+- Replaced proxy helmet cleanup with welded-position component analysis so UV-split baked meshes no longer appear as hundreds of one-triangle components.
+- Updated proxy validation to reject LOD candidates with welded upper helmet/viewmodel shell components and fall back to cleaner compatible LODs.
+- Fixed proxy helmet-shell detection to use the baked mesh's dominant height axis instead of assuming local `Y` is vertical.
+- Added `WorldProxyWeldedComponent` and `WorldProxyHelmetShellRejected` diagnostics while preserving first-person suppression and the always-visible UV panel workflow.
+
 ## 0.5.27
 
 - Added baked proxy mesh validation so the editor can reject a polluted high-detail `LOD1` source and fall back to cleaner compatible LOD renderers.

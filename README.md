@@ -117,13 +117,13 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.27 behavior:
+Expected 0.5.28 behavior:
 
 - Opening the editor shows a compact side overlay and a third-person camera view of the local player.
 - The diagnostics text should show `Preview mode: WorldThirdPerson` when the default path succeeds.
 - The UV texture panel is visible at the same time as the third-person suit and can be edited directly by moving the cursor over it.
 - The visible editor model is `DrawableSuitsWorldAvatarProxy`, a baked suit/body proxy on an isolated layer, not the live first-person local rig. First-person helmet/viewmodel renderers are hidden during editing, re-suppressed for the first few frames after opening, and restored on close.
-- The baked proxy source is validated before use. If high-detail `LOD1` contains the giant first-person helmet shell, DrawableSuits can reject it, fall back to a cleaner compatible LOD, or conservatively remove detached suspect proxy components.
+- The baked proxy source is validated before use. If high-detail `LOD1`, `LOD2`, or another candidate contains the giant first-person helmet shell, DrawableSuits uses welded-position component analysis to reject it, fall back to a cleaner compatible LOD, or conservatively remove detached suspect proxy components.
 - Normal session startup should log `SessionSafetyCheck` with `EditorOpen=False`, no active DrawableSuits cameras, `Camera.main` state, local player state, prompt context, and `jetpackWarningGuard` status.
 - If third-person setup fails, the editor falls back to texture-only `TextureFallback` and logs the reason.
 - The UV texture panel shows the editable texture in a reserved right-column preview slot below the decal list. It should not cover the color picker, brush controls, tools, design controls, or saved-design rows.
@@ -161,7 +161,7 @@ Expected 0.5.27 behavior:
 - The part picker is removed. Third-person mode always shows the full avatar proxy, and the UV panel always shows the full editable suit texture.
 - Paint and Erase in third-person mode project onto the visible suit surface and fill between valid projected samples, so brush strokes avoid UV-island cutoffs while still guarding against unrelated UV island bleeding. The UV panel keeps direct flat UV brush painting.
 - Paint, erase, decal preview, and decal stamping operate on the full editable texture.
-- Active editor diagnostics report full proxy mesh/collider state through `WorldProxyMeshValidation`, `WorldAvatarProxy updated`, and optional `WorldProxySourceFallback` or `WorldProxyMeshCleaned`; `PartClassifierBuilt` should not appear during normal editor use.
+- Active editor diagnostics report full proxy mesh/collider state through `WorldProxyMeshValidation`, `WorldProxyWeldedComponent`, `WorldAvatarProxy updated`, and optional `WorldProxyHelmetShellRejected`, `WorldProxySourceFallback`, or `WorldProxyMeshCleaned`; `PartClassifierBuilt` should not appear during normal editor use.
 
 Troubleshooting:
 
@@ -170,7 +170,7 @@ Troubleshooting:
 - If Mirror does not appear to find the opposite side, check `MirrorSurfaceMap built` and `MirrorSurfaceTarget` diagnostics. Asymmetric or unusual modded meshes may not have a reliable opposite surface for every hit.
 - If entering a session starts on a black screen before opening DrawableSuits, check `SessionSafetyCheck` lines. They list `Camera.main`, active cameras, camera target textures, local player flags, prompt context such as grab/hover fields, local renderer materials, and any repaired DrawableSuits objects. DrawableSuits should report no active DrawableSuits cameras while `EditorOpen=False`.
 - If the black screen shows `Grab: [E]` and `SessionSafetyCheck` reports `Camera.main=null`, inspect `LogOutput.log` for repeated `JetpackWarning` `PlayerControllerB.LateUpdate` `NullReferenceException`. By default, DrawableSuits disables only `JetpackWarning.Patches.PlayerControllerB_LateUpdate_Postfix` after repeated failures and logs the unpatch result in `diagnostics.log`. Set `AutoDisableBrokenJetpackWarningLateUpdatePatch=false` to turn this compatibility guard off.
-- If third person shows first-person arms, a giant helmet, held items, or another partial rig, confirm the installed package is 0.5.27 or newer, then check `WorldProxyMeshValidation`, `WorldProxySourceFallback`, `WorldProxyMeshCleaned`, `FirstPersonOverlaySuppressed`, `FirstPersonOverlayStillVisible`, `World editor visible renderer candidate`, and `WorldAvatarProxy updated` lines. If `LOD1` is polluted, diagnostics should show it rejected or cleaned before the proxy is used; no live local first-person helmet/viewmodel renderer should remain visible to the editor camera.
+- If third person shows first-person arms, a giant helmet, held items, or another partial rig, confirm the installed package is 0.5.28 or newer, then check `WorldProxyMeshValidation`, `WorldProxyWeldedComponent`, `WorldProxyHelmetShellRejected`, `WorldProxySourceFallback`, `WorldProxyMeshCleaned`, `FirstPersonOverlaySuppressed`, `FirstPersonOverlayStillVisible`, `World editor visible renderer candidate`, and `WorldAvatarProxy updated` lines. Diagnostics should show shared and welded component counts; polluted LOD candidates should be rejected, or suspect welded shell components should be cleaned before the proxy is used.
 - If action buttons such as Reset, Save, or Load also select decal/save rows, confirm the installed package is 0.4.7 or newer. Lists now use stable row pools and log `ListRowsUpdated` instead of rebuilding/destroying row buttons during normal UI refresh.
 - If controller `A` clicks the wrong UI item, confirm the installed package is 0.4.7 or newer, move the left stick before the first `A` press, then check `Virtual cursor A press` and `Virtual cursor A release` diagnostics. They should show the same resolved button or control that is visually under the cursor.
 - If button highlights stick around, confirm the installed package is 0.4.7 or newer. Normal button selected colors are neutral.
