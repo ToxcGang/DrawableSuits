@@ -1782,13 +1782,14 @@ internal sealed class SuitEditorController : MonoBehaviour
         var localSuitId = DrawableSuitsPlugin.Registry.GetLocalSuitId();
         var suitIds = DrawableSuitsPlugin.Registry.GetSuitIds();
         _knownSuitCount = suitIds.Count;
-        if (_selectedSuitId < 0)
+        _selectedSuitId = localSuitId;
+        if (priorSelectedSuitId != _selectedSuitId)
         {
-            _selectedSuitId = localSuitId >= 0 ? localSuitId : FirstKnownSuitId();
-        }
-        else if (!suitIds.Contains(_selectedSuitId))
-        {
-            _selectedSuitId = localSuitId >= 0 ? localSuitId : FirstKnownSuitId();
+            _undo.Clear();
+            _redo.Clear();
+            InvalidateDecalPreview("current suit changed");
+            InvalidateMirrorSurfaceMap("current suit changed");
+            DrawableSuitsDiagnostics.Info($"Current local suit selected by readiness. context={context}; previous={priorSelectedSuitId}; current={_selectedSuitId}; known={suitIds.Contains(_selectedSuitId)}");
         }
         var player = StartOfRound.Instance?.localPlayerController;
         _hasLocalPlayer = player != null;
@@ -1812,11 +1813,11 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
         if (_selectedSuitId < 0)
         {
-            missing.Add("no selected suit");
+            missing.Add("local player current suit not available");
         }
         if (!_hasEditableSuit)
         {
-            missing.Add("selected suit has no editable material/texture");
+            missing.Add("current suit has no editable material/texture");
         }
 
         if (missing.Count > 0)
@@ -1914,29 +1915,25 @@ internal sealed class SuitEditorController : MonoBehaviour
         _diagnosticsLabel = CreateAnchoredText(panel.transform, "DiagnosticsLabel", string.Empty, 12, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 138f, leftW, 128f), new Color(0.78f, 0.86f, 1f, 1f));
         _diagnosticsLabel.color = new Color(0.78f, 0.86f, 1f, 1f);
 
-        CreateAnchoredButton(panel.transform, "Previous", new Rect(leftX, 282f, 82f, 34f), () => SelectAdjacentSuit(-1));
-        CreateAnchoredButton(panel.transform, "Use Current", new Rect(leftX + 90f, 282f, 112f, 34f), () => SelectSuit(DrawableSuitsPlugin.Registry.GetLocalSuitId()));
-        CreateAnchoredButton(panel.transform, "Next", new Rect(leftX + 210f, 282f, 72f, 34f), () => SelectAdjacentSuit(1));
+        CreateAnchoredText(panel.transform, "ToolHeader", "Tool", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 282f, leftW, 24f), Color.white);
+        _paintButton = CreateAnchoredButton(panel.transform, "Paint", new Rect(leftX, 310f, 64f, 30f), () => SetTool(EditorTool.Paint));
+        _eraseButton = CreateAnchoredButton(panel.transform, "Erase", new Rect(leftX + 70f, 310f, 64f, 30f), () => SetTool(EditorTool.Erase));
+        _fillButton = CreateAnchoredButton(panel.transform, "Fill", new Rect(leftX + 140f, 310f, 64f, 30f), () => SetTool(EditorTool.FillBucket));
+        _mirrorButton = CreateAnchoredButton(panel.transform, "Mirror", new Rect(leftX + 210f, 310f, 64f, 30f), ToggleMirror);
+        _decalButton = CreateAnchoredButton(panel.transform, "Decal", new Rect(leftX, 346f, 64f, 30f), () => SetTool(EditorTool.Decal));
+        _textButton = CreateAnchoredButton(panel.transform, "Text", new Rect(leftX + 70f, 346f, 64f, 30f), () => SetTool(EditorTool.Text));
+        _eyedropperButton = CreateAnchoredButton(panel.transform, "Eyedropper", new Rect(leftX + 140f, 346f, 134f, 30f), () => SetTool(EditorTool.Eyedropper));
 
-        CreateAnchoredText(panel.transform, "ToolHeader", "Tool", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 326f, leftW, 24f), Color.white);
-        _paintButton = CreateAnchoredButton(panel.transform, "Paint", new Rect(leftX, 354f, 64f, 30f), () => SetTool(EditorTool.Paint));
-        _eraseButton = CreateAnchoredButton(panel.transform, "Erase", new Rect(leftX + 70f, 354f, 64f, 30f), () => SetTool(EditorTool.Erase));
-        _fillButton = CreateAnchoredButton(panel.transform, "Fill", new Rect(leftX + 140f, 354f, 64f, 30f), () => SetTool(EditorTool.FillBucket));
-        _mirrorButton = CreateAnchoredButton(panel.transform, "Mirror", new Rect(leftX + 210f, 354f, 64f, 30f), ToggleMirror);
-        _decalButton = CreateAnchoredButton(panel.transform, "Decal", new Rect(leftX, 390f, 64f, 30f), () => SetTool(EditorTool.Decal));
-        _textButton = CreateAnchoredButton(panel.transform, "Text", new Rect(leftX + 70f, 390f, 64f, 30f), () => SetTool(EditorTool.Text));
-        _eyedropperButton = CreateAnchoredButton(panel.transform, "Eyedropper", new Rect(leftX + 140f, 390f, 134f, 30f), () => SetTool(EditorTool.Eyedropper));
+        CreateAnchoredText(panel.transform, "BrushHeader", "Brush", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 394f, leftW, 24f), Color.white);
+        _brushSizeLabel = CreateAnchoredText(panel.transform, "BrushSizeLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 424f, 94f, 24f), Color.white);
+        _brushSizeSlider = CreateAnchoredSlider(panel.transform, "BrushSize", 1f, 96f, _brushSize, new Rect(leftX + 100f, 426f, 174f, 24f), value => _brushSize = value);
+        _brushOpacityLabel = CreateAnchoredText(panel.transform, "BrushOpacityLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 458f, 94f, 24f), Color.white);
+        _brushOpacitySlider = CreateAnchoredSlider(panel.transform, "BrushOpacity", 0.05f, 1f, _brushOpacity, new Rect(leftX + 100f, 460f, 174f, 24f), value => _brushOpacity = value);
+        _fillToleranceLabel = CreateAnchoredText(panel.transform, "FillToleranceLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 492f, 104f, 24f), Color.white);
+        _fillToleranceSlider = CreateAnchoredSlider(panel.transform, "FillTolerance", 0f, 0.5f, _fillTolerance, new Rect(leftX + 110f, 494f, 164f, 24f), value => _fillTolerance = value);
 
-        CreateAnchoredText(panel.transform, "BrushHeader", "Brush", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 438f, leftW, 24f), Color.white);
-        _brushSizeLabel = CreateAnchoredText(panel.transform, "BrushSizeLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 468f, 94f, 24f), Color.white);
-        _brushSizeSlider = CreateAnchoredSlider(panel.transform, "BrushSize", 1f, 96f, _brushSize, new Rect(leftX + 100f, 470f, 174f, 24f), value => _brushSize = value);
-        _brushOpacityLabel = CreateAnchoredText(panel.transform, "BrushOpacityLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 502f, 94f, 24f), Color.white);
-        _brushOpacitySlider = CreateAnchoredSlider(panel.transform, "BrushOpacity", 0.05f, 1f, _brushOpacity, new Rect(leftX + 100f, 504f, 174f, 24f), value => _brushOpacity = value);
-        _fillToleranceLabel = CreateAnchoredText(panel.transform, "FillToleranceLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 536f, 104f, 24f), Color.white);
-        _fillToleranceSlider = CreateAnchoredSlider(panel.transform, "FillTolerance", 0f, 0.5f, _fillTolerance, new Rect(leftX + 110f, 538f, 164f, 24f), value => _fillTolerance = value);
-
-        CreateAnchoredText(panel.transform, "ColorHeader", "Color", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 574f, leftW, 24f), Color.white);
-        _colorPicker = CreateAnchoredColorPicker(panel.transform, new Rect(leftX, 598f, leftW, 104f), _brushColor, color =>
+        CreateAnchoredText(panel.transform, "ColorHeader", "Color", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 530f, leftW, 24f), Color.white);
+        _colorPicker = CreateAnchoredColorPicker(panel.transform, new Rect(leftX, 554f, leftW, 104f), _brushColor, color =>
         {
             _brushColor = color;
             UpdateColorUi();
@@ -3021,7 +3018,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             _suitLabel.text = _selectedSuitId >= 0
                 ? $"Suit: {DrawableSuitsPlugin.Registry.GetSuitName(_selectedSuitId)} ({_selectedSuitId})"
-                : "Suit: none selected";
+                : "Suit: current suit unavailable";
         }
 
         if (_statusLabel != null)
@@ -8661,55 +8658,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawableSuitsDiagnostics.Info($"Selected decal index={index}; file={_decalFiles[index]}; loaded={_loadedDecal != null}");
     }
 
-    private void SelectAdjacentSuit(int direction)
-    {
-        var ids = DrawableSuitsPlugin.Registry.GetSuitIds();
-        if (ids.Count == 0)
-        {
-            return;
-        }
-
-        var index = ids.IndexOf(_selectedSuitId);
-        if (index < 0)
-        {
-            index = 0;
-        }
-        else
-        {
-            index = (index + direction + ids.Count) % ids.Count;
-        }
-
-        SelectSuit(ids[index]);
-    }
-
-    private void SelectSuit(int suitId)
-    {
-        if (suitId < 0)
-        {
-            DrawableSuitsDiagnostics.Warn($"SelectSuit ignored invalid suitId={suitId}.");
-            return;
-        }
-
-        _selectedSuitId = suitId;
-        DrawableSuitsPlugin.Registry.GetOrCreateState(_selectedSuitId);
-        _undo.Clear();
-        _redo.Clear();
-        DrawableSuitsDiagnostics.Info($"SelectSuit selected suitId={_selectedSuitId}; name={DrawableSuitsPlugin.Registry.GetSuitName(_selectedSuitId)}");
-        InvalidateDecalPreview("select suit");
-        InvalidateMirrorSurfaceMap("select suit");
-        RefreshEditorReadiness("after select suit");
-        UpdateUiState();
-        TryRebuildPreviewForCurrentReadiness("SelectSuit");
-        RefreshEditorReadiness("after select suit preview");
-        UpdateUiState();
-    }
-
-    private int FirstKnownSuitId()
-    {
-        var ids = DrawableSuitsPlugin.Registry.GetSuitIds();
-        return ids.Count > 0 ? ids[0] : -1;
-    }
-
     private bool IsWorldThirdPersonMode => string.Equals(_previewMode, "WorldThirdPerson", StringComparison.OrdinalIgnoreCase);
 
     private WorldCameraState CaptureWorldCameraState()
@@ -8731,7 +8679,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         return context.IndexOf("LoadSelectedDesign", StringComparison.OrdinalIgnoreCase) >= 0
-            || context.IndexOf("SelectSuit", StringComparison.OrdinalIgnoreCase) >= 0
             || context.IndexOf("ImportDesignCode", StringComparison.OrdinalIgnoreCase) >= 0;
     }
 

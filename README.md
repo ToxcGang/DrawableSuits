@@ -6,6 +6,7 @@ DrawableSuits is a Lethal Company v81 BepInEx mod that lets players draw on suit
 
 - Default third-person paint editor: opening DrawableSuits switches to an editor camera around the local player so you can paint directly on the visible suit.
 - Compact side overlay with Paint, Erase, Fill, Decal, Text, Eyedropper, a UI-only Mirror toggle, brush/fill sliders, a hue/SV color picker, decal/text controls, design name, visible decal rows, visible saved-design rows, share-code import/export, Undo, Redo, Reset, Apply, Save, Load, and Close.
+- The editor always edits the local player's currently worn suit. Manual cross-suit selection is not available in the editor.
 - Fill Bucket flood-fills contiguous matching texture regions under the cursor using the current brush color, opacity, and Fill Tolerance slider.
 - Mirror painting duplicates Paint, Erase, Fill, Decal, and Text edits onto the opposite suit surface using the editor's baked avatar mesh, without adding keyboard or controller shortcuts.
 - Decal placement preview: Decal mode shows a translucent live preview before stamping, then places one projected decal per click or right-trigger press in third-person mode.
@@ -83,13 +84,15 @@ Players without DrawableSuits can still join normally, but they will see the ori
 
 DrawableSuits no longer replaces every rack/player using the same base suit when one player edits their suit. Saved designs are reusable, but active in-session edits are applied to the selected player only.
 
-Share codes embed a PNG copy of the current editable texture plus metadata. Importing a code loads it into the currently selected suit editor texture only. It creates one undo entry, does not auto-save, and does not sync to multiplayer until you press `Apply` or `Save`.
+Share codes embed a PNG copy of the current editable texture plus metadata. Importing a code loads it into the local player's current suit editor texture only. It creates one undo entry, does not auto-save, and does not sync to multiplayer until you press `Apply` or `Save`.
 
 New exports use the shorter lossless `DSUIT2:` format. Older `DSUIT1:` codes still import normally, but newly copied codes default to `DSUIT2:`.
 
 ## Modded Suits
 
 DrawableSuits works with modded suits by detecting unlockables that expose a `suitMaterial`. Saved designs are reusable on any suit, but loading a design onto a suit with a different UV layout can stretch or misplace drawings and decals.
+
+DrawableSuits is not compatible with ModelReplacementAPI. Replacement models can use separate runtime renderers and materials that DrawableSuits cannot safely map to the current suit texture, so the third-person editor may show incorrect geometry, duplicate helmets, or an uneditable model. If you use ModelReplacementAPI, use the UV texture panel where possible or disable the replacement while editing.
 
 ## Configuration
 
@@ -117,9 +120,10 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.25 behavior:
+Expected 0.5.32 behavior:
 
 - Opening the editor shows a compact side overlay and a third-person camera view of the local player.
+- The editor edits only the local player's currently worn suit. The old Previous, Use Current, and Next suit-selection buttons are not present.
 - The diagnostics text should show `Preview mode: WorldThirdPerson` when the default path succeeds.
 - The UV texture panel is visible at the same time as the third-person suit and can be edited directly by moving the cursor over it.
 - The visible editor model is `DrawableSuitsWorldAvatarProxy`, a baked suit/body proxy on an isolated layer, not the live first-person local rig. First-person helmet/viewmodel renderers are hidden during editing and restored on close.
@@ -132,7 +136,7 @@ Expected 0.5.25 behavior:
 - The color changer is a compact side-by-side hue ring and saturation/value square with a swatch and editable `#RRGGBB` hex field.
 - Color picker handles are tied to the same coordinate conversion used for mouse/controller input, so the visible handle positions should match the selected hue, saturation, value, and typed hex color.
 - Reset, Save, and Load no longer rebuild list hitboxes during the click; decal and saved-design rows only change selection when their rows are clicked directly.
-- Third-person camera yaw, pitch, and distance are preserved when loading a design or switching suits while the editor is open.
+- Third-person camera yaw, pitch, and distance are preserved when loading a design or importing a design code while the editor is open.
 - Controller `A` does not activate UI immediately after opening; move the left stick once to arm the virtual cursor, then `A` clicks the control under the cursor.
 - Normal buttons should not stay highlighted after unrelated clicks; only selected tools, decals, and saved designs keep orange selection styling.
 - The decal section has one `Refresh Decals` button. It refreshes decal and save rows and shows only a short status line.
@@ -170,11 +174,12 @@ Troubleshooting:
 - If entering a session starts on a black screen before opening DrawableSuits, check `SessionSafetyCheck` lines. They list `Camera.main`, active cameras, camera target textures, local player flags, prompt context such as grab/hover fields, local renderer materials, and any repaired DrawableSuits objects. DrawableSuits should report no active DrawableSuits cameras while `EditorOpen=False`.
 - If the black screen shows `Grab: [E]` and `SessionSafetyCheck` reports `Camera.main=null`, inspect `LogOutput.log` for repeated `JetpackWarning` `PlayerControllerB.LateUpdate` `NullReferenceException`. By default, DrawableSuits disables only `JetpackWarning.Patches.PlayerControllerB_LateUpdate_Postfix` after repeated failures and logs the unpatch result in `diagnostics.log`. Set `AutoDisableBrokenJetpackWarningLateUpdatePatch=false` to turn this compatibility guard off.
 - If third person shows first-person arms, a giant helmet, held items, or another partial rig, check `World renderer candidate`, `Hidden nearby first-person overlay renderer`, `World editor visible renderer candidate`, and `WorldAvatarProxy updated` lines. The selected renderer should be a body/suit renderer and the proxy should use only the player-specific DrawableSuits material for suit-compatible submeshes.
+- If you use ModelReplacementAPI and the editor shows the wrong model, duplicate helmets, or an uneditable suit, this is expected. DrawableSuits is not compatible with ModelReplacementAPI; use the UV panel where possible or disable the replacement while editing.
 - If action buttons such as Reset, Save, or Load also select decal/save rows, confirm the installed package is 0.4.7 or newer. Lists now use stable row pools and log `ListRowsUpdated` instead of rebuilding/destroying row buttons during normal UI refresh.
 - If controller `A` clicks the wrong UI item, confirm the installed package is 0.4.7 or newer, move the left stick before the first `A` press, then check `Virtual cursor A press` and `Virtual cursor A release` diagnostics. They should show the same resolved button or control that is visually under the cursor.
 - If button highlights stick around, confirm the installed package is 0.4.7 or newer. Normal button selected colors are neutral.
 - If the color picker handles do not line up with the selected color, check `ColorPickerInput` diagnostics for hue, saturation, value, local pointer coordinates, and final handle positions.
-- If loading a design or switching suits resets the third-person camera, confirm the installed package is 0.4.7 or newer and check for `World camera state preserved` diagnostics.
+- If loading a design or importing a design code resets the third-person camera, confirm the installed package is 0.4.7 or newer and check for `World camera state preserved` diagnostics.
 - If the color picker does not update paint color, check the swatch, editable hex field, and `DrawableColorPickerBuilt` diagnostics. Hex input accepts `#RRGGBB` or `RRGGBB`.
 - If right trigger zooms the third-person camera, confirm the installed package is 0.4.4 or newer. In 0.4.4, right trigger is paint-only and D-pad up/down controls controller zoom.
 - If the UV panel or texture-only fallback shows a second colored cursor, confirm the installed package is 0.4.4 or newer. The old filled brush indicator is disabled because it looked like another cursor.

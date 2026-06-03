@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.32
+
+- Removed the manual suit selector from the editor.
+- Locked editor operations to the local player's currently worn suit.
+- Added README guidance that ModelReplacementAPI is not compatible with DrawableSuits.
+
 ## 0.5.25
 
 - Made the UV texture panel visible alongside the third-person editor instead of requiring a normal view toggle.
