@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.29
+
+- Made proxy helmet cleanup fail-safe so ambiguous or body-sized welded components are no longer removed from the editor avatar.
+- Added conservative cleanup safety caps and fallback selection that prefers clean LODs, then safely-cleanable LODs, then the full uncleaned mesh.
+- Replaced repeated destructive cleanup logs with `WorldProxyCleanupPlanned`, `WorldProxyCleanupApplied`, `WorldProxyCleanupSkippedUnsafe`, and `WorldProxyCleanupFailSafeFullMesh` diagnostics.
+
 ## 0.5.28
 
 - Replaced proxy helmet cleanup with welded-position component analysis so UV-split baked meshes no longer appear as hundreds of one-triangle components.

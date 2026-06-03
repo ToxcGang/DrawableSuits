@@ -176,6 +176,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private bool _worldPreviewReady;
     private string _lastWorldProxyMaterialLogKey = string.Empty;
     private float _lastWorldProxyMaterialLogTime;
+    private string _lastWorldProxyCleanupLogKey = string.Empty;
+    private float _lastWorldProxyCleanupLogTime;
     private Vector2 _lastWorldPaintUv;
     private bool _lastWorldRaycastHit;
     private Vector3 _lastWorldHitPoint;
@@ -363,13 +365,29 @@ internal sealed class SuitEditorController : MonoBehaviour
         internal ProxyMeshValidation Validation;
     }
 
+    private sealed class ProxyCleanupPlan
+    {
+        internal bool Safe;
+        internal string Reason = "not evaluated";
+        internal string Summary = "none";
+        internal HashSet<int> ComponentIds = new();
+        internal int RemovedTriangles;
+        internal int RemovedVertices;
+        internal float RemovedTriangleRatio;
+        internal float RemovedVertexRatio;
+        internal float LargestComponentRatio;
+        internal float LargestHeightRatio;
+    }
+
     private struct ProxyMeshValidation
     {
         internal bool Accepted;
         internal bool RequiresCleanup;
+        internal bool CleanupSafe;
         internal string Reason;
         internal string ComponentSummary;
         internal string WeldedComponentSummary;
+        internal string CleanupPlanSummary;
         internal int ComponentCount;
         internal int WeldedComponentCount;
         internal int SuspectComponentCount;
@@ -9058,7 +9076,8 @@ internal sealed class SuitEditorController : MonoBehaviour
             return null;
         }
 
-        WorldProxyCandidate bestAccepted = null;
+        WorldProxyCandidate bestCleanAccepted = null;
+        WorldProxyCandidate bestUnsafeFullMeshAccepted = null;
         WorldProxyCandidate bestCleanupFallback = null;
         for (var i = 0; i < candidates.Count; i++)
         {
@@ -9070,22 +9089,29 @@ internal sealed class SuitEditorController : MonoBehaviour
 
             var lowerLodFallbackAvailable = HasLowerDetailProxyCandidate(candidates, candidate.Renderer);
             candidate.Validation = ValidateWorldProxyCandidate(candidate.Renderer, lowerLodFallbackAvailable);
-            DrawableSuitsDiagnostics.Info($"WorldProxyMeshValidation: renderer={DescribeRendererCandidate(candidate.Renderer, "candidate")}; score={candidate.Score}; accepted={candidate.Validation.Accepted}; cleanup={candidate.Validation.RequiresCleanup}; reason={candidate.Validation.Reason}; vertices={candidate.Validation.VertexCount}; triangles={candidate.Validation.TriangleCount}; sharedComponents={candidate.Validation.ComponentCount}; weldedComponents={candidate.Validation.WeldedComponentCount}; suspectComponents={candidate.Validation.SuspectComponentCount}; sharedComponentSummary=[{candidate.Validation.ComponentSummary}]; weldedComponentSummary=[{candidate.Validation.WeldedComponentSummary}]");
+            DrawableSuitsDiagnostics.Info($"WorldProxyMeshValidation: renderer={DescribeRendererCandidate(candidate.Renderer, "candidate")}; score={candidate.Score}; accepted={candidate.Validation.Accepted}; cleanup={candidate.Validation.RequiresCleanup}; cleanupSafe={candidate.Validation.CleanupSafe}; reason={candidate.Validation.Reason}; cleanupPlan=[{candidate.Validation.CleanupPlanSummary}]; vertices={candidate.Validation.VertexCount}; triangles={candidate.Validation.TriangleCount}; sharedComponents={candidate.Validation.ComponentCount}; weldedComponents={candidate.Validation.WeldedComponentCount}; suspectComponents={candidate.Validation.SuspectComponentCount}; sharedComponentSummary=[{candidate.Validation.ComponentSummary}]; weldedComponentSummary=[{candidate.Validation.WeldedComponentSummary}]");
 
             if (candidate.Validation.Accepted)
             {
-                if (bestAccepted == null || candidate.Score > bestAccepted.Score)
+                if (candidate.Validation.SuspectComponentCount == 0)
                 {
-                    bestAccepted = candidate;
+                    if (bestCleanAccepted == null || candidate.Score > bestCleanAccepted.Score)
+                    {
+                        bestCleanAccepted = candidate;
+                    }
+                }
+                else if (bestUnsafeFullMeshAccepted == null || candidate.Score > bestUnsafeFullMeshAccepted.Score)
+                {
+                    bestUnsafeFullMeshAccepted = candidate;
                 }
             }
-            else if (candidate.Validation.RequiresCleanup && (bestCleanupFallback == null || candidate.Score > bestCleanupFallback.Score))
+            else if (candidate.Validation.RequiresCleanup && candidate.Validation.CleanupSafe && (bestCleanupFallback == null || candidate.Score > bestCleanupFallback.Score))
             {
                 bestCleanupFallback = candidate;
             }
         }
 
-        var selected = bestAccepted ?? bestCleanupFallback ?? highestScored;
+        var selected = bestCleanAccepted ?? bestCleanupFallback ?? bestUnsafeFullMeshAccepted ?? highestScored;
         _worldSourceRequiresMeshCleanup = selected.Validation.RequiresCleanup;
         _worldSourceValidationSummary = string.IsNullOrWhiteSpace(selected.Validation.Reason)
             ? selected.ScoreReason
@@ -9360,15 +9386,32 @@ internal sealed class SuitEditorController : MonoBehaviour
 
             if (suspectComponents.Count > 0)
             {
-                validation.Accepted = false;
-                validation.RequiresCleanup = true;
-                validation.Reason = $"suspect detached helmet/viewmodel components={suspectComponents.Count}";
-                DrawableSuitsDiagnostics.Warn($"WorldProxyHelmetShellRejected: renderer={DescribeRendererCandidate(renderer, "candidate")}; suspects={suspectComponents.Count}; weldedComponents={weldedAnalysis.Components.Length}; suspectSummary=[{DescribeProxyComponentList(suspectComponents, 6)}]");
+                var cleanupPlan = BuildSafeProxyCleanupPlan(weldedAnalysis, suspectComponents);
+                validation.CleanupSafe = cleanupPlan.Safe;
+                validation.CleanupPlanSummary = cleanupPlan.Summary;
+                if (cleanupPlan.Safe)
+                {
+                    validation.Accepted = false;
+                    validation.RequiresCleanup = true;
+                    validation.Reason = $"safe detached helmet/viewmodel cleanup planned; suspect components={suspectComponents.Count}";
+                    DrawableSuitsDiagnostics.Warn($"WorldProxyHelmetShellRejected: renderer={DescribeRendererCandidate(renderer, "candidate")}; suspects={suspectComponents.Count}; weldedComponents={weldedAnalysis.Components.Length}; cleanupSafe=True; cleanupPlan=[{cleanupPlan.Summary}]; suspectSummary=[{DescribeProxyComponentList(suspectComponents, 6)}]");
+                    DrawableSuitsDiagnostics.Info($"WorldProxyCleanupPlanned: renderer={DescribeRendererCandidate(renderer, "candidate")}; {cleanupPlan.Summary}");
+                }
+                else
+                {
+                    validation.Accepted = validation.VertexCount > 0 && validation.TriangleCount > 0;
+                    validation.RequiresCleanup = false;
+                    validation.Reason = $"suspect components unsafe to remove; fail-safe full mesh retained; {cleanupPlan.Reason}";
+                    DrawableSuitsDiagnostics.Warn($"WorldProxyCleanupSkippedUnsafe: renderer={DescribeRendererCandidate(renderer, "candidate")}; reason={cleanupPlan.Reason}; cleanupPlan=[{cleanupPlan.Summary}]; suspectSummary=[{DescribeProxyComponentList(suspectComponents, 6)}]");
+                }
+
                 return validation;
             }
 
             validation.Accepted = validation.VertexCount > 0 && validation.TriangleCount > 0;
             validation.RequiresCleanup = false;
+            validation.CleanupSafe = false;
+            validation.CleanupPlanSummary = "none";
             validation.Reason = validation.Accepted ? "accepted clean proxy mesh" : "empty proxy mesh";
             return validation;
         }
@@ -9394,6 +9437,74 @@ internal sealed class SuitEditorController : MonoBehaviour
         var name = renderer.name != null ? renderer.name.ToLowerInvariant() : string.Empty;
         var isLod1 = path.Contains("lod1") || name.Contains("lod1");
         return isLod1 && mesh.vertexCount >= 6000;
+    }
+
+    private static ProxyCleanupPlan BuildSafeProxyCleanupPlan(ProxyMeshAnalysis analysis, List<ProxyMeshComponent> suspects)
+    {
+        var plan = new ProxyCleanupPlan();
+        if (analysis == null || suspects == null || suspects.Count == 0 || analysis.TotalTriangles <= 0 || analysis.TotalVertices <= 0)
+        {
+            plan.Reason = "no suspect components";
+            plan.Summary = "safe=False; reason=no suspect components";
+            return plan;
+        }
+
+        var meshSize = analysis.Bounds.size;
+        var heightAxis = GetDominantAxis(meshSize);
+        var meshHeight = Mathf.Max(0.001f, GetAxis(meshSize, heightAxis));
+        for (var i = 0; i < suspects.Count; i++)
+        {
+            var suspect = suspects[i];
+            plan.ComponentIds.Add(suspect.Index);
+            plan.RemovedTriangles += suspect.TriangleCount;
+            plan.RemovedVertices += suspect.VertexCount;
+            var componentTriangleRatio = suspect.TriangleCount / (float)analysis.TotalTriangles;
+            var componentHeightRatio = GetAxis(suspect.Bounds.size, heightAxis) / meshHeight;
+            plan.LargestComponentRatio = Mathf.Max(plan.LargestComponentRatio, componentTriangleRatio);
+            plan.LargestHeightRatio = Mathf.Max(plan.LargestHeightRatio, componentHeightRatio);
+        }
+
+        plan.RemovedTriangleRatio = plan.RemovedTriangles / (float)analysis.TotalTriangles;
+        plan.RemovedVertexRatio = plan.RemovedVertices / (float)analysis.TotalVertices;
+        var componentSummary = DescribeProxyComponentList(suspects, 6);
+        plan.Summary =
+            $"safe={{0}}; suspects={suspects.Count}; removedTriangles={plan.RemovedTriangles}/{analysis.TotalTriangles} ({plan.RemovedTriangleRatio:P1}); " +
+            $"removedVertices={plan.RemovedVertices}/{analysis.TotalVertices} ({plan.RemovedVertexRatio:P1}); " +
+            $"largestComponentRatio={plan.LargestComponentRatio:P1}; largestHeightRatio={plan.LargestHeightRatio:P1}; suspects=[{componentSummary}]";
+
+        if (suspects.Count > 2)
+        {
+            plan.Reason = $"too many suspect components ({suspects.Count})";
+        }
+        else if (plan.RemovedTriangleRatio > 0.15f)
+        {
+            plan.Reason = $"removed triangle ratio {plan.RemovedTriangleRatio:P1} exceeds 15.0% safety cap";
+        }
+        else if (plan.RemovedVertexRatio > 0.20f)
+        {
+            plan.Reason = $"removed vertex ratio {plan.RemovedVertexRatio:P1} exceeds 20.0% safety cap";
+        }
+        else if (plan.LargestComponentRatio > 0.10f)
+        {
+            plan.Reason = $"largest component ratio {plan.LargestComponentRatio:P1} exceeds 10.0% body-size cap";
+        }
+        else if (plan.LargestHeightRatio > 0.40f)
+        {
+            plan.Reason = $"largest component height ratio {plan.LargestHeightRatio:P1} exceeds 40.0% body-span cap";
+        }
+        else
+        {
+            plan.Safe = true;
+            plan.Reason = "within conservative cleanup safety caps";
+        }
+
+        plan.Summary = string.Format(CultureInfo.InvariantCulture, plan.Summary, plan.Safe);
+        if (!plan.Safe)
+        {
+            plan.Summary += $"; unsafeReason={plan.Reason}";
+        }
+
+        return plan;
     }
 
     private static bool TryBakeRendererMesh(SkinnedMeshRenderer renderer, Mesh mesh, out string reason)
@@ -9826,27 +9937,39 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
-        var removedComponents = new HashSet<int>();
-        var removedTriangles = 0;
-        var removedVertices = 0;
-        var suspectDescriptions = new List<string>();
-        for (var i = 0; i < suspects.Count; i++)
+        var cleanupPlan = BuildSafeProxyCleanupPlan(analysis, suspects);
+        if (!cleanupPlan.Safe)
         {
-            removedComponents.Add(suspects[i].Index);
-            removedTriangles += suspects[i].TriangleCount;
-            removedVertices += suspects[i].VertexCount;
-            suspectDescriptions.Add($"{suspects[i].Index}:tri={suspects[i].TriangleCount}:verts={suspects[i].VertexCount}:bounds={suspects[i].Bounds}");
-        }
-
-        if (!RebuildMeshWithoutComponents(mesh, analysis, removedComponents))
-        {
-            cleanupSummary = $"cleanup failed; suspects=[{string.Join("; ", suspectDescriptions)}]";
+            cleanupSummary = $"failSafeFullMesh=True; reason={cleanupPlan.Reason}; sharedComponents={sharedAnalysis.Components.Length}; weldedComponents={analysis.Components.Length}; {cleanupPlan.Summary}";
+            LogWorldProxyCleanup("WorldProxyCleanupSkippedUnsafe", cleanupSummary);
+            LogWorldProxyCleanup("WorldProxyCleanupFailSafeFullMesh", cleanupSummary);
             return false;
         }
 
-        cleanupSummary = $"removedComponents={suspects.Count}; removedTriangles={removedTriangles}; removedVertices={removedVertices}; sharedComponents={sharedAnalysis.Components.Length}; weldedComponents={analysis.Components.Length}; suspects=[{string.Join("; ", suspectDescriptions)}]";
-        DrawableSuitsDiagnostics.Warn($"WorldProxyMeshCleaned: source={DescribeRendererCandidate(_worldSourceRenderer, "source")}; {cleanupSummary}; finalVertices={mesh.vertexCount}; finalTriangles={CountMeshTriangles(mesh)}; finalBounds={mesh.bounds}");
+        if (!RebuildMeshWithoutComponents(mesh, analysis, cleanupPlan.ComponentIds))
+        {
+            cleanupSummary = $"cleanup failed after safe plan; sharedComponents={sharedAnalysis.Components.Length}; weldedComponents={analysis.Components.Length}; {cleanupPlan.Summary}";
+            LogWorldProxyCleanup("WorldProxyCleanupSkippedUnsafe", cleanupSummary);
+            return false;
+        }
+
+        cleanupSummary = $"removedComponents={suspects.Count}; sharedComponents={sharedAnalysis.Components.Length}; weldedComponents={analysis.Components.Length}; {cleanupPlan.Summary}";
+        LogWorldProxyCleanup("WorldProxyCleanupApplied", $"{cleanupSummary}; finalVertices={mesh.vertexCount}; finalTriangles={CountMeshTriangles(mesh)}; finalBounds={mesh.bounds}");
         return true;
+    }
+
+    private void LogWorldProxyCleanup(string eventName, string summary)
+    {
+        var key = $"{eventName}:{_worldSourceRenderer?.GetInstanceID() ?? 0}:{summary}";
+        if (string.Equals(key, _lastWorldProxyCleanupLogKey, StringComparison.Ordinal)
+            && Time.unscaledTime - _lastWorldProxyCleanupLogTime < 10f)
+        {
+            return;
+        }
+
+        _lastWorldProxyCleanupLogKey = key;
+        _lastWorldProxyCleanupLogTime = Time.unscaledTime;
+        DrawableSuitsDiagnostics.Warn($"{eventName}: source={DescribeRendererCandidate(_worldSourceRenderer, "source")}; {summary}");
     }
 
     private static bool RebuildMeshWithoutComponents(Mesh mesh, ProxyMeshAnalysis analysis, HashSet<int> removedComponents)
