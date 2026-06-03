@@ -1,39 +1,5 @@
 # Changelog
 
-## 0.5.30
-
-- Added optional reflection-based ModelReplacementAPI compatibility without making it a hard dependency.
-- Added a scoped ModelReplacementAPI proxy path that renders detected replacement models through DrawableSuits-owned editable and read-only proxy parts.
-- Kept non-compatible replacement model surfaces visible but read-only, with the always-visible UV panel available for editing the selected suit texture.
-- Added `ModelReplacementApiDetected`, `ModelReplacementProxyRootSelected`, `ModelReplacementRendererCandidate`, `ModelReplacementProxyBuilt`, `ModelReplacementReadOnlyHit`, and `ModelReplacementRendererRestored` diagnostics.
-
-## 0.5.29
-
-- Made proxy helmet cleanup fail-safe so ambiguous or body-sized welded components are no longer removed from the editor avatar.
-- Added conservative cleanup safety caps and fallback selection that prefers clean LODs, then safely-cleanable LODs, then the full uncleaned mesh.
-- Replaced repeated destructive cleanup logs with `WorldProxyCleanupPlanned`, `WorldProxyCleanupApplied`, `WorldProxyCleanupSkippedUnsafe`, and `WorldProxyCleanupFailSafeFullMesh` diagnostics.
-
-## 0.5.28
-
-- Replaced proxy helmet cleanup with welded-position component analysis so UV-split baked meshes no longer appear as hundreds of one-triangle components.
-- Updated proxy validation to reject LOD candidates with welded upper helmet/viewmodel shell components and fall back to cleaner compatible LODs.
-- Fixed proxy helmet-shell detection to use the baked mesh's dominant height axis instead of assuming local `Y` is vertical.
-- Added `WorldProxyWeldedComponent` and `WorldProxyHelmetShellRejected` diagnostics while preserving first-person suppression and the always-visible UV panel workflow.
-
-## 0.5.27
-
-- Added baked proxy mesh validation so the editor can reject a polluted high-detail `LOD1` source and fall back to cleaner compatible LOD renderers.
-- Added conservative connected-component cleanup for detached helmet/viewmodel shell geometry when no clean proxy source is available.
-- Added `WorldProxyMeshValidation`, `WorldProxySourceFallback`, and `WorldProxyMeshCleaned` diagnostics for tracking second-helmet regressions.
-- Kept first-person overlay suppression, full-suit editing, and the always-visible UV texture panel workflow unchanged.
-
-## 0.5.26
-
-- Added a repeated first-person/viewmodel helmet suppression pass while the third-person editor is open.
-- Expanded local overlay detection for helmet, mask, visor, glass, head, viewmodel, camera, and overlay renderers.
-- Added `FirstPersonOverlaySuppressed` and `FirstPersonOverlayStillVisible` diagnostics for tracking second-helmet regressions.
-- Kept the full `DrawableSuitsWorldAvatarProxy` and always-visible UV texture panel workflow unchanged.
-
 ## 0.5.25
 
 - Made the UV texture panel visible alongside the third-person editor instead of requiring a normal view toggle.
