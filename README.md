@@ -46,7 +46,7 @@ Keyboard and mouse:
 - Mirror: click the `Mirror` UI button to duplicate paint, erase, fill, decal stamps, and text stamps onto the opposite suit surface.
 - Export Code / Import Code: use the design code panel to copy the current editable texture as a compact `DSUIT2:` code or paste a shared `DSUIT2:` or legacy `DSUIT1:` code into the current suit.
 - Saved Designs: open the `Designs` menu to select and load saved designs into the current suit.
-- Undo History: click a history row to select it, then press `Undo To Selected` to undo through that labeled action. Use Undo/Redo to step one action at a time.
+- Undo History: click a history row to select it, then press `Undo Selected` to undo only that labeled action where possible. Use Undo/Redo to step one action at a time.
 - UV texture panel: move the cursor over the right-column texture panel to paint, erase, fill, stamp decals/text, or sample colors directly on the UV layout while the third-person view remains active.
 - Right mouse: orbit the third-person editor camera.
 - Mouse wheel: zoom the third-person camera.
@@ -66,7 +66,7 @@ Controller:
 - Mirror: move the virtual cursor over the `Mirror` UI button and press `A`; there is no controller shortcut for this modifier.
 - Export Code / Import Code: use `A` on the design code UI buttons. There are no shortcuts for import/export.
 - Saved Designs: move the virtual cursor over `Designs`, press `A`, select a saved design row, then press `Load Selected`.
-- Undo History: move the virtual cursor over a history row and press `A` to select it, then press `A` on `Undo To Selected` to undo through that action. Use `X` or the Undo/Redo buttons for one-step history.
+- Undo History: move the virtual cursor over a history row and press `A` to select it, then press `A` on `Undo Selected` to undo only that action where possible. Use `X` or the Undo/Redo buttons for one-step history.
 - Right trigger: paint/erase continuously; in Fill mode, fill once per press; in Decal or Text mode, stamp one preview at the cursor location.
 - Right stick or bumpers: orbit the third-person editor camera.
 - D-pad up/down: zoom the third-person editor camera.
@@ -130,7 +130,7 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.37 behavior:
+Expected 0.5.38 behavior:
 
 - Opening the editor shows a compact side overlay and a third-person camera view of the local player.
 - The editor edits only the local player's currently worn suit. The old Previous, Use Current, and Next suit-selection buttons are not present.
@@ -145,7 +145,7 @@ Expected 0.5.37 behavior:
 - Active edited textures are per player/client, not global per suit type.
 - The color changer is a compact side-by-side hue ring and saturation/value square with a swatch and editable `#RRGGBB` hex field.
 - Recent Colors swatches appear below the color picker. Dragging the picker, typing hex, or using Eyedropper does not add a swatch until that color is placed by Paint, Fill, or Text.
-- Undo History shows the newest undoable action labels first, including Brush stroke, Erase, Decal placed, Text placed, Color fill, Reset, Load design, and Import code. Clicking a row only selects it; `Undo To Selected` then undoes through that action and keeps redo history available.
+- Undo History shows the newest undoable action labels first, including Brush stroke, Erase, Decal placed, Text placed, Color fill, Reset, Load design, and Import code. Clicking a row only selects it; `Undo Selected` removes only that selected action where the snapshot diff can be isolated, preserves newer overlapping pixels, and keeps redo history available.
 - Color picker handles are tied to the same coordinate conversion used for mouse/controller input, so the visible handle positions should match the selected hue, saturation, value, and typed hex color.
 - Reset and Save no longer rebuild list hitboxes during the click; decal rows only change selection when their rows are clicked directly, and saved-design rows live in the separate Designs menu.
 - Third-person camera yaw, pitch, and distance are preserved when loading a design or importing a design code while the editor is open.

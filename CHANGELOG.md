@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.38
+
+- Changed Undo History's selected-row action to undo only the selected history entry instead of undoing every newer entry.
+- Renamed the deliberate history action button to `Undo Selected`.
+- Rewrote newer undo snapshots after selective undo so later one-step Undo does not resurrect the removed action.
+
 ## 0.5.37
 
 - Changed Undo History rows to select a target action instead of immediately undoing.

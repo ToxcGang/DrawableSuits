@@ -2500,7 +2500,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             });
         }
 
-        _undoToSelectedButton = CreateAnchoredButton(panel.transform, "Undo To Selected", new Rect(6f, 82f, 132f, 26f), UndoToSelectedHistory);
+        _undoToSelectedButton = CreateAnchoredButton(panel.transform, "Undo Selected", new Rect(6f, 82f, 132f, 26f), UndoToSelectedHistory);
         _undoHistorySelectionLabel = CreateAnchoredText(panel.transform, "UndoHistorySelection", "Select a row first.", 11, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(146f, 78f, rect.width - 152f, 34f), new Color(0.82f, 0.86f, 0.9f, 1f));
 
         UpdateUndoHistoryUi();
@@ -9123,24 +9123,23 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         _selectedUndoHistoryId = entryId;
         var label = entries[index].Label;
-        var steps = index + 1;
-        SetStatus($"Will undo {UndoActionCountText(steps)} through {label}.", false);
+        SetStatus($"Will undo only {label}.", false);
         UpdateUndoHistoryUi();
-        DrawableSuitsDiagnostics.Info($"UndoHistoryRowSelected: id={entryId}; index={index}; label={label}; steps={steps}; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
+        DrawableSuitsDiagnostics.Info($"UndoHistoryRowSelected: id={entryId}; index={index}; label={label}; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
     }
 
     private void UndoToSelectedHistory()
     {
         if (IsEditorModalOpen())
         {
-            DrawableSuitsDiagnostics.Warn($"UndoHistoryUndoToSelected ignored because a modal is open. selectedId={_selectedUndoHistoryId}; undoCount={_undo.Count}; redoCount={_redo.Count}");
+            LogSelectiveUndoSkipped("modal open", _selectedUndoHistoryId, -1, null, 0, 0, 0, 0, 0);
             return;
         }
 
         if (_selectedUndoHistoryId == 0)
         {
             SetStatus("Select a history row first.", false);
-            DrawableSuitsDiagnostics.Warn($"UndoHistoryUndoToSelected ignored because no row is selected. undoCount={_undo.Count}; redoCount={_redo.Count}");
+            LogSelectiveUndoSkipped("no row selected", 0, -1, null, 0, 0, 0, 0, 0);
             return;
         }
 
@@ -9149,20 +9148,20 @@ internal sealed class SuitEditorController : MonoBehaviour
         if (index < 0)
         {
             SetStatus("Selected history row is no longer available.", false);
-            DrawableSuitsDiagnostics.Warn($"UndoHistoryUndoToSelected ignored because selected row is stale. selectedId={_selectedUndoHistoryId}; undoCount={_undo.Count}; redoCount={_redo.Count}");
+            LogSelectiveUndoSkipped("selected row stale", _selectedUndoHistoryId, -1, null, 0, 0, 0, 0, 0);
             ClearUndoHistorySelection("selected row stale", true);
             return;
         }
 
-        UndoToHistoryIndex(index, _selectedUndoHistoryId);
+        UndoSelectedHistoryIndex(index, _selectedUndoHistoryId);
     }
 
-    private void UndoToHistoryIndex(int newestFirstIndex, long expectedId)
+    private void UndoSelectedHistoryIndex(int newestFirstIndex, long expectedId)
     {
         var texture = DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId);
         if (texture == null || newestFirstIndex < 0 || newestFirstIndex >= _undo.Count)
         {
-            DrawableSuitsDiagnostics.Warn($"UndoHistoryUndoToSelected ignored. expectedId={expectedId}; index={newestFirstIndex}; undoCount={_undo.Count}; redoCount={_redo.Count}; hasTexture={texture != null}");
+            LogSelectiveUndoSkipped("invalid selection or missing texture", expectedId, newestFirstIndex, null, 0, 0, 0, 0, 0);
             return;
         }
 
@@ -9172,7 +9171,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             var resolvedIndex = FindUndoHistoryIndexById(entries, expectedId);
             if (resolvedIndex < 0)
             {
-                DrawableSuitsDiagnostics.Warn($"UndoHistoryUndoToSelected ignored because expected id was not found. expectedId={expectedId}; index={newestFirstIndex}; undoCount={_undo.Count}; redoCount={_redo.Count}");
+                LogSelectiveUndoSkipped("expected id not found", expectedId, newestFirstIndex, null, 0, 0, 0, 0, 0);
                 ClearUndoHistorySelection("expected row missing", true);
                 return;
             }
@@ -9182,30 +9181,136 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         var targetEntry = entries[newestFirstIndex];
         var targetLabel = targetEntry.Label;
-        var steps = Mathf.Min(newestFirstIndex + 1, _undo.Count);
-        DrawableSuitsDiagnostics.Info($"UndoHistoryUndoToSelected: selectedId={targetEntry.Id}; index={newestFirstIndex}; label={targetLabel}; steps={steps}; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
-
-        var undoneLabels = new List<string>(steps);
-        for (var i = 0; i < steps && _undo.Count > 0; i++)
+        Color32[] currentPixels;
+        try
         {
-            var entry = _undo.Pop();
-            undoneLabels.Add(entry.Label);
-            _redo.Push(new UndoHistoryEntry
+            currentPixels = texture.GetPixels32();
+        }
+        catch (Exception ex)
+        {
+            DrawableSuitsDiagnostics.Exception($"UndoHistorySelectiveUndo GetPixels32 failed. selectedId={targetEntry.Id}; index={newestFirstIndex}; label={targetLabel}; texture={DrawableSuitsPlugin.DescribeUnityObject(texture)}", ex);
+            LogSelectiveUndoSkipped("texture read failed", targetEntry.Id, newestFirstIndex, targetLabel, 0, 0, 0, 0, 0);
+            return;
+        }
+
+        var beforePixels = targetEntry.Pixels;
+        var afterPixels = newestFirstIndex == 0 ? currentPixels : entries[newestFirstIndex - 1].Pixels;
+        if (beforePixels == null
+            || afterPixels == null
+            || beforePixels.Length != currentPixels.Length
+            || afterPixels.Length != currentPixels.Length)
+        {
+            LogSelectiveUndoSkipped(
+                $"snapshot dimensions mismatch before={beforePixels?.Length ?? 0} after={afterPixels?.Length ?? 0} current={currentPixels.Length}",
+                targetEntry.Id,
+                newestFirstIndex,
+                targetLabel,
+                0,
+                0,
+                0,
+                0,
+                0);
+            SetStatus("Selected history row cannot be selectively undone because its snapshots do not match.", false);
+            return;
+        }
+
+        var updatedPixels = (Color32[])currentPixels.Clone();
+        var redoPixels = (Color32[])currentPixels.Clone();
+        var changedPixels = 0;
+        var restoredPixels = 0;
+        var preservedOverlapPixels = 0;
+        var affectedIndices = new List<int>();
+        for (var i = 0; i < currentPixels.Length; i++)
+        {
+            if (Color32Equals(beforePixels[i], afterPixels[i]))
             {
-                Id = entry.Id,
-                Pixels = texture.GetPixels32(),
-                Label = entry.Label
-            });
-            texture.SetPixels32(entry.Pixels);
+                continue;
+            }
+
+            changedPixels++;
+            affectedIndices.Add(i);
+            if (Color32Equals(currentPixels[i], afterPixels[i]))
+            {
+                updatedPixels[i] = beforePixels[i];
+                restoredPixels++;
+            }
+            else
+            {
+                preservedOverlapPixels++;
+            }
+        }
+
+        if (changedPixels == 0)
+        {
+            LogSelectiveUndoSkipped("selected action has no detectable pixel diff", targetEntry.Id, newestFirstIndex, targetLabel, changedPixels, restoredPixels, preservedOverlapPixels, 0, 0);
+            SetStatus("Selected history row has no detectable pixel changes.", false);
+            return;
+        }
+
+        var rewrittenEntries = 0;
+        var rewrittenPixels = 0;
+        for (var entryIndex = 0; entryIndex < newestFirstIndex; entryIndex++)
+        {
+            var entry = entries[entryIndex];
+            if (entry?.Pixels == null || entry.Pixels.Length != currentPixels.Length)
+            {
+                continue;
+            }
+
+            var changedInEntry = 0;
+            for (var affectedIndex = 0; affectedIndex < affectedIndices.Count; affectedIndex++)
+            {
+                var pixelIndex = affectedIndices[affectedIndex];
+                if (Color32Equals(entry.Pixels[pixelIndex], afterPixels[pixelIndex]))
+                {
+                    entry.Pixels[pixelIndex] = beforePixels[pixelIndex];
+                    changedInEntry++;
+                }
+            }
+
+            if (changedInEntry > 0)
+            {
+                rewrittenEntries++;
+                rewrittenPixels += changedInEntry;
+            }
+        }
+
+        var retainedEntries = new List<UndoHistoryEntry>(Mathf.Max(0, entries.Length - 1));
+        for (var i = 0; i < entries.Length; i++)
+        {
+            if (i != newestFirstIndex)
+            {
+                retainedEntries.Add(entries[i]);
+            }
+        }
+
+        RebuildUndoStackFromNewestFirst(retainedEntries);
+        _redo.Push(new UndoHistoryEntry
+        {
+            Id = targetEntry.Id,
+            Pixels = redoPixels,
+            Label = targetLabel
+        });
+
+        if (restoredPixels > 0)
+        {
+            texture.SetPixels32(updatedPixels);
             texture.Apply(false, false);
         }
 
         DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, false);
-        InvalidateDecalPreview("undo history row");
-        RefreshTexturePanelPreview("UndoHistoryRow", false);
-        ClearUndoHistorySelection("undo to selected", false);
+        InvalidateDecalPreview("selective undo");
+        RefreshTexturePanelPreview("UndoSelectedHistory", false);
+        ClearUndoHistorySelection("undo selected", false);
         UpdateUndoHistoryUi();
-        DrawableSuitsDiagnostics.Info($"UndoHistoryJumpUndo: selectedId={targetEntry.Id}; index={newestFirstIndex}; targetLabel={targetLabel}; steps={steps}; undone=[{string.Join(",", undoneLabels)}]; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
+        SetStatus(restoredPixels > 0
+            ? $"Undid only {targetLabel}. Preserved {preservedOverlapPixels} newer-overlap pixels."
+            : $"Removed {targetLabel} from history; newer edits already covered its pixels.", false);
+        DrawableSuitsDiagnostics.Info($"UndoHistorySelectiveUndo: selectedId={targetEntry.Id}; index={newestFirstIndex}; label={targetLabel}; changedPixels={changedPixels}; restoredPixels={restoredPixels}; preservedOverlapPixels={preservedOverlapPixels}; rewrittenEntries={rewrittenEntries}; rewrittenPixels={rewrittenPixels}; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
+        if (rewrittenEntries > 0)
+        {
+            DrawableSuitsDiagnostics.Info($"UndoHistorySnapshotsRewritten: selectedId={targetEntry.Id}; label={targetLabel}; updatedSnapshotCount={rewrittenEntries}; updatedPixelCount={rewrittenPixels}; undoCount={_undo.Count}; redoCount={_redo.Count}");
+        }
     }
 
     private void Redo()
@@ -9305,9 +9410,34 @@ internal sealed class SuitEditorController : MonoBehaviour
         return -1;
     }
 
-    private static string UndoActionCountText(int steps)
+    private static bool Color32Equals(Color32 left, Color32 right)
     {
-        return steps == 1 ? "1 action" : $"{steps} actions";
+        return left.r == right.r
+            && left.g == right.g
+            && left.b == right.b
+            && left.a == right.a;
+    }
+
+    private void RebuildUndoStackFromNewestFirst(List<UndoHistoryEntry> entries)
+    {
+        _undo.Clear();
+        if (entries == null)
+        {
+            return;
+        }
+
+        for (var i = entries.Count - 1; i >= 0; i--)
+        {
+            if (entries[i] != null)
+            {
+                _undo.Push(entries[i]);
+            }
+        }
+    }
+
+    private void LogSelectiveUndoSkipped(string reason, long selectedId, int index, string label, int changedPixels, int restoredPixels, int preservedOverlapPixels, int rewrittenEntries, int rewrittenPixels)
+    {
+        DrawableSuitsDiagnostics.Warn($"UndoHistorySelectiveUndoSkipped: reason={reason}; selectedId={selectedId}; index={index}; label={label ?? "unknown"}; changedPixels={changedPixels}; restoredPixels={restoredPixels}; preservedOverlapPixels={preservedOverlapPixels}; rewrittenEntries={rewrittenEntries}; rewrittenPixels={rewrittenPixels}; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
     }
 
     private void ClearUndoHistorySelection(string reason, bool updateUi)
@@ -9345,7 +9475,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             if (hasSelection)
             {
-                _undoHistorySelectionLabel.text = $"Will undo {UndoActionCountText(selectedIndex + 1)}.";
+                _undoHistorySelectionLabel.text = $"Will undo only {entries[selectedIndex].Label}.";
                 _undoHistorySelectionLabel.color = new Color(1f, 0.68f, 0.36f, 1f);
             }
             else
