@@ -58,8 +58,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private const float DotCursorBackSize = 15f;
     private const float DotCursorFrontSize = 9f;
 
-    private readonly Stack<Color32[]> _undo = new();
-    private readonly Stack<Color32[]> _redo = new();
+    private readonly Stack<UndoHistoryEntry> _undo = new();
+    private readonly Stack<UndoHistoryEntry> _redo = new();
     private readonly List<string> _designFiles = new();
     private readonly List<string> _decalFiles = new();
     private readonly List<string> _recentColors = new(MaxRecentColors);
@@ -270,6 +270,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private RectTransform _decalListContent;
     private Text _designEmptyLabel;
     private Text _decalEmptyLabel;
+    private Text _undoHistoryEmptyLabel;
     private Text _designPageLabel;
     private Text _decalPageLabel;
     private Button _designPrevPageButton;
@@ -278,6 +279,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Button _decalNextPageButton;
     private readonly List<AnchoredListRow> _designRows = new();
     private readonly List<AnchoredListRow> _decalRows = new();
+    private readonly List<UndoHistoryRow> _undoHistoryRows = new();
     private RawImage _previewImage;
     private Text _suitLabel;
     private Text _statusLabel;
@@ -370,6 +372,19 @@ internal sealed class SuitEditorController : MonoBehaviour
         internal Text Label;
         internal Image Image;
         internal int Index = -1;
+    }
+
+    private sealed class UndoHistoryEntry
+    {
+        internal Color32[] Pixels;
+        internal string Label;
+    }
+
+    private sealed class UndoHistoryRow
+    {
+        internal GameObject GameObject;
+        internal Text Label;
+        internal Image Image;
     }
 
     private struct MirrorPaintTarget
@@ -1822,8 +1837,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         _selectedSuitId = localSuitId;
         if (priorSelectedSuitId != _selectedSuitId)
         {
-            _undo.Clear();
-            _redo.Clear();
+            ClearUndoHistory("current suit changed");
             InvalidateDecalPreview("current suit changed");
             InvalidateMirrorSurfaceMap("current suit changed");
             DrawableSuitsDiagnostics.Info($"Current local suit selected by readiness. context={context}; previous={priorSelectedSuitId}; current={_selectedSuitId}; known={suitIds.Contains(_selectedSuitId)}");
@@ -2036,9 +2050,9 @@ internal sealed class SuitEditorController : MonoBehaviour
         CreateAnchoredButton(panel.transform, "Redo", new Rect(rightX + 92f, 708f, 84f, 34f), Redo);
         _resetButton = CreateAnchoredButton(panel.transform, "Reset", new Rect(rightX + 184f, 708f, 84f, 34f), () =>
         {
-            SaveUndo();
+            SaveUndo("Reset");
             DrawableSuitsPlugin.Registry.ResetSuit(_selectedSuitId);
-            _redo.Clear();
+            ClearRedoHistory("reset");
             InvalidateDecalPreview("reset");
             UpdateUiState();
         });
@@ -2047,8 +2061,11 @@ internal sealed class SuitEditorController : MonoBehaviour
         _saveButton = CreateAnchoredButton(panel.transform, "Save", new Rect(rightX + 92f, 750f, 84f, 34f), SaveDesign);
         _loadButton = CreateAnchoredButton(panel.transform, "Load", new Rect(rightX + 184f, 750f, 84f, 34f), LoadSelectedDesign);
 
-        CreateAnchoredText(panel.transform, "SavedDesignsHeader", "Saved Designs", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 804f, rightW, 24f), Color.white);
-        _designListContent = CreateAnchoredScrollList(panel.transform, "DesignList", new Rect(rightX, 834f, rightW, 106f));
+        CreateAnchoredText(panel.transform, "UndoHistoryHeader", "Undo History", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 804f, rightW, 24f), Color.white);
+        BuildUndoHistoryPanel(panel.transform, new Rect(rightX, 828f, rightW, 76f));
+
+        CreateAnchoredText(panel.transform, "SavedDesignsHeader", "Saved Designs", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 910f, rightW, 24f), Color.white);
+        _designListContent = CreateAnchoredScrollList(panel.transform, "DesignList", new Rect(rightX, 934f, rightW, 38f));
 
         var fallbackPreview = CreateUiObject("PreviewViewport", panel.transform, typeof(RectTransform), typeof(Image));
         _previewViewportRect = fallbackPreview.GetComponent<RectTransform>();
@@ -2398,6 +2415,40 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         UpdateRecentColorSwatches();
+    }
+
+    private void BuildUndoHistoryPanel(Transform parent, Rect rect)
+    {
+        _undoHistoryRows.Clear();
+        var panel = CreateUiObject("UndoHistoryPanel", parent, typeof(RectTransform), typeof(Image));
+        SetAnchoredRect(panel.GetComponent<RectTransform>(), rect);
+        var panelImage = panel.GetComponent<Image>();
+        panelImage.color = new Color(0.035f, 0.04f, 0.05f, 0.78f);
+        panelImage.raycastTarget = false;
+
+        _undoHistoryEmptyLabel = CreateAnchoredText(panel.transform, "UndoHistoryEmpty", "No undo history", 13, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(8f, 6f, rect.width - 16f, 22f), new Color(0.76f, 0.78f, 0.82f, 1f));
+
+        const int rowCount = 4;
+        const float rowHeight = 16f;
+        const float rowSpacing = 2f;
+        for (var i = 0; i < rowCount; i++)
+        {
+            var rowObject = CreateUiObject($"UndoHistoryRow{i + 1}", panel.transform, typeof(RectTransform), typeof(Image));
+            SetAnchoredRect(rowObject.GetComponent<RectTransform>(), new Rect(6f, 6f + i * (rowHeight + rowSpacing), rect.width - 12f, rowHeight));
+            var rowImage = rowObject.GetComponent<Image>();
+            rowImage.color = new Color(0.07f, 0.075f, 0.085f, 0.92f);
+            rowImage.raycastTarget = false;
+
+            var label = CreateAnchoredText(rowObject.transform, "Label", string.Empty, 12, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(6f, 0f, rect.width - 24f, rowHeight), Color.white);
+            _undoHistoryRows.Add(new UndoHistoryRow
+            {
+                GameObject = rowObject,
+                Image = rowImage,
+                Label = label
+            });
+        }
+
+        UpdateUndoHistoryUi();
     }
 
     private void BuildBrushShapeMenu(Transform parent, Rect rect)
@@ -3196,6 +3247,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         UpdateLabels();
         UpdateColorUi();
         UpdateRecentColorSwatches();
+        UpdateUndoHistoryUi();
     }
 
     private string BuildDiagnosticsSummary()
@@ -6789,8 +6841,8 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void BeginBrushStroke()
     {
-        SaveUndo();
-        _redo.Clear();
+        SaveUndo(_tool == EditorTool.Erase ? "Erase" : "Brush stroke");
+        ClearRedoHistory("brush stroke");
         _strokeActive = true;
         unchecked
         {
@@ -6929,8 +6981,8 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        SaveUndo();
-        _redo.Clear();
+        SaveUndo("Color fill");
+        ClearRedoHistory("color fill");
 
         var workingPixels = (Color32[])sourcePixels.Clone();
         var applyMirror = ShouldApplyMirror(texture, uv, mirrorTarget);
@@ -6948,10 +7000,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         if (!changed)
         {
-            if (_undo.Count > 0)
-            {
-                _undo.Pop();
-            }
+            DropLastUndoEntry("Color fill wrote no pixels");
             SetStatus("Fill found no matching pixels to change.", false);
             LogFillBucketSkipped(mode, "no pixels changed", texture, uv, mirrorTarget, primaryStats, mirrorStats);
             return;
@@ -7147,8 +7196,9 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        SaveUndo();
-        _redo.Clear();
+        var historyLabel = _tool == EditorTool.Text ? "Text placed" : "Decal placed";
+        SaveUndo(historyLabel);
+        ClearRedoHistory("placement stamp");
         if (PaintAtCursor(texture, uv, mirrorTarget))
         {
             if (_tool == EditorTool.Text)
@@ -7159,6 +7209,10 @@ internal sealed class SuitEditorController : MonoBehaviour
             {
                 LogDecalStampCommitted(mode, texture, uv, mirrorTarget);
             }
+        }
+        else
+        {
+            DropLastUndoEntry($"{historyLabel} wrote no pixels");
         }
     }
 
@@ -7189,8 +7243,8 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        SaveUndo();
-        _redo.Clear();
+        SaveUndo("Decal placed");
+        ClearRedoHistory("world decal stamp");
         var touchedPixels = mirrorTarget.Enabled && mirrorTarget.Available ? new HashSet<int>() : null;
         var primaryChanged = CompositeDecalSurfaceStamp(texture, _loadedDecal, hit.point, hit.normal, _decalRotation, false, _brushOpacity, touchedPixels, out var primaryStats);
         var mirrorChanged = false;
@@ -7203,6 +7257,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         if (!primaryChanged && !mirrorChanged)
         {
             LogDecalSurfaceStampSkipped("WorldThirdPerson", "surface projection wrote no pixels", texture, hit, mirrorTarget, _loadedDecal, primaryStats, mirrorStats);
+            DropLastUndoEntry("Decal placed wrote no pixels");
             return;
         }
 
@@ -7245,8 +7300,8 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        SaveUndo();
-        _redo.Clear();
+        SaveUndo("Text placed");
+        ClearRedoHistory("world text stamp");
         var touchedPixels = mirrorTarget.Enabled && mirrorTarget.Available ? new HashSet<int>() : null;
         var primaryChanged = CompositeTextSurfaceStamp(texture, stampTexture, hit.point, hit.normal, _textRotation, false, _brushOpacity, touchedPixels, out var primaryStats);
         var mirrorChanged = false;
@@ -7259,6 +7314,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         if (!primaryChanged && !mirrorChanged)
         {
             LogTextSurfaceStampSkipped("WorldThirdPerson", "surface projection wrote no pixels", texture, hit, mirrorTarget, stampTexture, primaryStats, mirrorStats);
+            DropLastUndoEntry("Text placed wrote no pixels");
             return;
         }
 
@@ -8926,7 +8982,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         return a + (ab * vFace) + (ac * wFace);
     }
 
-    private void SaveUndo()
+    private void SaveUndo(string label)
     {
         var texture = DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId);
         if (texture == null)
@@ -8934,11 +8990,19 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        _undo.Push(texture.GetPixels32());
+        var normalizedLabel = string.IsNullOrWhiteSpace(label) ? "Edit" : label.Trim();
+        _undo.Push(new UndoHistoryEntry
+        {
+            Pixels = texture.GetPixels32(),
+            Label = normalizedLabel
+        });
         while (_undo.Count > DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value)
         {
-            TrimOldest(_undo);
+            var removed = TrimOldest(_undo);
+            DrawableSuitsDiagnostics.Info($"UndoHistoryTrimmed: label={removed?.Label ?? "unknown"}; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
         }
+        UpdateUndoHistoryUi();
+        DrawableSuitsDiagnostics.Info($"UndoHistoryPushed: label={normalizedLabel}; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
     }
 
     private void Undo()
@@ -8949,12 +9013,19 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        _redo.Push(texture.GetPixels32());
-        texture.SetPixels32(_undo.Pop());
+        var entry = _undo.Pop();
+        _redo.Push(new UndoHistoryEntry
+        {
+            Pixels = texture.GetPixels32(),
+            Label = entry.Label
+        });
+        texture.SetPixels32(entry.Pixels);
         texture.Apply(false, false);
         DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, false);
         InvalidateDecalPreview("undo");
         RefreshTexturePanelPreview("Undo", false);
+        UpdateUndoHistoryUi();
+        DrawableSuitsDiagnostics.Info($"UndoHistoryUndo: label={entry.Label}; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
     }
 
     private void Redo()
@@ -8965,21 +9036,103 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        _undo.Push(texture.GetPixels32());
-        texture.SetPixels32(_redo.Pop());
+        var entry = _redo.Pop();
+        _undo.Push(new UndoHistoryEntry
+        {
+            Pixels = texture.GetPixels32(),
+            Label = entry.Label
+        });
+        texture.SetPixels32(entry.Pixels);
         texture.Apply(false, false);
         DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, false);
         InvalidateDecalPreview("redo");
         RefreshTexturePanelPreview("Redo", false);
+        UpdateUndoHistoryUi();
+        DrawableSuitsDiagnostics.Info($"UndoHistoryRedo: label={entry.Label}; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
     }
 
-    private static void TrimOldest(Stack<Color32[]> stack)
+    private static UndoHistoryEntry TrimOldest(Stack<UndoHistoryEntry> stack)
     {
         var items = stack.ToArray();
         stack.Clear();
         for (var i = items.Length - 2; i >= 0; i--)
         {
             stack.Push(items[i]);
+        }
+
+        return items.Length > 0 ? items[items.Length - 1] : null;
+    }
+
+    private void ClearUndoHistory(string reason)
+    {
+        if (_undo.Count == 0 && _redo.Count == 0)
+        {
+            return;
+        }
+
+        _undo.Clear();
+        _redo.Clear();
+        UpdateUndoHistoryUi();
+        DrawableSuitsDiagnostics.Info($"UndoHistoryCleared: reason={reason}; undoCount=0; redoCount=0; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
+    }
+
+    private void ClearRedoHistory(string reason)
+    {
+        if (_redo.Count == 0)
+        {
+            return;
+        }
+
+        _redo.Clear();
+        UpdateUndoHistoryUi();
+        DrawableSuitsDiagnostics.Info($"UndoHistoryRedoCleared: reason={reason}; undoCount={_undo.Count}; redoCount=0; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
+    }
+
+    private void DropLastUndoEntry(string reason)
+    {
+        if (_undo.Count == 0)
+        {
+            return;
+        }
+
+        var dropped = _undo.Pop();
+        UpdateUndoHistoryUi();
+        DrawableSuitsDiagnostics.Info($"UndoHistoryDropped: reason={reason}; label={dropped.Label}; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
+    }
+
+    private void UpdateUndoHistoryUi()
+    {
+        var entries = _undo.ToArray();
+        if (_undoHistoryEmptyLabel != null)
+        {
+            _undoHistoryEmptyLabel.gameObject.SetActive(entries.Length == 0);
+        }
+
+        for (var i = 0; i < _undoHistoryRows.Count; i++)
+        {
+            var row = _undoHistoryRows[i];
+            if (row == null || row.GameObject == null)
+            {
+                continue;
+            }
+
+            var hasEntry = i < entries.Length;
+            row.GameObject.SetActive(hasEntry);
+            if (!hasEntry)
+            {
+                continue;
+            }
+
+            if (row.Label != null)
+            {
+                row.Label.text = entries[i].Label;
+            }
+            if (row.Image != null)
+            {
+                row.Image.color = i == 0
+                    ? new Color(0.95f, 0.42f, 0.16f, 0.94f)
+                    : new Color(0.07f, 0.075f, 0.085f, 0.92f);
+            }
         }
     }
 
@@ -9010,9 +9163,10 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         DrawableSuitsDiagnostics.Info($"LoadSelectedDesign requested. file={_designFiles[_selectedDesignIndex]}; selectedSuitId={_selectedSuitId}");
-        SaveUndo();
+        SaveUndo("Load design");
         if (DrawableSuitsPlugin.Registry.LoadDesign(_selectedSuitId, _designFiles[_selectedDesignIndex]))
         {
+            ClearRedoHistory("load design");
             _designName = Path.GetFileNameWithoutExtension(_designFiles[_selectedDesignIndex]);
             if (_designNameInput != null)
             {
@@ -9027,6 +9181,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
         else
         {
+            DropLastUndoEntry("Load design failed");
             DrawableSuitsDiagnostics.Warn("LoadSelectedDesign failed; registry returned false.");
         }
     }
@@ -9165,9 +9320,10 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         try
         {
-            SaveUndo();
+            SaveUndo("Import code");
             if (!DrawableSuitsPlugin.Registry.ImportDecodedDesignCode(_selectedSuitId, payload, texture, out var importedDesignName, out failureReason))
             {
+                DropLastUndoEntry("Import code failed");
                 SetDesignCodeStatus($"Import failed: {failureReason}");
                 DrawableSuitsDiagnostics.Warn($"DesignCodeImportFailed: stage=apply; selectedSuitId={_selectedSuitId}; format={info.FormatVersion}; designName={info.DesignName}; sourceSuitId={info.SourceSuitId}; texture={info.Width}x{info.Height}; pngBytes={info.PngBytes}; compressedBytes={info.CompressedBytes}; codeLength={info.CodeLength}; reason={failureReason}");
                 return;
@@ -9179,7 +9335,7 @@ internal sealed class SuitEditorController : MonoBehaviour
                 _designNameInput.text = _designName;
             }
 
-            _redo.Clear();
+            ClearRedoHistory("design code import");
             InvalidateDecalPreview("design code import");
             InvalidateMirrorSurfaceMap("design code import");
             TryRebuildPreviewForCurrentReadiness("ImportDesignCode");

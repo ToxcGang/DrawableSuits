@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.35
+
+- Added a compact Undo History panel with labels for recent undoable actions.
+- Labeled Brush stroke, Erase, Decal placed, Text placed, Color fill, Reset, Load design, and Import code undo entries.
+- Kept Undo/Redo snapshot behavior while tracking matching redo labels and capped history diagnostics.
+
 ## 0.5.34
 
 - Added persistent Recent Colors swatches below the color picker.
