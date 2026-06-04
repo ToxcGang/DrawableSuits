@@ -20,6 +20,7 @@ internal sealed class DrawableSuitsConfig
     public ConfigEntry<bool> EnableExperimentalModelPreview { get; }
     public ConfigEntry<bool> StartInUvFallbackMode { get; }
     public ConfigEntry<float> ThirdPersonCameraDistance { get; }
+    public ConfigEntry<string> RecentColors { get; }
     
     public ConfigEntry<bool> ApplyLocalFirstPersonArms { get; }
     
@@ -41,6 +42,7 @@ internal sealed class DrawableSuitsConfig
         EnableExperimentalModelPreview = config.Bind("Editor", "EnableExperimentalModelPreview", false, "Disabled by default. Uses the old camera/RenderTexture 3D model preview only for diagnostics; third-person world painting is the default.");
         StartInUvFallbackMode = config.Bind("Editor", "StartInUvFallbackMode", false, "Open directly into the old UV texture fallback instead of third-person world painting. Useful for diagnostics.");
         ThirdPersonCameraDistance = config.Bind("Editor", "ThirdPersonCameraDistance", 3.4f, "Default third-person editor camera orbit distance.");
+        RecentColors = config.Bind("Editor", "RecentColors", string.Empty, "Recent brush colors as comma-separated #RRGGBB values. Colors are added only after Paint, Fill, or Text writes to the suit.");
         ApplyLocalFirstPersonArms = config.Bind("Compatibility", "ApplyLocalFirstPersonArms", false, "Experimental. When false, DrawableSuits does not apply edited materials to the local first-person arms/body outside the editor.");
         AutoDisableBrokenJetpackWarningLateUpdatePatch = config.Bind("Compatibility", "AutoDisableBrokenJetpackWarningLateUpdatePatch", true, "Automatically disable JetpackWarning.Patches.PlayerControllerB_LateUpdate_Postfix if it repeatedly throws NullReferenceException and breaks session startup.");
     }

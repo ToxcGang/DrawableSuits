@@ -5,7 +5,7 @@ DrawableSuits is a Lethal Company v81 BepInEx mod that lets players draw on suit
 ## Features
 
 - Default third-person paint editor: opening DrawableSuits switches to an editor camera around the local player so you can paint directly on the visible suit.
-- Compact side overlay with Paint, Erase, Fill, Decal, Text, Eyedropper, a UI-only Mirror toggle, brush shape selector, brush/fill sliders, a hue/SV color picker, decal/text controls, design name, visible decal rows, visible saved-design rows, share-code import/export, Undo, Redo, Reset, Apply, Save, Load, and Close.
+- Compact side overlay with Paint, Erase, Fill, Decal, Text, Eyedropper, a UI-only Mirror toggle, brush shape selector, brush/fill sliders, a hue/SV color picker, persistent recent color swatches, decal/text controls, design name, visible decal rows, visible saved-design rows, share-code import/export, Undo, Redo, Reset, Apply, Save, Load, and Close.
 - The editor always edits the local player's currently worn suit. Manual cross-suit selection is not available in the editor.
 - Fill Bucket flood-fills contiguous matching texture regions under the cursor using the current brush color, opacity, and Fill Tolerance slider.
 - Brush shapes for Paint and Erase: Circle, Square, Pixel, Spray Paint, Soft Airbrush, and Noise/Scatter.
@@ -39,6 +39,7 @@ Keyboard and mouse:
 - `F10`: emergency open.
 - Left mouse: paint/erase continuously; in Fill mode, fill once per press; in Decal or Text mode, stamp one preview at the cursor location.
 - Brush Shape: choose Circle, Square, Pixel, Spray Paint, Soft Airbrush, or Noise/Scatter from the Brush dropdown. Pixel ignores the brush size slider and edits one texture pixel.
+- Recent Colors: click a recent swatch below the color picker to restore that brush color. Colors are added only after Paint, Fill, or Text successfully writes onto the suit.
 - Fill: click the `Fill` UI button, adjust Fill Tolerance if needed, then left-click a contiguous color region on the suit.
 - Text: click the `Text` UI button, type up to 64 characters, then left-click the suit to stamp it. Text uses the current brush color and opacity.
 - Eyedropper: click the `Eyedropper` UI button, then left-click the suit to sample that texture color. It returns to the previous tool after one successful sample.
@@ -58,6 +59,7 @@ Controller:
 - Text: move the virtual cursor over the `Text` UI button and press `A`, type text with the UI field, then aim at the suit and press right trigger once to stamp it.
 - Fill: move the virtual cursor over the `Fill` UI button and press `A`, adjust Fill Tolerance if needed, then aim at a matching color region and press right trigger once.
 - Brush Shape: move the virtual cursor over the Brush Shape dropdown and press `A`, then pick a shape with `A`.
+- Recent Colors: move the virtual cursor over a recent color swatch and press `A` to restore that brush color.
 - Eyedropper: move the virtual cursor over the `Eyedropper` UI button, press `A`, then aim at the suit and press right trigger once to sample a color. It returns to the previous tool after one successful sample.
 - Mirror: move the virtual cursor over the `Mirror` UI button and press `A`; there is no controller shortcut for this modifier.
 - Export Code / Import Code: use `A` on the design code UI buttons. There are no shortcuts for import/export.
@@ -112,6 +114,7 @@ The BepInEx config file controls:
 - Max sync payload size and chunk size.
 - `StartInUvFallbackMode`, disabled by default, opens directly into texture-only UV panel mode for diagnostics.
 - `ThirdPersonCameraDistance`, the default third-person editor camera distance.
+- `RecentColors`, a comma-separated list of up to 12 recent `#RRGGBB` brush colors populated only after Paint, Fill, or Text writes to the suit.
 - `ApplyLocalFirstPersonArms`, disabled by default, is experimental and allows edited materials on local first-person arms/body outside the editor.
 - `AutoDisableBrokenJetpackWarningLateUpdatePatch`, enabled by default, disables only the broken JetpackWarning `PlayerControllerB.LateUpdate` postfix after repeated null-reference errors are detected.
 - `EnableExperimentalModelPreview`, disabled by default, keeps the old RenderTexture model preview as diagnostics only.
@@ -123,7 +126,7 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.32 behavior:
+Expected 0.5.34 behavior:
 
 - Opening the editor shows a compact side overlay and a third-person camera view of the local player.
 - The editor edits only the local player's currently worn suit. The old Previous, Use Current, and Next suit-selection buttons are not present.
@@ -137,6 +140,7 @@ Expected 0.5.32 behavior:
 - Controller right trigger paints only. Camera zoom uses mouse wheel or controller D-pad up/down.
 - Active edited textures are per player/client, not global per suit type.
 - The color changer is a compact side-by-side hue ring and saturation/value square with a swatch and editable `#RRGGBB` hex field.
+- Recent Colors swatches appear below the color picker. Dragging the picker, typing hex, or using Eyedropper does not add a swatch until that color is placed by Paint, Fill, or Text.
 - Color picker handles are tied to the same coordinate conversion used for mouse/controller input, so the visible handle positions should match the selected hue, saturation, value, and typed hex color.
 - Reset, Save, and Load no longer rebuild list hitboxes during the click; decal and saved-design rows only change selection when their rows are clicked directly.
 - Third-person camera yaw, pitch, and distance are preserved when loading a design or importing a design code while the editor is open.

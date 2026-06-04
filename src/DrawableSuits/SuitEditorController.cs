@@ -53,6 +53,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     }
 
     private const int EditorCanvasSortingOrder = 32760;
+    private const int MaxRecentColors = 12;
     private const float DotCursorRootSize = 17f;
     private const float DotCursorBackSize = 15f;
     private const float DotCursorFrontSize = 9f;
@@ -61,6 +62,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private readonly Stack<Color32[]> _redo = new();
     private readonly List<string> _designFiles = new();
     private readonly List<string> _decalFiles = new();
+    private readonly List<string> _recentColors = new(MaxRecentColors);
 
     private bool _isOpen;
     private Vector2 _cursor;
@@ -284,6 +286,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Text _brushSizeLabel;
     private Text _brushOpacityLabel;
     private Text _brushShapeLabel;
+    private Text _recentColorsLabel;
     private Text _decalSizeLabel;
     private Text _decalRotationLabel;
     private Text _placementHeaderLabel;
@@ -308,6 +311,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Button _brushShapeButton;
     private GameObject _brushShapeMenuObject;
     private readonly List<Button> _brushShapeOptionButtons = new();
+    private readonly List<Button> _recentColorButtons = new(MaxRecentColors);
+    private readonly List<Image> _recentColorImages = new(MaxRecentColors);
     private Button _applyButton;
     private Button _saveButton;
     private Button _loadButton;
@@ -1476,8 +1481,9 @@ internal sealed class SuitEditorController : MonoBehaviour
     private void Start()
     {
         _cursor = new Vector2(Screen.width * 0.5f, Screen.height * 0.5f);
+        LoadRecentColors();
         RefreshFileLists();
-        DrawableSuitsDiagnostics.Info($"SuitEditorController.Start complete. Screen={Screen.width}x{Screen.height}; designFiles={_designFiles.Count}; decalFiles={_decalFiles.Count}");
+        DrawableSuitsDiagnostics.Info($"SuitEditorController.Start complete. Screen={Screen.width}x{Screen.height}; designFiles={_designFiles.Count}; decalFiles={_decalFiles.Count}; recentColors={_recentColors.Count}");
     }
 
     private void OnDestroy()
@@ -1974,6 +1980,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         }, out _colorSwatch, out _colorHexInput);
         _colorHexInput.onValueChanged.AddListener(PreviewHexInput);
         _colorHexInput.onEndEdit.AddListener(ApplyHexInput);
+        _recentColorsLabel = CreateAnchoredText(panel.transform, "RecentColorsHeader", "Recent Colors", 14, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 704f, leftW, 22f), Color.white);
+        BuildRecentColorSwatches(panel.transform, new Rect(leftX, 730f, leftW, 64f));
 
         _uvFallbackButton = CreateAnchoredButton(panel.transform, "Use UV Fallback", new Rect(rightX, 54f, 150f, 34f), ToggleUvFallback);
         CreateAnchoredText(panel.transform, "WorldHelp", "Third-person mode: aim at the visible suit and hold left mouse or right trigger to paint. Eyedropper samples once, then returns to the previous tool. Right mouse/right stick or bumpers orbit. Wheel or D-pad up/down zooms.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(rightX, 96f, rightW, 76f), new Color(0.86f, 0.9f, 0.94f, 1f));
@@ -2347,6 +2355,49 @@ internal sealed class SuitEditorController : MonoBehaviour
         labelRect.offsetMin = Vector2.zero;
         labelRect.offsetMax = Vector2.zero;
         return button;
+    }
+
+    private void BuildRecentColorSwatches(Transform parent, Rect rect)
+    {
+        _recentColorButtons.Clear();
+        _recentColorImages.Clear();
+        const int columns = 6;
+        const float size = 30f;
+        const float gap = 8f;
+        for (var i = 0; i < MaxRecentColors; i++)
+        {
+            var row = i / columns;
+            var column = i % columns;
+            var slot = i;
+            var x = rect.x + column * (size + gap);
+            var y = rect.y + row * (size + gap);
+            var go = CreateUiObject($"RecentColor{slot + 1}", parent, typeof(RectTransform), typeof(Image), typeof(Button));
+            SetAnchoredRect(go.GetComponent<RectTransform>(), new Rect(x, y, size, size));
+
+            var image = go.GetComponent<Image>();
+            image.color = new Color(0.06f, 0.065f, 0.07f, 0.95f);
+            image.raycastTarget = true;
+
+            var button = go.GetComponent<Button>();
+            button.targetGraphic = image;
+            button.onClick.AddListener(() =>
+            {
+                SelectRecentColor(slot);
+                ClearSelectedNormalButton();
+            });
+
+            var colors = button.colors;
+            colors.normalColor = Color.white;
+            colors.highlightedColor = new Color(1f, 1f, 1f, 0.92f);
+            colors.pressedColor = new Color(0.78f, 0.78f, 0.78f, 1f);
+            colors.selectedColor = colors.normalColor;
+            button.colors = colors;
+
+            _recentColorButtons.Add(button);
+            _recentColorImages.Add(image);
+        }
+
+        UpdateRecentColorSwatches();
     }
 
     private void BuildBrushShapeMenu(Transform parent, Rect rect)
@@ -3144,6 +3195,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         UpdateToolButtons();
         UpdateLabels();
         UpdateColorUi();
+        UpdateRecentColorSwatches();
     }
 
     private string BuildDiagnosticsSummary()
@@ -3338,6 +3390,135 @@ internal sealed class SuitEditorController : MonoBehaviour
             (rgb & 0xFF) / 255f,
             1f);
         return true;
+    }
+
+    private void LoadRecentColors()
+    {
+        _recentColors.Clear();
+        var ignored = 0;
+        var raw = DrawableSuitsPlugin.ModConfig?.RecentColors?.Value;
+        if (!string.IsNullOrWhiteSpace(raw))
+        {
+            var entries = raw.Split(new[] { ',', ';', ' ', '\n', '\r', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+            for (var i = 0; i < entries.Length && _recentColors.Count < MaxRecentColors; i++)
+            {
+                if (TryNormalizeHexColor(entries[i], out var normalized))
+                {
+                    if (!_recentColors.Contains(normalized))
+                    {
+                        _recentColors.Add(normalized);
+                    }
+                    continue;
+                }
+
+                ignored++;
+            }
+        }
+
+        DrawableSuitsDiagnostics.Info($"RecentColorsLoaded: count={_recentColors.Count}; ignoredInvalid={ignored}; rawLength={(raw ?? string.Empty).Length}");
+    }
+
+    private static bool TryNormalizeHexColor(string value, out string normalized)
+    {
+        normalized = string.Empty;
+        if (!TryParseHexColor(value, out var color))
+        {
+            return false;
+        }
+
+        normalized = ColorToHex(color);
+        return true;
+    }
+
+    private void SaveRecentColors()
+    {
+        if (DrawableSuitsPlugin.ModConfig?.RecentColors == null)
+        {
+            return;
+        }
+
+        DrawableSuitsPlugin.ModConfig.RecentColors.Value = string.Join(",", _recentColors.ToArray());
+    }
+
+    private void AddRecentColorFromBrush(string sourceAction)
+    {
+        if (!TryNormalizeHexColor(ColorToHex(_brushColor), out var normalized))
+        {
+            return;
+        }
+
+        var existingIndex = _recentColors.IndexOf(normalized);
+        var duplicate = existingIndex >= 0;
+        if (existingIndex == 0)
+        {
+            return;
+        }
+
+        if (duplicate)
+        {
+            _recentColors.RemoveAt(existingIndex);
+        }
+
+        _recentColors.Insert(0, normalized);
+        while (_recentColors.Count > MaxRecentColors)
+        {
+            _recentColors.RemoveAt(_recentColors.Count - 1);
+        }
+
+        SaveRecentColors();
+        UpdateRecentColorSwatches();
+        DrawableSuitsDiagnostics.Info($"RecentColorAdded: color={normalized}; source={sourceAction}; duplicate={duplicate}; slotCount={_recentColors.Count}");
+    }
+
+    private void SelectRecentColor(int index)
+    {
+        if (index < 0 || index >= _recentColors.Count)
+        {
+            return;
+        }
+
+        var hex = _recentColors[index];
+        if (!TryParseHexColor(hex, out var color))
+        {
+            DrawableSuitsDiagnostics.Warn($"RecentColorSelected ignored invalid stored color. index={index}; color={hex}");
+            return;
+        }
+
+        _brushColor = color;
+        _colorPicker?.SetColor(_brushColor, false);
+        UpdateColorUi();
+        SetStatus($"Selected recent color {hex}.", false);
+        DrawableSuitsDiagnostics.Info($"RecentColorSelected: color={hex}; index={index}; slotCount={_recentColors.Count}");
+    }
+
+    private void UpdateRecentColorSwatches()
+    {
+        for (var i = 0; i < _recentColorButtons.Count; i++)
+        {
+            var button = _recentColorButtons[i];
+            var image = i < _recentColorImages.Count ? _recentColorImages[i] : null;
+            if (button == null || image == null)
+            {
+                continue;
+            }
+
+            var color = Color.white;
+            var hasColor = i < _recentColors.Count && TryParseHexColor(_recentColors[i], out color);
+            button.interactable = hasColor;
+            image.color = hasColor ? color : new Color(0.06f, 0.065f, 0.07f, 0.95f);
+
+            var colors = button.colors;
+            colors.normalColor = image.color;
+            colors.highlightedColor = hasColor ? Color.Lerp(image.color, Color.white, 0.28f) : image.color;
+            colors.pressedColor = hasColor ? Color.Lerp(image.color, Color.black, 0.2f) : image.color;
+            colors.selectedColor = colors.normalColor;
+            button.colors = colors;
+        }
+
+        if (_recentColorsLabel != null)
+        {
+            _recentColorsLabel.gameObject.SetActive(true);
+        }
     }
 
     private void UpdateToolButtons()
@@ -6795,6 +6976,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             SetStatus($"Filled {primaryStats.WrittenPixels + mirrorStats.WrittenPixels} pixels.", false);
         }
 
+        AddRecentColorFromBrush("Fill");
         LogFillBucketApplied(mode, texture, uv, mirrorTarget, primaryStats, mirrorStats);
         UpdateBrushIndicator();
     }
@@ -7088,6 +7270,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             SetStatus("Mirror target not found; applied primary only.", false);
         }
+        AddRecentColorFromBrush("Text");
         LogTextSurfaceStampCommitted(texture, hit, mirrorTarget, stampTexture, primaryStats, mirrorStats);
         LogPaintApplied(texture, hit.textureCoord, mirrorTarget);
         UpdateBrushIndicator();
@@ -7287,6 +7470,15 @@ internal sealed class SuitEditorController : MonoBehaviour
             SetStatus("Mirror target not found; applied primary only.", false);
         }
 
+        if (_tool == EditorTool.Paint)
+        {
+            AddRecentColorFromBrush("Paint");
+        }
+        else if (_tool == EditorTool.Text)
+        {
+            AddRecentColorFromBrush("Text");
+        }
+
         LogPaintApplied(texture, uv, mirrorTarget, primaryBrushStats, mirrorBrushStats);
         UpdateBrushIndicator();
         return true;
@@ -7381,6 +7573,11 @@ internal sealed class SuitEditorController : MonoBehaviour
         if (_mirrorEnabled && !mirrorTarget.Available)
         {
             SetStatus("Mirror target not found; applied primary only.", false);
+        }
+
+        if (_tool == EditorTool.Paint)
+        {
+            AddRecentColorFromBrush("Paint");
         }
 
         LogBrushSurfaceStrokeApplied(texture, hit, mirrorTarget, primaryStats, mirrorStats, worldRadius, mirrorRadius, fallbackReason);

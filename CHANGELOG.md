@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.34
+
+- Added persistent Recent Colors swatches below the color picker.
+- Recent colors are added only after successful Paint, Fill, or Text writes.
+- Clicking a recent swatch restores the brush color without adding duplicate entries.
+
 ## 0.5.33
 
 - Added a Brush Shape dropdown for Paint and Erase.
