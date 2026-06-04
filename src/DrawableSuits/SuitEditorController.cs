@@ -317,7 +317,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private readonly List<Image> _recentColorImages = new(MaxRecentColors);
     private Button _applyButton;
     private Button _saveButton;
-    private Button _loadButton;
+    private Button _savedDesignsButton;
+    private Button _loadSelectedDesignButton;
     private Button _resetButton;
     private Button _exportCodeButton;
     private Button _importCodeButton;
@@ -325,6 +326,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private GameObject _designCodePanelObject;
     private InputField _designCodeInput;
     private Text _designCodeStatusLabel;
+    private GameObject _savedDesignsPanelObject;
+    private Text _savedDesignsStatusLabel;
     private GameObject _editorEventSystemObject;
     private EventSystem _editorEventSystem;
     private InputSystemUIInputModule _editorInputModule;
@@ -383,8 +386,10 @@ internal sealed class SuitEditorController : MonoBehaviour
     private sealed class UndoHistoryRow
     {
         internal GameObject GameObject;
+        internal Button Button;
         internal Text Label;
         internal Image Image;
+        internal int Index = -1;
     }
 
     private struct MirrorPaintTarget
@@ -1759,6 +1764,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawableSuitsDiagnostics.Info($"Closing DrawableSuits editor. reason={reason}");
         _isOpen = false;
         CloseDesignCodePanel();
+        CloseSavedDesignsPanel();
         HideCanvasCursor($"close {reason}", true);
         if (_editorCanvasObject != null)
         {
@@ -2059,13 +2065,10 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         _applyButton = CreateAnchoredButton(panel.transform, "Apply", new Rect(rightX, 750f, 84f, 34f), () => DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, true));
         _saveButton = CreateAnchoredButton(panel.transform, "Save", new Rect(rightX + 92f, 750f, 84f, 34f), SaveDesign);
-        _loadButton = CreateAnchoredButton(panel.transform, "Load", new Rect(rightX + 184f, 750f, 84f, 34f), LoadSelectedDesign);
+        _savedDesignsButton = CreateAnchoredButton(panel.transform, "Designs", new Rect(rightX + 184f, 750f, 84f, 34f), OpenSavedDesignsPanel);
 
         CreateAnchoredText(panel.transform, "UndoHistoryHeader", "Undo History", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 804f, rightW, 24f), Color.white);
         BuildUndoHistoryPanel(panel.transform, new Rect(rightX, 828f, rightW, 76f));
-
-        CreateAnchoredText(panel.transform, "SavedDesignsHeader", "Saved Designs", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 910f, rightW, 24f), Color.white);
-        _designListContent = CreateAnchoredScrollList(panel.transform, "DesignList", new Rect(rightX, 934f, rightW, 38f));
 
         var fallbackPreview = CreateUiObject("PreviewViewport", panel.transform, typeof(RectTransform), typeof(Image));
         _previewViewportRect = fallbackPreview.GetComponent<RectTransform>();
@@ -2117,9 +2120,10 @@ internal sealed class SuitEditorController : MonoBehaviour
         _brushIndicator.gameObject.SetActive(false);
         fallbackPreview.SetActive(false);
 
-        CreateAnchoredText(panel.transform, "ControllerHelp", "Controller: View/Back+Y open/close, left stick cursor, A clicks UI, RT paints or samples with Eyedropper, right stick/bumpers orbit, D-pad up/down zooms, X undo, Start save.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 954f, 574f, 36f), Color.white);
+        CreateAnchoredText(panel.transform, "ControllerHelp", "Controller: left stick cursor, A clicks UI, RT paints/samples, X undo, Start save.", 12, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 960f, leftW, 34f), Color.white);
 
         BuildDesignCodePanel();
+        BuildSavedDesignsPanel();
 
         _editorCanvasObject.SetActive(false);
         RefreshListButtons();
@@ -2171,6 +2175,42 @@ internal sealed class SuitEditorController : MonoBehaviour
         _designCodeStatusLabel = CreateAnchoredText(dialog.transform, "DesignCodeStatus", string.Empty, 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(18f, 366f, 724f, 46f), new Color(1f, 0.74f, 0.42f, 1f));
         _designCodePanelObject.SetActive(false);
         DrawableSuitsDiagnostics.Info("DesignCodePanel built.");
+    }
+
+    private void BuildSavedDesignsPanel()
+    {
+        _savedDesignsPanelObject = CreateUiObject("SavedDesignsPanel", _editorCanvasObject.transform, typeof(RectTransform), typeof(Image));
+        var overlayRect = _savedDesignsPanelObject.GetComponent<RectTransform>();
+        overlayRect.anchorMin = Vector2.zero;
+        overlayRect.anchorMax = Vector2.one;
+        overlayRect.offsetMin = Vector2.zero;
+        overlayRect.offsetMax = Vector2.zero;
+        var overlayImage = _savedDesignsPanelObject.GetComponent<Image>();
+        overlayImage.color = new Color(0f, 0f, 0f, 0.28f);
+        overlayImage.raycastTarget = true;
+
+        var dialog = CreateUiObject("SavedDesignsDialog", _savedDesignsPanelObject.transform, typeof(RectTransform), typeof(Image));
+        var dialogRect = dialog.GetComponent<RectTransform>();
+        dialogRect.anchorMin = new Vector2(0.5f, 0.5f);
+        dialogRect.anchorMax = new Vector2(0.5f, 0.5f);
+        dialogRect.pivot = new Vector2(0.5f, 0.5f);
+        dialogRect.anchoredPosition = Vector2.zero;
+        dialogRect.sizeDelta = new Vector2(520f, 520f);
+        var dialogImage = dialog.GetComponent<Image>();
+        dialogImage.color = new Color(0.025f, 0.03f, 0.035f, 0.98f);
+        dialogImage.raycastTarget = true;
+
+        CreateAnchoredText(dialog.transform, "SavedDesignsTitle", "Saved Designs", 22, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(18f, 14f, 360f, 34f), new Color(1f, 0.62f, 0.25f, 1f));
+        CreateAnchoredText(dialog.transform, "SavedDesignsHelp", "Select a saved design, then load it into the current suit. Save and Apply stay explicit.", 14, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(18f, 54f, 484f, 42f), Color.white);
+        _designListContent = CreateAnchoredScrollList(dialog.transform, "DesignList", new Rect(18f, 104f, 484f, 276f));
+
+        _loadSelectedDesignButton = CreateAnchoredButton(dialog.transform, "Load Selected", new Rect(18f, 394f, 132f, 34f), LoadSelectedDesign);
+        CreateAnchoredButton(dialog.transform, "Refresh", new Rect(160f, 394f, 94f, 34f), RefreshSavedDesignsPanel);
+        CreateAnchoredButton(dialog.transform, "Close", new Rect(404f, 394f, 98f, 34f), CloseSavedDesignsPanel);
+        _savedDesignsStatusLabel = CreateAnchoredText(dialog.transform, "SavedDesignsStatus", string.Empty, 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(18f, 442f, 484f, 48f), new Color(1f, 0.74f, 0.42f, 1f));
+
+        _savedDesignsPanelObject.SetActive(false);
+        DrawableSuitsDiagnostics.Info("SavedDesignsPanel built.");
     }
 
     private void BuildFallbackDiagnosticsCanvas(Exception originalException)
@@ -2433,18 +2473,24 @@ internal sealed class SuitEditorController : MonoBehaviour
         const float rowSpacing = 2f;
         for (var i = 0; i < rowCount; i++)
         {
-            var rowObject = CreateUiObject($"UndoHistoryRow{i + 1}", panel.transform, typeof(RectTransform), typeof(Image));
+            var rowObject = CreateUiObject($"UndoHistoryRow{i + 1}", panel.transform, typeof(RectTransform), typeof(Image), typeof(Button));
             SetAnchoredRect(rowObject.GetComponent<RectTransform>(), new Rect(6f, 6f + i * (rowHeight + rowSpacing), rect.width - 12f, rowHeight));
             var rowImage = rowObject.GetComponent<Image>();
             rowImage.color = new Color(0.07f, 0.075f, 0.085f, 0.92f);
-            rowImage.raycastTarget = false;
+            rowImage.raycastTarget = true;
+            var rowButton = rowObject.GetComponent<Button>();
+            rowButton.targetGraphic = rowImage;
+            rowButton.onClick.RemoveAllListeners();
+            ApplyNormalListButtonStyle(rowButton);
 
             var label = CreateAnchoredText(rowObject.transform, "Label", string.Empty, 12, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(6f, 0f, rect.width - 24f, rowHeight), Color.white);
             _undoHistoryRows.Add(new UndoHistoryRow
             {
                 GameObject = rowObject,
+                Button = rowButton,
                 Image = rowImage,
-                Label = label
+                Label = label,
+                Index = -1
             });
         }
 
@@ -3231,7 +3277,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         SetInteractable(_exportCodeButton, hasEditableTexture);
         SetInteractable(_importCodeButton, hasEditableTexture);
         SetInteractable(_resetButton, hasEditableTexture);
-        SetInteractable(_loadButton, hasEditableTexture && _selectedDesignIndex >= 0);
+        SetInteractable(_savedDesignsButton, hasEditableTexture);
+        SetInteractable(_loadSelectedDesignButton, hasEditableTexture && _selectedDesignIndex >= 0);
         if (_uvFallbackButton != null)
         {
             var showFallbackButton = _uvFallbackMode || !IsWorldThirdPersonMode;
@@ -3818,6 +3865,7 @@ internal sealed class SuitEditorController : MonoBehaviour
                 _selectedDesignIndex = index;
                 RefreshListButtons();
                 UpdateUiState();
+                SetSavedDesignsStatus($"Selected {Path.GetFileNameWithoutExtension(_designFiles[index])}.");
                 DrawableSuitsDiagnostics.Info($"Design row selected. index={index}; file={(_designFiles.Count > index ? _designFiles[index] : "missing")}");
             }, path => Path.GetFileNameWithoutExtension(path));
         }
@@ -4685,9 +4733,9 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
-        if (IsDesignCodePanelOpen())
+        if (IsEditorModalOpen())
         {
-            targetMode = "DesignCodePanel";
+            targetMode = IsSavedDesignsPanelOpen() ? "SavedDesignsPanel" : "DesignCodePanel";
             return false;
         }
 
@@ -4936,6 +4984,16 @@ internal sealed class SuitEditorController : MonoBehaviour
     private bool IsDesignCodePanelOpen()
     {
         return _designCodePanelObject != null && _designCodePanelObject.activeInHierarchy;
+    }
+
+    private bool IsSavedDesignsPanelOpen()
+    {
+        return _savedDesignsPanelObject != null && _savedDesignsPanelObject.activeInHierarchy;
+    }
+
+    private bool IsEditorModalOpen()
+    {
+        return IsDesignCodePanelOpen() || IsSavedDesignsPanelOpen();
     }
 
     private Texture2D EnsureCursorDotTexture()
@@ -6525,6 +6583,10 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         UpdateLabels();
+        if (IsEditorModalOpen())
+        {
+            return;
+        }
 
         var gamepad = Gamepad.current;
         if (gamepad != null)
@@ -6651,13 +6713,13 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        if (_designCodePanelObject != null && _designCodePanelObject.activeInHierarchy)
+        if (IsEditorModalOpen())
         {
             _strokeActive = false;
             _decalStampArmed = true;
             _suppressPaintInputUntilRelease = false;
             _suppressDecalPreviewUntilRelease = false;
-            HideDecalPlacementPreview("design code panel open", false);
+            HideDecalPlacementPreview("editor modal open", false);
             return;
         }
 
@@ -9028,6 +9090,41 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawableSuitsDiagnostics.Info($"UndoHistoryUndo: label={entry.Label}; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
     }
 
+    private void UndoToHistoryIndex(int newestFirstIndex)
+    {
+        var texture = DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId);
+        if (texture == null || newestFirstIndex < 0 || newestFirstIndex >= _undo.Count)
+        {
+            DrawableSuitsDiagnostics.Warn($"UndoHistoryRowClicked ignored. index={newestFirstIndex}; undoCount={_undo.Count}; redoCount={_redo.Count}; hasTexture={texture != null}");
+            return;
+        }
+
+        var entries = _undo.ToArray();
+        var targetLabel = entries[newestFirstIndex].Label;
+        var steps = Mathf.Min(newestFirstIndex + 1, _undo.Count);
+        DrawableSuitsDiagnostics.Info($"UndoHistoryRowClicked: index={newestFirstIndex}; label={targetLabel}; steps={steps}; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
+
+        var undoneLabels = new List<string>(steps);
+        for (var i = 0; i < steps && _undo.Count > 0; i++)
+        {
+            var entry = _undo.Pop();
+            undoneLabels.Add(entry.Label);
+            _redo.Push(new UndoHistoryEntry
+            {
+                Pixels = texture.GetPixels32(),
+                Label = entry.Label
+            });
+            texture.SetPixels32(entry.Pixels);
+            texture.Apply(false, false);
+        }
+
+        DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, false);
+        InvalidateDecalPreview("undo history row");
+        RefreshTexturePanelPreview("UndoHistoryRow", false);
+        UpdateUndoHistoryUi();
+        DrawableSuitsDiagnostics.Info($"UndoHistoryJumpUndo: index={newestFirstIndex}; targetLabel={targetLabel}; steps={steps}; undone=[{string.Join(",", undoneLabels)}]; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
+    }
+
     private void Redo()
     {
         var texture = DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId);
@@ -9118,16 +9215,43 @@ internal sealed class SuitEditorController : MonoBehaviour
 
             var hasEntry = i < entries.Length;
             row.GameObject.SetActive(hasEntry);
+            row.Index = hasEntry ? i : -1;
+            if (row.Button != null)
+            {
+                row.Button.onClick.RemoveAllListeners();
+                row.Button.interactable = hasEntry;
+            }
             if (!hasEntry)
             {
                 continue;
             }
 
+            var rowIndex = i;
+            var rowLabel = entries[i].Label;
+            if (row.Button != null)
+            {
+                row.Button.onClick.AddListener(() =>
+                {
+                    UndoToHistoryIndex(rowIndex);
+                    ClearSelectedNormalButton();
+                });
+            }
             if (row.Label != null)
             {
-                row.Label.text = entries[i].Label;
+                row.Label.text = rowLabel;
             }
-            if (row.Image != null)
+            if (row.Button != null)
+            {
+                if (i == 0)
+                {
+                    ApplySelectedListButtonStyle(row.Button);
+                }
+                else
+                {
+                    ApplyNormalListButtonStyle(row.Button);
+                }
+            }
+            else if (row.Image != null)
             {
                 row.Image.color = i == 0
                     ? new Color(0.95f, 0.42f, 0.16f, 0.94f)
@@ -9145,6 +9269,10 @@ internal sealed class SuitEditorController : MonoBehaviour
             RefreshFileLists();
             _selectedDesignIndex = FindFileIndex(_designFiles, previouslySelectedDesign);
             SetStatus("Design saved.", false);
+            if (IsSavedDesignsPanelOpen())
+            {
+                SetSavedDesignsStatus($"Saved {_designName}. Select a design to load it.");
+            }
             UpdateUiState();
             DrawableSuitsDiagnostics.Info($"SaveDesign succeeded. preservedSelectedDesign={previouslySelectedDesign ?? "none"}; selectedDesignIndex={_selectedDesignIndex}");
         }
@@ -9159,6 +9287,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         if (_selectedDesignIndex < 0 || _selectedDesignIndex >= _designFiles.Count)
         {
             DrawableSuitsDiagnostics.Warn($"LoadSelectedDesign ignored. selectedDesignIndex={_selectedDesignIndex}; designCount={_designFiles.Count}");
+            SetSavedDesignsStatus("Select a saved design first.");
             return;
         }
 
@@ -9177,11 +9306,14 @@ internal sealed class SuitEditorController : MonoBehaviour
             TryRebuildPreviewForCurrentReadiness("LoadSelectedDesign");
             RefreshEditorReadiness("after load design");
             UpdateUiState();
+            SetSavedDesignsStatus($"Loaded {_designName} into the current suit.");
+            DrawableSuitsDiagnostics.Info($"SavedDesignsPanelLoaded: designName={_designName}; selectedDesignIndex={_selectedDesignIndex}; file={_designFiles[_selectedDesignIndex]}; undoCount={_undo.Count}; redoCount={_redo.Count}");
             DrawableSuitsDiagnostics.Info("LoadSelectedDesign succeeded.");
         }
         else
         {
             DropLastUndoEntry("Load design failed");
+            SetSavedDesignsStatus("Load failed. Check diagnostics.");
             DrawableSuitsDiagnostics.Warn("LoadSelectedDesign failed; registry returned false.");
         }
     }
@@ -9270,6 +9402,57 @@ internal sealed class SuitEditorController : MonoBehaviour
         if (_designCodePanelObject != null)
         {
             _designCodePanelObject.SetActive(false);
+        }
+    }
+
+    private void OpenSavedDesignsPanel()
+    {
+        if (_savedDesignsPanelObject == null)
+        {
+            return;
+        }
+
+        RefreshFileLists();
+        _savedDesignsPanelObject.SetActive(true);
+        SetSavedDesignsStatus(_designFiles.Count == 0
+            ? "No saved designs found. Press Save to create one."
+            : "Select a saved design, then press Load Selected.");
+        UpdateUiState();
+        RebuildSelectableNavigation();
+        DrawableSuitsDiagnostics.Info($"SavedDesignsPanelOpened: designCount={_designFiles.Count}; selectedDesignIndex={_selectedDesignIndex}; selectedDesign={GetSelectedFilePath(_designFiles, _selectedDesignIndex) ?? "none"}");
+    }
+
+    private void CloseSavedDesignsPanel()
+    {
+        var wasOpen = IsSavedDesignsPanelOpen();
+        if (_savedDesignsPanelObject != null)
+        {
+            _savedDesignsPanelObject.SetActive(false);
+        }
+
+        SetSavedDesignsStatus(string.Empty);
+        RebuildSelectableNavigation();
+        if (wasOpen)
+        {
+            DrawableSuitsDiagnostics.Info($"SavedDesignsPanelClosed: selectedDesignIndex={_selectedDesignIndex}; selectedDesign={GetSelectedFilePath(_designFiles, _selectedDesignIndex) ?? "none"}");
+        }
+    }
+
+    private void RefreshSavedDesignsPanel()
+    {
+        RefreshFileLists();
+        SetSavedDesignsStatus(_designFiles.Count == 0
+            ? "No saved designs found."
+            : $"Loaded {_designFiles.Count} saved design{(_designFiles.Count == 1 ? string.Empty : "s")}.");
+        UpdateUiState();
+        DrawableSuitsDiagnostics.Info($"SavedDesignsPanelLoaded: designCount={_designFiles.Count}; selectedDesignIndex={_selectedDesignIndex}; selectedDesign={GetSelectedFilePath(_designFiles, _selectedDesignIndex) ?? "none"}");
+    }
+
+    private void SetSavedDesignsStatus(string message)
+    {
+        if (_savedDesignsStatusLabel != null)
+        {
+            _savedDesignsStatusLabel.text = message ?? string.Empty;
         }
     }
 

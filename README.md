@@ -5,7 +5,7 @@ DrawableSuits is a Lethal Company v81 BepInEx mod that lets players draw on suit
 ## Features
 
 - Default third-person paint editor: opening DrawableSuits switches to an editor camera around the local player so you can paint directly on the visible suit.
-- Compact side overlay with Paint, Erase, Fill, Decal, Text, Eyedropper, a UI-only Mirror toggle, brush shape selector, brush/fill sliders, a hue/SV color picker, persistent recent color swatches, decal/text controls, design name, visible decal rows, visible saved-design rows, share-code import/export, Undo, Redo, a labeled undo history panel, Reset, Apply, Save, Load, and Close.
+- Compact side overlay with Paint, Erase, Fill, Decal, Text, Eyedropper, a UI-only Mirror toggle, brush shape selector, brush/fill sliders, a hue/SV color picker, persistent recent color swatches, decal/text controls, design name, visible decal rows, a Saved Designs menu, share-code import/export, Undo, Redo, a clickable labeled undo history panel, Reset, Apply, Save, and Close.
 - The editor always edits the local player's currently worn suit. Manual cross-suit selection is not available in the editor.
 - Fill Bucket flood-fills contiguous matching texture regions under the cursor using the current brush color, opacity, and Fill Tolerance slider.
 - Brush shapes for Paint and Erase: Circle, Square, Pixel, Spray Paint, Soft Airbrush, and Noise/Scatter.
@@ -45,7 +45,8 @@ Keyboard and mouse:
 - Eyedropper: click the `Eyedropper` UI button, then left-click the suit to sample that texture color. It returns to the previous tool after one successful sample.
 - Mirror: click the `Mirror` UI button to duplicate paint, erase, fill, decal stamps, and text stamps onto the opposite suit surface.
 - Export Code / Import Code: use the design code panel to copy the current editable texture as a compact `DSUIT2:` code or paste a shared `DSUIT2:` or legacy `DSUIT1:` code into the current suit.
-- Undo History: view the latest labeled undoable actions. The list is display-only; use Undo/Redo to step through history.
+- Saved Designs: open the `Designs` menu to select and load saved designs into the current suit.
+- Undo History: click a history row to undo through that labeled action while preserving redo history, or use Undo/Redo to step one action at a time.
 - UV texture panel: move the cursor over the right-column texture panel to paint, erase, fill, stamp decals/text, or sample colors directly on the UV layout while the third-person view remains active.
 - Right mouse: orbit the third-person editor camera.
 - Mouse wheel: zoom the third-person camera.
@@ -64,7 +65,8 @@ Controller:
 - Eyedropper: move the virtual cursor over the `Eyedropper` UI button, press `A`, then aim at the suit and press right trigger once to sample a color. It returns to the previous tool after one successful sample.
 - Mirror: move the virtual cursor over the `Mirror` UI button and press `A`; there is no controller shortcut for this modifier.
 - Export Code / Import Code: use `A` on the design code UI buttons. There are no shortcuts for import/export.
-- Undo History: the list is display-only for controller users too; use `X` or the Undo/Redo buttons.
+- Saved Designs: move the virtual cursor over `Designs`, press `A`, select a saved design row, then press `Load Selected`.
+- Undo History: move the virtual cursor over a history row and press `A` to undo through that action; use `X` or the Undo/Redo buttons for one-step history.
 - Right trigger: paint/erase continuously; in Fill mode, fill once per press; in Decal or Text mode, stamp one preview at the cursor location.
 - Right stick or bumpers: orbit the third-person editor camera.
 - D-pad up/down: zoom the third-person editor camera.
@@ -128,7 +130,7 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.35 behavior:
+Expected 0.5.36 behavior:
 
 - Opening the editor shows a compact side overlay and a third-person camera view of the local player.
 - The editor edits only the local player's currently worn suit. The old Previous, Use Current, and Next suit-selection buttons are not present.
@@ -138,14 +140,14 @@ Expected 0.5.35 behavior:
 - Normal session startup should log `SessionSafetyCheck` with `EditorOpen=False`, no active DrawableSuits cameras, `Camera.main` state, local player state, prompt context, and `jetpackWarningGuard` status.
 - If third-person setup fails, the editor falls back to texture-only `TextureFallback` and logs the reason.
 - The UV texture panel shows the editable texture in a reserved right-column preview slot below the decal list. It should not cover the color picker, brush controls, tools, design controls, or saved-design rows.
-- Decal and saved-design rows are explicit anchored buttons, not ScrollRect/layout rows.
+- Decal rows are explicit anchored buttons, and saved designs open in a separate modal menu with larger selectable rows.
 - Controller right trigger paints only. Camera zoom uses mouse wheel or controller D-pad up/down.
 - Active edited textures are per player/client, not global per suit type.
 - The color changer is a compact side-by-side hue ring and saturation/value square with a swatch and editable `#RRGGBB` hex field.
 - Recent Colors swatches appear below the color picker. Dragging the picker, typing hex, or using Eyedropper does not add a swatch until that color is placed by Paint, Fill, or Text.
-- Undo History shows the newest undoable action labels first, including Brush stroke, Erase, Decal placed, Text placed, Color fill, Reset, Load design, and Import code. Rows are display-only and do not jump to arbitrary history states.
+- Undo History shows the newest undoable action labels first, including Brush stroke, Erase, Decal placed, Text placed, Color fill, Reset, Load design, and Import code. Clicking a row undoes through that action and keeps redo history available.
 - Color picker handles are tied to the same coordinate conversion used for mouse/controller input, so the visible handle positions should match the selected hue, saturation, value, and typed hex color.
-- Reset, Save, and Load no longer rebuild list hitboxes during the click; decal and saved-design rows only change selection when their rows are clicked directly.
+- Reset and Save no longer rebuild list hitboxes during the click; decal rows only change selection when their rows are clicked directly, and saved-design rows live in the separate Designs menu.
 - Third-person camera yaw, pitch, and distance are preserved when loading a design or importing a design code while the editor is open.
 - Controller `A` does not activate UI immediately after opening; move the left stick once to arm the virtual cursor, then `A` clicks the control under the cursor.
 - Normal buttons should not stay highlighted after unrelated clicks; only selected tools, decals, and saved designs keep orange selection styling.

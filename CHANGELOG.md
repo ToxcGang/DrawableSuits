@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.36
+
+- Moved saved designs into a separate modal menu so controller help no longer overlaps saved rows.
+- Made Undo History rows clickable to undo through a selected labeled action while preserving redo history.
+- Shortened the controller help line on the main editor overlay.
+
 ## 0.5.35
 
 - Added a compact Undo History panel with labels for recent undoable actions.
