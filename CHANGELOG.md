@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.37
+
+- Changed Undo History rows to select a target action instead of immediately undoing.
+- Added an explicit `Undo To Selected` button for deliberate multi-step history undo.
+- Added stable undo-entry IDs and selection diagnostics so stale history row indices cannot undo the wrong range.
+
 ## 0.5.36
 
 - Moved saved designs into a separate modal menu so controller help no longer overlaps saved rows.

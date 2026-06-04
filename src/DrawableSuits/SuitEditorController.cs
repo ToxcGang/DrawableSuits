@@ -271,6 +271,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Text _designEmptyLabel;
     private Text _decalEmptyLabel;
     private Text _undoHistoryEmptyLabel;
+    private Text _undoHistorySelectionLabel;
     private Text _designPageLabel;
     private Text _decalPageLabel;
     private Button _designPrevPageButton;
@@ -280,6 +281,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private readonly List<AnchoredListRow> _designRows = new();
     private readonly List<AnchoredListRow> _decalRows = new();
     private readonly List<UndoHistoryRow> _undoHistoryRows = new();
+    private long _nextUndoHistoryId = 1;
+    private long _selectedUndoHistoryId;
     private RawImage _previewImage;
     private Text _suitLabel;
     private Text _statusLabel;
@@ -319,6 +322,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Button _saveButton;
     private Button _savedDesignsButton;
     private Button _loadSelectedDesignButton;
+    private Button _undoToSelectedButton;
     private Button _resetButton;
     private Button _exportCodeButton;
     private Button _importCodeButton;
@@ -379,6 +383,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private sealed class UndoHistoryEntry
     {
+        internal long Id;
         internal Color32[] Pixels;
         internal string Label;
     }
@@ -390,6 +395,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         internal Text Label;
         internal Image Image;
         internal int Index = -1;
+        internal long EntryId;
     }
 
     private struct MirrorPaintTarget
@@ -2068,7 +2074,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         _savedDesignsButton = CreateAnchoredButton(panel.transform, "Designs", new Rect(rightX + 184f, 750f, 84f, 34f), OpenSavedDesignsPanel);
 
         CreateAnchoredText(panel.transform, "UndoHistoryHeader", "Undo History", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 804f, rightW, 24f), Color.white);
-        BuildUndoHistoryPanel(panel.transform, new Rect(rightX, 828f, rightW, 76f));
+        BuildUndoHistoryPanel(panel.transform, new Rect(rightX, 828f, rightW, 118f));
 
         var fallbackPreview = CreateUiObject("PreviewViewport", panel.transform, typeof(RectTransform), typeof(Image));
         _previewViewportRect = fallbackPreview.GetComponent<RectTransform>();
@@ -2493,6 +2499,9 @@ internal sealed class SuitEditorController : MonoBehaviour
                 Index = -1
             });
         }
+
+        _undoToSelectedButton = CreateAnchoredButton(panel.transform, "Undo To Selected", new Rect(6f, 82f, 132f, 26f), UndoToSelectedHistory);
+        _undoHistorySelectionLabel = CreateAnchoredText(panel.transform, "UndoHistorySelection", "Select a row first.", 11, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(146f, 78f, rect.width - 152f, 34f), new Color(0.82f, 0.86f, 0.9f, 1f));
 
         UpdateUndoHistoryUi();
     }
@@ -9053,18 +9062,21 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         var normalizedLabel = string.IsNullOrWhiteSpace(label) ? "Edit" : label.Trim();
+        ClearUndoHistorySelection("new undo entry", false);
+        var entryId = _nextUndoHistoryId++;
         _undo.Push(new UndoHistoryEntry
         {
+            Id = entryId,
             Pixels = texture.GetPixels32(),
             Label = normalizedLabel
         });
         while (_undo.Count > DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value)
         {
             var removed = TrimOldest(_undo);
-            DrawableSuitsDiagnostics.Info($"UndoHistoryTrimmed: label={removed?.Label ?? "unknown"}; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
+            DrawableSuitsDiagnostics.Info($"UndoHistoryTrimmed: id={removed?.Id ?? 0}; label={removed?.Label ?? "unknown"}; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
         }
         UpdateUndoHistoryUi();
-        DrawableSuitsDiagnostics.Info($"UndoHistoryPushed: label={normalizedLabel}; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
+        DrawableSuitsDiagnostics.Info($"UndoHistoryPushed: id={entryId}; label={normalizedLabel}; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
     }
 
     private void Undo()
@@ -9078,6 +9090,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         var entry = _undo.Pop();
         _redo.Push(new UndoHistoryEntry
         {
+            Id = entry.Id,
             Pixels = texture.GetPixels32(),
             Label = entry.Label
         });
@@ -9086,23 +9099,91 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, false);
         InvalidateDecalPreview("undo");
         RefreshTexturePanelPreview("Undo", false);
+        ClearUndoHistorySelection("undo one step", false);
         UpdateUndoHistoryUi();
-        DrawableSuitsDiagnostics.Info($"UndoHistoryUndo: label={entry.Label}; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
+        DrawableSuitsDiagnostics.Info($"UndoHistoryUndo: id={entry.Id}; label={entry.Label}; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
     }
 
-    private void UndoToHistoryIndex(int newestFirstIndex)
+    private void SelectUndoHistoryEntry(long entryId)
     {
-        var texture = DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId);
-        if (texture == null || newestFirstIndex < 0 || newestFirstIndex >= _undo.Count)
+        if (IsEditorModalOpen())
         {
-            DrawableSuitsDiagnostics.Warn($"UndoHistoryRowClicked ignored. index={newestFirstIndex}; undoCount={_undo.Count}; redoCount={_redo.Count}; hasTexture={texture != null}");
+            DrawableSuitsDiagnostics.Warn($"UndoHistoryRowSelected ignored because a modal is open. id={entryId}; undoCount={_undo.Count}; redoCount={_redo.Count}");
             return;
         }
 
         var entries = _undo.ToArray();
-        var targetLabel = entries[newestFirstIndex].Label;
+        var index = FindUndoHistoryIndexById(entries, entryId);
+        if (index < 0)
+        {
+            DrawableSuitsDiagnostics.Warn($"UndoHistoryRowSelected ignored because id was not found. id={entryId}; undoCount={_undo.Count}; redoCount={_redo.Count}");
+            ClearUndoHistorySelection("selected row missing", true);
+            return;
+        }
+
+        _selectedUndoHistoryId = entryId;
+        var label = entries[index].Label;
+        var steps = index + 1;
+        SetStatus($"Will undo {UndoActionCountText(steps)} through {label}.", false);
+        UpdateUndoHistoryUi();
+        DrawableSuitsDiagnostics.Info($"UndoHistoryRowSelected: id={entryId}; index={index}; label={label}; steps={steps}; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
+    }
+
+    private void UndoToSelectedHistory()
+    {
+        if (IsEditorModalOpen())
+        {
+            DrawableSuitsDiagnostics.Warn($"UndoHistoryUndoToSelected ignored because a modal is open. selectedId={_selectedUndoHistoryId}; undoCount={_undo.Count}; redoCount={_redo.Count}");
+            return;
+        }
+
+        if (_selectedUndoHistoryId == 0)
+        {
+            SetStatus("Select a history row first.", false);
+            DrawableSuitsDiagnostics.Warn($"UndoHistoryUndoToSelected ignored because no row is selected. undoCount={_undo.Count}; redoCount={_redo.Count}");
+            return;
+        }
+
+        var entries = _undo.ToArray();
+        var index = FindUndoHistoryIndexById(entries, _selectedUndoHistoryId);
+        if (index < 0)
+        {
+            SetStatus("Selected history row is no longer available.", false);
+            DrawableSuitsDiagnostics.Warn($"UndoHistoryUndoToSelected ignored because selected row is stale. selectedId={_selectedUndoHistoryId}; undoCount={_undo.Count}; redoCount={_redo.Count}");
+            ClearUndoHistorySelection("selected row stale", true);
+            return;
+        }
+
+        UndoToHistoryIndex(index, _selectedUndoHistoryId);
+    }
+
+    private void UndoToHistoryIndex(int newestFirstIndex, long expectedId)
+    {
+        var texture = DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId);
+        if (texture == null || newestFirstIndex < 0 || newestFirstIndex >= _undo.Count)
+        {
+            DrawableSuitsDiagnostics.Warn($"UndoHistoryUndoToSelected ignored. expectedId={expectedId}; index={newestFirstIndex}; undoCount={_undo.Count}; redoCount={_redo.Count}; hasTexture={texture != null}");
+            return;
+        }
+
+        var entries = _undo.ToArray();
+        if (expectedId > 0 && entries[newestFirstIndex].Id != expectedId)
+        {
+            var resolvedIndex = FindUndoHistoryIndexById(entries, expectedId);
+            if (resolvedIndex < 0)
+            {
+                DrawableSuitsDiagnostics.Warn($"UndoHistoryUndoToSelected ignored because expected id was not found. expectedId={expectedId}; index={newestFirstIndex}; undoCount={_undo.Count}; redoCount={_redo.Count}");
+                ClearUndoHistorySelection("expected row missing", true);
+                return;
+            }
+
+            newestFirstIndex = resolvedIndex;
+        }
+
+        var targetEntry = entries[newestFirstIndex];
+        var targetLabel = targetEntry.Label;
         var steps = Mathf.Min(newestFirstIndex + 1, _undo.Count);
-        DrawableSuitsDiagnostics.Info($"UndoHistoryRowClicked: index={newestFirstIndex}; label={targetLabel}; steps={steps}; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
+        DrawableSuitsDiagnostics.Info($"UndoHistoryUndoToSelected: selectedId={targetEntry.Id}; index={newestFirstIndex}; label={targetLabel}; steps={steps}; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
 
         var undoneLabels = new List<string>(steps);
         for (var i = 0; i < steps && _undo.Count > 0; i++)
@@ -9111,6 +9192,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             undoneLabels.Add(entry.Label);
             _redo.Push(new UndoHistoryEntry
             {
+                Id = entry.Id,
                 Pixels = texture.GetPixels32(),
                 Label = entry.Label
             });
@@ -9121,8 +9203,9 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, false);
         InvalidateDecalPreview("undo history row");
         RefreshTexturePanelPreview("UndoHistoryRow", false);
+        ClearUndoHistorySelection("undo to selected", false);
         UpdateUndoHistoryUi();
-        DrawableSuitsDiagnostics.Info($"UndoHistoryJumpUndo: index={newestFirstIndex}; targetLabel={targetLabel}; steps={steps}; undone=[{string.Join(",", undoneLabels)}]; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
+        DrawableSuitsDiagnostics.Info($"UndoHistoryJumpUndo: selectedId={targetEntry.Id}; index={newestFirstIndex}; targetLabel={targetLabel}; steps={steps}; undone=[{string.Join(",", undoneLabels)}]; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
     }
 
     private void Redo()
@@ -9136,6 +9219,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         var entry = _redo.Pop();
         _undo.Push(new UndoHistoryEntry
         {
+            Id = entry.Id,
             Pixels = texture.GetPixels32(),
             Label = entry.Label
         });
@@ -9144,8 +9228,9 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, false);
         InvalidateDecalPreview("redo");
         RefreshTexturePanelPreview("Redo", false);
+        ClearUndoHistorySelection("redo one step", false);
         UpdateUndoHistoryUi();
-        DrawableSuitsDiagnostics.Info($"UndoHistoryRedo: label={entry.Label}; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
+        DrawableSuitsDiagnostics.Info($"UndoHistoryRedo: id={entry.Id}; label={entry.Label}; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
     }
 
     private static UndoHistoryEntry TrimOldest(Stack<UndoHistoryEntry> stack)
@@ -9162,13 +9247,14 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void ClearUndoHistory(string reason)
     {
-        if (_undo.Count == 0 && _redo.Count == 0)
+        if (_undo.Count == 0 && _redo.Count == 0 && _selectedUndoHistoryId == 0)
         {
             return;
         }
 
         _undo.Clear();
         _redo.Clear();
+        ClearUndoHistorySelection(reason, false);
         UpdateUndoHistoryUi();
         DrawableSuitsDiagnostics.Info($"UndoHistoryCleared: reason={reason}; undoCount=0; redoCount=0; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
     }
@@ -9193,16 +9279,80 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         var dropped = _undo.Pop();
+        if (dropped.Id == _selectedUndoHistoryId)
+        {
+            ClearUndoHistorySelection(reason, false);
+        }
         UpdateUndoHistoryUi();
-        DrawableSuitsDiagnostics.Info($"UndoHistoryDropped: reason={reason}; label={dropped.Label}; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
+        DrawableSuitsDiagnostics.Info($"UndoHistoryDropped: reason={reason}; id={dropped.Id}; label={dropped.Label}; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
+    }
+
+    private int FindUndoHistoryIndexById(UndoHistoryEntry[] entries, long entryId)
+    {
+        if (entries == null || entryId == 0)
+        {
+            return -1;
+        }
+
+        for (var i = 0; i < entries.Length; i++)
+        {
+            if (entries[i] != null && entries[i].Id == entryId)
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static string UndoActionCountText(int steps)
+    {
+        return steps == 1 ? "1 action" : $"{steps} actions";
+    }
+
+    private void ClearUndoHistorySelection(string reason, bool updateUi)
+    {
+        if (_selectedUndoHistoryId == 0)
+        {
+            return;
+        }
+
+        var oldId = _selectedUndoHistoryId;
+        _selectedUndoHistoryId = 0;
+        if (updateUi)
+        {
+            UpdateUndoHistoryUi();
+        }
+
+        DrawableSuitsDiagnostics.Info($"UndoHistorySelectionCleared: reason={reason}; previousId={oldId}; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
     }
 
     private void UpdateUndoHistoryUi()
     {
         var entries = _undo.ToArray();
+        var selectedIndex = FindUndoHistoryIndexById(entries, _selectedUndoHistoryId);
+        if (_selectedUndoHistoryId != 0 && selectedIndex < 0)
+        {
+            ClearUndoHistorySelection("selection no longer in undo stack", false);
+        }
+        var hasSelection = _selectedUndoHistoryId != 0 && selectedIndex >= 0;
         if (_undoHistoryEmptyLabel != null)
         {
             _undoHistoryEmptyLabel.gameObject.SetActive(entries.Length == 0);
+        }
+        SetInteractable(_undoToSelectedButton, hasSelection);
+        if (_undoHistorySelectionLabel != null)
+        {
+            if (hasSelection)
+            {
+                _undoHistorySelectionLabel.text = $"Will undo {UndoActionCountText(selectedIndex + 1)}.";
+                _undoHistorySelectionLabel.color = new Color(1f, 0.68f, 0.36f, 1f);
+            }
+            else
+            {
+                _undoHistorySelectionLabel.text = entries.Length > 0 ? "Select a row first." : "No history.";
+                _undoHistorySelectionLabel.color = new Color(0.82f, 0.86f, 0.9f, 1f);
+            }
         }
 
         for (var i = 0; i < _undoHistoryRows.Count; i++)
@@ -9216,6 +9366,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             var hasEntry = i < entries.Length;
             row.GameObject.SetActive(hasEntry);
             row.Index = hasEntry ? i : -1;
+            row.EntryId = hasEntry ? entries[i].Id : 0;
             if (row.Button != null)
             {
                 row.Button.onClick.RemoveAllListeners();
@@ -9226,13 +9377,13 @@ internal sealed class SuitEditorController : MonoBehaviour
                 continue;
             }
 
-            var rowIndex = i;
+            var rowEntryId = row.EntryId;
             var rowLabel = entries[i].Label;
             if (row.Button != null)
             {
                 row.Button.onClick.AddListener(() =>
                 {
-                    UndoToHistoryIndex(rowIndex);
+                    SelectUndoHistoryEntry(rowEntryId);
                     ClearSelectedNormalButton();
                 });
             }
@@ -9242,7 +9393,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             }
             if (row.Button != null)
             {
-                if (i == 0)
+                if (row.EntryId == _selectedUndoHistoryId)
                 {
                     ApplySelectedListButtonStyle(row.Button);
                 }
@@ -9253,7 +9404,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             }
             else if (row.Image != null)
             {
-                row.Image.color = i == 0
+                row.Image.color = row.EntryId == _selectedUndoHistoryId
                     ? new Color(0.95f, 0.42f, 0.16f, 0.94f)
                     : new Color(0.07f, 0.075f, 0.085f, 0.92f);
             }
