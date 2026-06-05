@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.41
+
+- Replaced the procedural toolbar glyphs with generated embedded PNG icon masks for Paint, Erase, Fill, Decal, Text, Eyedropper, and Mirror.
+- Kept the red terminal toolbar styling, active-state tinting, and mouse/controller button behavior unchanged.
+- Retained the old procedural icon renderer as a diagnostics fallback if an embedded icon asset fails to load.
+
 ## 0.5.40
 
 - Refined the generated Paint, Fill, and Eyedropper tool icons so they read as a paint brush, paint bucket, and eyedropper.

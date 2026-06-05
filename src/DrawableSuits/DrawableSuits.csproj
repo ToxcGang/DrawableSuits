@@ -15,6 +15,16 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="Assets\ToolIcons\paint.png" />
+    <EmbeddedResource Include="Assets\ToolIcons\erase.png" />
+    <EmbeddedResource Include="Assets\ToolIcons\fill.png" />
+    <EmbeddedResource Include="Assets\ToolIcons\decal.png" />
+    <EmbeddedResource Include="Assets\ToolIcons\text.png" />
+    <EmbeddedResource Include="Assets\ToolIcons\eyedropper.png" />
+    <EmbeddedResource Include="Assets\ToolIcons\mirror.png" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Reference Include="BepInEx">
       <HintPath>$(LocalNuGetPackageRoot)bepinex.baselib\5.4.20\lib\netstandard2.0\BepInEx.dll</HintPath>
       <Private>false</Private>

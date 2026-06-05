@@ -84,6 +84,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private static readonly Color TerminalSliderTrackColor = new(0.13f, 0.015f, 0.015f, 1f);
     private static readonly Color TerminalSliderFillColor = new(0.82f, 0.06f, 0.035f, 1f);
     private static readonly Color TerminalOutlineColor = new(0.42f, 0.025f, 0.02f, 0.9f);
+    private static readonly Dictionary<ToolIconKind, Texture2D> ToolIconTextureCache = new();
 
     private readonly Stack<UndoHistoryEntry> _undo = new();
     private readonly Stack<UndoHistoryEntry> _redo = new();
@@ -2680,16 +2681,115 @@ internal sealed class SuitEditorController : MonoBehaviour
         colors.selectedColor = colors.normalColor;
         button.colors = colors;
 
-        var iconObject = CreateUiObject("Icon", go.transform, typeof(RectTransform), typeof(DrawableToolIconGraphic));
+        var iconObject = CreateUiObject("Icon", go.transform, typeof(RectTransform));
         var iconRect = iconObject.GetComponent<RectTransform>();
-        iconRect.anchorMin = Vector2.zero;
-        iconRect.anchorMax = Vector2.one;
-        iconRect.offsetMin = new Vector2(7f, 5f);
-        iconRect.offsetMax = new Vector2(-7f, -5f);
-        iconObject.GetComponent<DrawableToolIconGraphic>().Configure(iconKind, TerminalTextColor);
+        iconRect.anchorMin = new Vector2(0.5f, 0.5f);
+        iconRect.anchorMax = new Vector2(0.5f, 0.5f);
+        iconRect.pivot = new Vector2(0.5f, 0.5f);
+        iconRect.anchoredPosition = Vector2.zero;
+        iconRect.sizeDelta = new Vector2(28f, 28f);
 
-        DrawableSuitsDiagnostics.Info($"IconButtonBuilt: name={toolName}; icon={iconKind}; rect={rect}");
+        var iconTexture = LoadToolIconTexture(iconKind);
+        if (iconTexture != null)
+        {
+            var rawImage = iconObject.AddComponent<RawImage>();
+            rawImage.texture = iconTexture;
+            rawImage.color = TerminalTextColor;
+            rawImage.raycastTarget = false;
+            DrawableSuitsDiagnostics.Info($"IconButtonBuilt: name={toolName}; icon={iconKind}; source=EmbeddedPng; texture={iconTexture.width}x{iconTexture.height}; rect={rect}");
+        }
+        else
+        {
+            var fallbackIcon = iconObject.AddComponent<DrawableToolIconGraphic>();
+            fallbackIcon.Configure(iconKind, TerminalTextColor);
+            DrawableSuitsDiagnostics.Warn($"IconButtonBuilt: name={toolName}; icon={iconKind}; source=ProceduralFallback; rect={rect}");
+        }
+
         return button;
+    }
+
+    private static Texture2D LoadToolIconTexture(ToolIconKind iconKind)
+    {
+        if (ToolIconTextureCache.TryGetValue(iconKind, out var cached))
+        {
+            return cached;
+        }
+
+        var fileName = ToolIconFileName(iconKind);
+        var requestedResourceName = $"DrawableSuits.Assets.ToolIcons.{fileName}";
+        var assembly = typeof(SuitEditorController).Assembly;
+        var resourceName = requestedResourceName;
+        var stream = assembly.GetManifestResourceStream(resourceName);
+        if (stream == null)
+        {
+            foreach (var candidate in assembly.GetManifestResourceNames())
+            {
+                if (candidate.EndsWith($".Assets.ToolIcons.{fileName}", StringComparison.OrdinalIgnoreCase))
+                {
+                    resourceName = candidate;
+                    stream = assembly.GetManifestResourceStream(candidate);
+                    break;
+                }
+            }
+        }
+
+        if (stream == null)
+        {
+            DrawableSuitsDiagnostics.Warn($"ToolIconAssetFallback: icon={iconKind}; requestedResource={requestedResourceName}; reason=resource not found");
+            ToolIconTextureCache[iconKind] = null;
+            return null;
+        }
+
+        using (stream)
+        {
+            var bytes = new byte[stream.Length];
+            var offset = 0;
+            while (offset < bytes.Length)
+            {
+                var read = stream.Read(bytes, offset, bytes.Length - offset);
+                if (read <= 0)
+                {
+                    break;
+                }
+
+                offset += read;
+            }
+
+            var texture = new Texture2D(2, 2, TextureFormat.RGBA32, false)
+            {
+                name = $"DrawableSuitsToolIcon_{iconKind}",
+                filterMode = FilterMode.Bilinear,
+                wrapMode = TextureWrapMode.Clamp,
+                hideFlags = HideFlags.HideAndDontSave
+            };
+
+            if (!ImageConversion.LoadImage(texture, bytes, false))
+            {
+                UnityEngine.Object.Destroy(texture);
+                DrawableSuitsDiagnostics.Warn($"ToolIconAssetFallback: icon={iconKind}; resource={resourceName}; bytes={bytes.Length}; reason=LoadImage failed");
+                ToolIconTextureCache[iconKind] = null;
+                return null;
+            }
+
+            ToolIconTextureCache[iconKind] = texture;
+            DrawableSuitsDiagnostics.Info($"ToolIconAssetLoaded: icon={iconKind}; resource={resourceName}; texture={texture.width}x{texture.height}; bytes={bytes.Length}");
+            return texture;
+        }
+    }
+
+    private static string ToolIconFileName(ToolIconKind iconKind)
+    {
+        return iconKind switch
+        {
+            ToolIconKind.Paint => "paint.png",
+            ToolIconKind.Erase => "erase.png",
+            ToolIconKind.Fill => "fill.png",
+            ToolIconKind.Decal => "decal.png",
+            ToolIconKind.Text => "text.png",
+            ToolIconKind.Eyedropper => "eyedropper.png",
+            ToolIconKind.Mirror => "mirror.png",
+            _ => iconKind.ToString().ToLowerInvariant() + ".png"
+        };
     }
 
     private static Button CreateAnchoredButton(Transform parent, string text, Rect rect, Action onClick)
@@ -4001,12 +4101,20 @@ internal sealed class SuitEditorController : MonoBehaviour
         colors.pressedColor = TerminalButtonPressedColor;
         button.colors = colors;
 
-        var icon = button.GetComponentInChildren<DrawableToolIconGraphic>(true);
+        var iconColor = button.interactable
+            ? (selected ? TerminalTextColor : new Color(0.88f, 0.34f, 0.24f, 1f))
+            : new Color(0.38f, 0.28f, 0.25f, 0.9f);
+        var iconTransform = button.transform.Find("Icon");
+        var iconImage = iconTransform != null ? iconTransform.GetComponent<RawImage>() : null;
+        if (iconImage != null)
+        {
+            iconImage.color = iconColor;
+        }
+
+        var icon = iconTransform != null ? iconTransform.GetComponent<DrawableToolIconGraphic>() : null;
         if (icon != null)
         {
-            icon.SetIconColor(button.interactable
-                ? (selected ? TerminalTextColor : new Color(0.88f, 0.34f, 0.24f, 1f))
-                : new Color(0.38f, 0.28f, 0.25f, 0.9f));
+            icon.SetIconColor(iconColor);
         }
     }
 
