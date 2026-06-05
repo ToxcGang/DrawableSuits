@@ -132,7 +132,7 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.41 behavior:
+Expected 0.5.42 behavior:
 
 - Opening the editor shows an Imperium-inspired red/dark terminal overlay and a third-person camera view of the local player.
 - Paint, Erase, Fill, Decal, Text, Eyedropper, and Mirror use embedded generated PNG icon masks instead of large text tool buttons or procedural mesh glyphs. The active tool label names the current icon, and Mirror remains a UI-only modifier.

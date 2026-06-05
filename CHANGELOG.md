@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.42
+
+- Replaced the package icon with the new terminal artwork, cropped and resized for the 256x256 mod icon.
+
 ## 0.5.41
 
 - Replaced the procedural toolbar glyphs with generated embedded PNG icon masks for Paint, Erase, Fill, Decal, Text, Eyedropper, and Mirror.
