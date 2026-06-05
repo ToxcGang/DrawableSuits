@@ -132,10 +132,11 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.39 behavior:
+Expected 0.5.40 behavior:
 
 - Opening the editor shows an Imperium-inspired red/dark terminal overlay and a third-person camera view of the local player.
 - Paint, Erase, Fill, Decal, Text, Eyedropper, and Mirror use generated icon buttons instead of large text tool buttons. The active tool label names the current icon, and Mirror remains a UI-only modifier.
+- Paint, Fill, and Eyedropper icons should read clearly as a paint brush, paint bucket, and eyedropper.
 - The editor edits only the local player's currently worn suit. The old Previous, Use Current, and Next suit-selection buttons are not present.
 - The diagnostics text should show `Preview mode: WorldThirdPerson` when the default path succeeds.
 - The UV texture panel is visible at the same time as the third-person suit and can be edited directly by moving the cursor over it.

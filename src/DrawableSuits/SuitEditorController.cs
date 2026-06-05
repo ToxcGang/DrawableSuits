@@ -779,9 +779,13 @@ internal sealed class SuitEditorController : MonoBehaviour
             switch (_kind)
             {
                 case ToolIconKind.Paint:
-                    AddLine(vh, rect, new Vector2(-0.28f, -0.28f), new Vector2(0.18f, 0.18f), 0.085f, color);
-                    AddLine(vh, rect, new Vector2(0.1f, 0.28f), new Vector2(0.28f, 0.1f), 0.12f, color);
-                    AddLine(vh, rect, new Vector2(-0.34f, -0.34f), new Vector2(-0.16f, -0.34f), 0.035f, color);
+                    AddLine(vh, rect, new Vector2(-0.34f, -0.3f), new Vector2(0.03f, 0.07f), 0.075f, color);
+                    AddRotatedBox(vh, rect, new Vector2(0.12f, 0.16f), new Vector2(0.22f, 0.11f), 45f, color);
+                    AddPolygon(vh, rect, color,
+                        new Vector2(0.2f, 0.22f),
+                        new Vector2(0.38f, 0.36f),
+                        new Vector2(0.31f, 0.09f));
+                    AddLine(vh, rect, new Vector2(-0.36f, -0.38f), new Vector2(-0.12f, -0.38f), 0.04f, color);
                     break;
                 case ToolIconKind.Erase:
                     AddLine(vh, rect, new Vector2(-0.26f, -0.05f), new Vector2(0.18f, 0.28f), 0.18f, color);
@@ -789,10 +793,14 @@ internal sealed class SuitEditorController : MonoBehaviour
                     AddLine(vh, rect, new Vector2(0.05f, -0.02f), new Vector2(0.24f, 0.12f), 0.04f, color);
                     break;
                 case ToolIconKind.Fill:
-                    AddLine(vh, rect, new Vector2(-0.25f, 0.08f), new Vector2(0.08f, 0.3f), 0.08f, color);
-                    AddLine(vh, rect, new Vector2(0.08f, 0.3f), new Vector2(0.26f, -0.05f), 0.08f, color);
-                    AddLine(vh, rect, new Vector2(-0.26f, 0.08f), new Vector2(0.22f, -0.12f), 0.07f, color);
-                    AddBox(vh, rect, new Vector2(0.24f, -0.32f), new Vector2(0.08f, 0.12f), color);
+                    AddPolygon(vh, rect, color,
+                        new Vector2(-0.3f, 0.18f),
+                        new Vector2(0.11f, 0.31f),
+                        new Vector2(0.3f, -0.05f),
+                        new Vector2(-0.12f, -0.23f));
+                    AddLine(vh, rect, new Vector2(-0.23f, 0.25f), new Vector2(0.02f, 0.34f), 0.04f, color);
+                    AddLine(vh, rect, new Vector2(-0.02f, -0.18f), new Vector2(0.29f, -0.3f), 0.055f, color);
+                    AddDrop(vh, rect, new Vector2(0.34f, -0.36f), 0.07f, color);
                     break;
                 case ToolIconKind.Decal:
                     AddLine(vh, rect, new Vector2(-0.32f, -0.28f), new Vector2(0.32f, -0.28f), 0.045f, color);
@@ -809,9 +817,14 @@ internal sealed class SuitEditorController : MonoBehaviour
                     AddBox(vh, rect, new Vector2(0f, -0.32f), new Vector2(0.28f, 0.07f), color);
                     break;
                 case ToolIconKind.Eyedropper:
-                    AddLine(vh, rect, new Vector2(-0.24f, -0.26f), new Vector2(0.24f, 0.22f), 0.075f, color);
-                    AddLine(vh, rect, new Vector2(0.11f, 0.31f), new Vector2(0.31f, 0.11f), 0.08f, color);
-                    AddLine(vh, rect, new Vector2(-0.34f, -0.34f), new Vector2(-0.12f, -0.26f), 0.04f, color);
+                    AddFilledCircle(vh, rect, new Vector2(0.25f, 0.28f), 0.085f, color);
+                    AddLine(vh, rect, new Vector2(0.18f, 0.2f), new Vector2(-0.18f, -0.16f), 0.08f, color);
+                    AddLine(vh, rect, new Vector2(0.04f, 0.24f), new Vector2(0.29f, -0.01f), 0.045f, color);
+                    AddPolygon(vh, rect, color,
+                        new Vector2(-0.19f, -0.17f),
+                        new Vector2(-0.33f, -0.34f),
+                        new Vector2(-0.12f, -0.25f));
+                    AddDrop(vh, rect, new Vector2(-0.36f, -0.39f), 0.045f, color);
                     break;
                 case ToolIconKind.Mirror:
                     AddLine(vh, rect, new Vector2(0f, -0.34f), new Vector2(0f, 0.34f), 0.045f, color);
@@ -825,10 +838,82 @@ internal sealed class SuitEditorController : MonoBehaviour
             }
         }
 
+        private static void AddRotatedBox(VertexHelper vh, Rect rect, Vector2 center, Vector2 size, float angleDegrees, Color color)
+        {
+            var half = size * 0.5f;
+            var radians = angleDegrees * Mathf.Deg2Rad;
+            var cos = Mathf.Cos(radians);
+            var sin = Mathf.Sin(radians);
+            Vector2 Rotate(Vector2 point)
+            {
+                return center + new Vector2(point.x * cos - point.y * sin, point.x * sin + point.y * cos);
+            }
+
+            AddQuad(vh,
+                ToRectPoint(rect, Rotate(new Vector2(-half.x, -half.y))),
+                ToRectPoint(rect, Rotate(new Vector2(-half.x, half.y))),
+                ToRectPoint(rect, Rotate(new Vector2(half.x, half.y))),
+                ToRectPoint(rect, Rotate(new Vector2(half.x, -half.y))),
+                color);
+        }
+
         private static void AddBox(VertexHelper vh, Rect rect, Vector2 center, Vector2 size, Color color)
         {
             var half = size * 0.5f;
             AddQuad(vh, ToRectPoint(rect, center + new Vector2(-half.x, -half.y)), ToRectPoint(rect, center + new Vector2(-half.x, half.y)), ToRectPoint(rect, center + new Vector2(half.x, half.y)), ToRectPoint(rect, center + new Vector2(half.x, -half.y)), color);
+        }
+
+        private static void AddPolygon(VertexHelper vh, Rect rect, Color color, params Vector2[] points)
+        {
+            if (points == null || points.Length < 3)
+            {
+                return;
+            }
+
+            var start = vh.currentVertCount;
+            var vertex = UIVertex.simpleVert;
+            vertex.color = color;
+            for (var i = 0; i < points.Length; i++)
+            {
+                vertex.position = ToRectPoint(rect, points[i]);
+                vh.AddVert(vertex);
+            }
+
+            for (var i = 1; i < points.Length - 1; i++)
+            {
+                vh.AddTriangle(start, start + i, start + i + 1);
+            }
+        }
+
+        private static void AddFilledCircle(VertexHelper vh, Rect rect, Vector2 center, float radius, Color color, int segments = 16)
+        {
+            var start = vh.currentVertCount;
+            var vertex = UIVertex.simpleVert;
+            vertex.color = color;
+            vertex.position = ToRectPoint(rect, center);
+            vh.AddVert(vertex);
+
+            for (var i = 0; i <= segments; i++)
+            {
+                var angle = (i / (float)segments) * Mathf.PI * 2f;
+                var point = center + new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * radius;
+                vertex.position = ToRectPoint(rect, point);
+                vh.AddVert(vertex);
+            }
+
+            for (var i = 1; i <= segments; i++)
+            {
+                vh.AddTriangle(start, start + i, start + i + 1);
+            }
+        }
+
+        private static void AddDrop(VertexHelper vh, Rect rect, Vector2 center, float radius, Color color)
+        {
+            AddFilledCircle(vh, rect, center + new Vector2(0f, -radius * 0.2f), radius * 0.72f, color, 12);
+            AddPolygon(vh, rect, color,
+                center + new Vector2(0f, radius),
+                center + new Vector2(-radius * 0.48f, -radius * 0.12f),
+                center + new Vector2(radius * 0.48f, -radius * 0.12f));
         }
 
         private static void AddLine(VertexHelper vh, Rect rect, Vector2 start, Vector2 end, float thickness, Color color)

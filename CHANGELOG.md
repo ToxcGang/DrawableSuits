@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.40
+
+- Refined the generated Paint, Fill, and Eyedropper tool icons so they read as a paint brush, paint bucket, and eyedropper.
+- Kept the 0.5.39 terminal UI style and existing button/controller behavior unchanged.
+
 ## 0.5.39
 
 - Restyled the editor with an Imperium-inspired red/dark terminal overlay.
