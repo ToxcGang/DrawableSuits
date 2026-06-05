@@ -5,7 +5,7 @@ DrawableSuits is a Lethal Company v81 BepInEx mod that lets players draw on suit
 ## Features
 
 - Default third-person paint editor: opening DrawableSuits switches to an editor camera around the local player so you can paint directly on the visible suit.
-- Compact side overlay with Paint, Erase, Fill, Decal, Text, Eyedropper, a UI-only Mirror toggle, brush shape selector, brush/fill sliders, a hue/SV color picker, persistent recent color swatches, decal/text controls, design name, visible decal rows, a Saved Designs menu, share-code import/export, Undo, Redo, a selectable labeled undo history panel, Reset, Apply, Save, and Close.
+- Imperium-inspired terminal overlay with red/dark panels, icon-based Paint, Erase, Fill, Decal, Text, Eyedropper, and Mirror tool buttons, brush shape selector, brush/fill sliders, a hue/SV color picker, persistent recent color swatches, decal/text controls, design name, visible decal rows, a Saved Designs menu, share-code import/export, Undo, Redo, a selectable labeled undo history panel, Reset, Apply, Save, and Close.
 - The editor always edits the local player's currently worn suit. Manual cross-suit selection is not available in the editor.
 - Fill Bucket flood-fills contiguous matching texture regions under the cursor using the current brush color, opacity, and Fill Tolerance slider.
 - Brush shapes for Paint and Erase: Circle, Square, Pixel, Spray Paint, Soft Airbrush, and Noise/Scatter.
@@ -39,6 +39,7 @@ Keyboard and mouse:
 - `F10`: emergency open.
 - Left mouse: paint/erase continuously; in Fill mode, fill once per press; in Decal or Text mode, stamp one preview at the cursor location.
 - Brush Shape: choose Circle, Square, Pixel, Spray Paint, Soft Airbrush, or Noise/Scatter from the Brush dropdown. Pixel ignores the brush size slider and edits one texture pixel.
+- Tool icons: Paint, Erase, Fill, Decal, Text, Eyedropper, and Mirror are selected with compact red icon buttons. The active tool label names the current icon selection.
 - Recent Colors: click a recent swatch below the color picker to restore that brush color. Colors are added only after Paint, Fill, or Text successfully writes onto the suit.
 - Fill: click the `Fill` UI button, adjust Fill Tolerance if needed, then left-click a contiguous color region on the suit.
 - Text: click the `Text` UI button, type up to 64 characters, then left-click the suit to stamp it. Text uses the current brush color and opacity.
@@ -58,6 +59,7 @@ Controller:
 - `View/Back + Y`: open or close.
 - Left stick: move the editor cursor.
 - `A`: click the button, field, slider, or color picker region directly under the cursor.
+- Tool icons: move the virtual cursor over a red icon button and press `A`; the active tool label confirms the selected tool.
 - Text: move the virtual cursor over the `Text` UI button and press `A`, type text with the UI field, then aim at the suit and press right trigger once to stamp it.
 - Fill: move the virtual cursor over the `Fill` UI button and press `A`, adjust Fill Tolerance if needed, then aim at a matching color region and press right trigger once.
 - Brush Shape: move the virtual cursor over the Brush Shape dropdown and press `A`, then pick a shape with `A`.
@@ -130,9 +132,10 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.38 behavior:
+Expected 0.5.39 behavior:
 
-- Opening the editor shows a compact side overlay and a third-person camera view of the local player.
+- Opening the editor shows an Imperium-inspired red/dark terminal overlay and a third-person camera view of the local player.
+- Paint, Erase, Fill, Decal, Text, Eyedropper, and Mirror use generated icon buttons instead of large text tool buttons. The active tool label names the current icon, and Mirror remains a UI-only modifier.
 - The editor edits only the local player's currently worn suit. The old Previous, Use Current, and Next suit-selection buttons are not present.
 - The diagnostics text should show `Preview mode: WorldThirdPerson` when the default path succeeds.
 - The UV texture panel is visible at the same time as the third-person suit and can be edited directly by moving the cursor over it.

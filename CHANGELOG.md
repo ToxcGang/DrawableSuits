@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.39
+
+- Restyled the editor with an Imperium-inspired red/dark terminal overlay.
+- Replaced the tool text buttons with generated icon buttons for Paint, Erase, Fill, Decal, Text, Eyedropper, and Mirror.
+- Added active-tool labeling and refreshed button, slider, list, input, modal, and diagnostics styling while preserving existing editor behavior.
+
 ## 0.5.38
 
 - Changed Undo History's selected-row action to undo only the selected history entry instead of undoing every newer entry.

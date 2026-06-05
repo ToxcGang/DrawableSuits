@@ -52,11 +52,38 @@ internal sealed class SuitEditorController : MonoBehaviour
         NoiseScatter
     }
 
+    private enum ToolIconKind
+    {
+        Paint,
+        Erase,
+        Fill,
+        Decal,
+        Text,
+        Eyedropper,
+        Mirror
+    }
+
     private const int EditorCanvasSortingOrder = 32760;
     private const int MaxRecentColors = 12;
     private const float DotCursorRootSize = 17f;
     private const float DotCursorBackSize = 15f;
     private const float DotCursorFrontSize = 9f;
+
+    private static readonly Color TerminalPanelColor = new(0.018f, 0.022f, 0.024f, 0.88f);
+    private static readonly Color TerminalDialogColor = new(0.022f, 0.024f, 0.026f, 0.98f);
+    private static readonly Color TerminalCardColor = new(0.02f, 0.022f, 0.026f, 0.88f);
+    private static readonly Color TerminalInputColor = new(0.09f, 0.012f, 0.012f, 0.9f);
+    private static readonly Color TerminalButtonColor = new(0.105f, 0.012f, 0.012f, 0.94f);
+    private static readonly Color TerminalButtonPressedColor = new(0.45f, 0.035f, 0.025f, 1f);
+    private static readonly Color TerminalAccentColor = new(0.72f, 0.055f, 0.035f, 1f);
+    private static readonly Color TerminalAccentHotColor = new(1f, 0.22f, 0.12f, 1f);
+    private static readonly Color TerminalTextColor = new(0.94f, 0.88f, 0.78f, 1f);
+    private static readonly Color TerminalMutedTextColor = new(0.72f, 0.66f, 0.58f, 1f);
+    private static readonly Color TerminalStatusColor = new(1f, 0.42f, 0.18f, 1f);
+    private static readonly Color TerminalDiagnosticsColor = new(0.86f, 0.75f, 0.64f, 1f);
+    private static readonly Color TerminalSliderTrackColor = new(0.13f, 0.015f, 0.015f, 1f);
+    private static readonly Color TerminalSliderFillColor = new(0.82f, 0.06f, 0.035f, 1f);
+    private static readonly Color TerminalOutlineColor = new(0.42f, 0.025f, 0.02f, 0.9f);
 
     private readonly Stack<UndoHistoryEntry> _undo = new();
     private readonly Stack<UndoHistoryEntry> _redo = new();
@@ -288,6 +315,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Text _statusLabel;
     private Text _diagnosticsLabel;
     private Text _fallbackDiagnosticsLabel;
+    private Text _activeToolLabel;
     private Text _brushSizeLabel;
     private Text _brushOpacityLabel;
     private Text _brushShapeLabel;
@@ -719,6 +747,127 @@ internal sealed class SuitEditorController : MonoBehaviour
         internal float Yaw;
         internal float Pitch;
         internal float Distance;
+    }
+
+    private sealed class DrawableToolIconGraphic : Graphic
+    {
+        private ToolIconKind _kind;
+
+        internal void Configure(ToolIconKind kind, Color iconColor)
+        {
+            _kind = kind;
+            color = iconColor;
+            raycastTarget = false;
+            SetVerticesDirty();
+        }
+
+        internal void SetIconColor(Color iconColor)
+        {
+            color = iconColor;
+            SetVerticesDirty();
+        }
+
+        protected override void OnPopulateMesh(VertexHelper vh)
+        {
+            vh.Clear();
+            var rect = rectTransform.rect;
+            if (rect.width <= 0.1f || rect.height <= 0.1f)
+            {
+                return;
+            }
+
+            switch (_kind)
+            {
+                case ToolIconKind.Paint:
+                    AddLine(vh, rect, new Vector2(-0.28f, -0.28f), new Vector2(0.18f, 0.18f), 0.085f, color);
+                    AddLine(vh, rect, new Vector2(0.1f, 0.28f), new Vector2(0.28f, 0.1f), 0.12f, color);
+                    AddLine(vh, rect, new Vector2(-0.34f, -0.34f), new Vector2(-0.16f, -0.34f), 0.035f, color);
+                    break;
+                case ToolIconKind.Erase:
+                    AddLine(vh, rect, new Vector2(-0.26f, -0.05f), new Vector2(0.18f, 0.28f), 0.18f, color);
+                    AddLine(vh, rect, new Vector2(-0.32f, -0.24f), new Vector2(0.22f, -0.24f), 0.045f, color);
+                    AddLine(vh, rect, new Vector2(0.05f, -0.02f), new Vector2(0.24f, 0.12f), 0.04f, color);
+                    break;
+                case ToolIconKind.Fill:
+                    AddLine(vh, rect, new Vector2(-0.25f, 0.08f), new Vector2(0.08f, 0.3f), 0.08f, color);
+                    AddLine(vh, rect, new Vector2(0.08f, 0.3f), new Vector2(0.26f, -0.05f), 0.08f, color);
+                    AddLine(vh, rect, new Vector2(-0.26f, 0.08f), new Vector2(0.22f, -0.12f), 0.07f, color);
+                    AddBox(vh, rect, new Vector2(0.24f, -0.32f), new Vector2(0.08f, 0.12f), color);
+                    break;
+                case ToolIconKind.Decal:
+                    AddLine(vh, rect, new Vector2(-0.32f, -0.28f), new Vector2(0.32f, -0.28f), 0.045f, color);
+                    AddLine(vh, rect, new Vector2(-0.32f, 0.28f), new Vector2(0.32f, 0.28f), 0.045f, color);
+                    AddLine(vh, rect, new Vector2(-0.32f, -0.28f), new Vector2(-0.32f, 0.28f), 0.045f, color);
+                    AddLine(vh, rect, new Vector2(0.32f, -0.28f), new Vector2(0.32f, 0.28f), 0.045f, color);
+                    AddLine(vh, rect, new Vector2(-0.22f, -0.18f), new Vector2(-0.02f, 0.08f), 0.04f, color);
+                    AddLine(vh, rect, new Vector2(-0.02f, 0.08f), new Vector2(0.24f, -0.18f), 0.04f, color);
+                    AddBox(vh, rect, new Vector2(0.16f, 0.12f), new Vector2(0.08f, 0.08f), color);
+                    break;
+                case ToolIconKind.Text:
+                    AddBox(vh, rect, new Vector2(0f, 0.28f), new Vector2(0.56f, 0.08f), color);
+                    AddBox(vh, rect, new Vector2(0f, 0f), new Vector2(0.1f, 0.64f), color);
+                    AddBox(vh, rect, new Vector2(0f, -0.32f), new Vector2(0.28f, 0.07f), color);
+                    break;
+                case ToolIconKind.Eyedropper:
+                    AddLine(vh, rect, new Vector2(-0.24f, -0.26f), new Vector2(0.24f, 0.22f), 0.075f, color);
+                    AddLine(vh, rect, new Vector2(0.11f, 0.31f), new Vector2(0.31f, 0.11f), 0.08f, color);
+                    AddLine(vh, rect, new Vector2(-0.34f, -0.34f), new Vector2(-0.12f, -0.26f), 0.04f, color);
+                    break;
+                case ToolIconKind.Mirror:
+                    AddLine(vh, rect, new Vector2(0f, -0.34f), new Vector2(0f, 0.34f), 0.045f, color);
+                    AddLine(vh, rect, new Vector2(-0.32f, 0.12f), new Vector2(-0.08f, 0.12f), 0.055f, color);
+                    AddLine(vh, rect, new Vector2(-0.32f, 0.12f), new Vector2(-0.2f, 0.24f), 0.045f, color);
+                    AddLine(vh, rect, new Vector2(-0.32f, 0.12f), new Vector2(-0.2f, 0f), 0.045f, color);
+                    AddLine(vh, rect, new Vector2(0.08f, -0.12f), new Vector2(0.32f, -0.12f), 0.055f, color);
+                    AddLine(vh, rect, new Vector2(0.32f, -0.12f), new Vector2(0.2f, 0f), 0.045f, color);
+                    AddLine(vh, rect, new Vector2(0.32f, -0.12f), new Vector2(0.2f, -0.24f), 0.045f, color);
+                    break;
+            }
+        }
+
+        private static void AddBox(VertexHelper vh, Rect rect, Vector2 center, Vector2 size, Color color)
+        {
+            var half = size * 0.5f;
+            AddQuad(vh, ToRectPoint(rect, center + new Vector2(-half.x, -half.y)), ToRectPoint(rect, center + new Vector2(-half.x, half.y)), ToRectPoint(rect, center + new Vector2(half.x, half.y)), ToRectPoint(rect, center + new Vector2(half.x, -half.y)), color);
+        }
+
+        private static void AddLine(VertexHelper vh, Rect rect, Vector2 start, Vector2 end, float thickness, Color color)
+        {
+            var from = ToRectPoint(rect, start);
+            var to = ToRectPoint(rect, end);
+            var direction = to - from;
+            if (direction.sqrMagnitude <= 0.001f)
+            {
+                return;
+            }
+
+            var normal = new Vector2(-direction.y, direction.x).normalized * (Mathf.Min(rect.width, rect.height) * thickness * 0.5f);
+            AddQuad(vh, from - normal, from + normal, to + normal, to - normal, color);
+        }
+
+        private static Vector2 ToRectPoint(Rect rect, Vector2 normalized)
+        {
+            return new Vector2(
+                rect.x + (normalized.x + 0.5f) * rect.width,
+                rect.y + (normalized.y + 0.5f) * rect.height);
+        }
+
+        private static void AddQuad(VertexHelper vh, Vector2 a, Vector2 b, Vector2 c, Vector2 d, Color color)
+        {
+            var start = vh.currentVertCount;
+            var vertex = UIVertex.simpleVert;
+            vertex.color = color;
+            vertex.position = a;
+            vh.AddVert(vertex);
+            vertex.position = b;
+            vh.AddVert(vertex);
+            vertex.position = c;
+            vh.AddVert(vertex);
+            vertex.position = d;
+            vh.AddVert(vertex);
+            vh.AddTriangle(start, start + 1, start + 2);
+            vh.AddTriangle(start + 2, start + 3, start);
+        }
     }
 
     private sealed class DisabledGameplayActionState    {
@@ -1963,42 +2112,49 @@ internal sealed class SuitEditorController : MonoBehaviour
         _panelRect.sizeDelta = new Vector2(620f, 1010f);
 
         var panelImage = panel.GetComponent<Image>();
-        panelImage.color = new Color(0.025f, 0.03f, 0.035f, 0.88f);
+        panelImage.color = TerminalPanelColor;
+        ApplyTerminalOutline(panel, TerminalOutlineColor);
 
         const float leftX = 18f;
         const float leftW = 274f;
         const float rightX = 314f;
         const float rightW = 286f;
 
-        CreateAnchoredText(panel.transform, "Title", $"{PluginInfo.Name} {PluginInfo.Version}", 24, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 12f, 360f, 34f), new Color(1f, 0.62f, 0.25f, 1f));
+        CreateAnchoredText(panel.transform, "Title", $"{PluginInfo.Name} {PluginInfo.Version}", 24, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 12f, 360f, 34f), TerminalStatusColor);
         CreateAnchoredButton(panel.transform, "Close", new Rect(512f, 14f, 88f, 34f), CloseEditor);
-        _suitLabel = CreateAnchoredText(panel.transform, "SuitLabel", string.Empty, 18, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 54f, 420f, 28f), Color.white);
-        _statusLabel = CreateAnchoredText(panel.transform, "StatusLabel", string.Empty, 15, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 86f, leftW, 46f), new Color(1f, 0.58f, 0.28f, 1f));
-        _statusLabel.color = new Color(1f, 0.58f, 0.28f, 1f);
-        _diagnosticsLabel = CreateAnchoredText(panel.transform, "DiagnosticsLabel", string.Empty, 12, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 138f, leftW, 128f), new Color(0.78f, 0.86f, 1f, 1f));
-        _diagnosticsLabel.color = new Color(0.78f, 0.86f, 1f, 1f);
+        _suitLabel = CreateAnchoredText(panel.transform, "SuitLabel", string.Empty, 18, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 54f, 420f, 28f), TerminalTextColor);
+        _statusLabel = CreateAnchoredText(panel.transform, "StatusLabel", string.Empty, 15, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 86f, leftW, 46f), TerminalStatusColor);
+        _statusLabel.color = TerminalStatusColor;
+        _diagnosticsLabel = CreateAnchoredText(panel.transform, "DiagnosticsLabel", string.Empty, 12, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 138f, leftW, 128f), TerminalDiagnosticsColor);
+        _diagnosticsLabel.color = TerminalDiagnosticsColor;
 
-        CreateAnchoredText(panel.transform, "ToolHeader", "Tool", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 282f, leftW, 24f), Color.white);
-        _paintButton = CreateAnchoredButton(panel.transform, "Paint", new Rect(leftX, 310f, 64f, 30f), () => SetTool(EditorTool.Paint));
-        _eraseButton = CreateAnchoredButton(panel.transform, "Erase", new Rect(leftX + 70f, 310f, 64f, 30f), () => SetTool(EditorTool.Erase));
-        _fillButton = CreateAnchoredButton(panel.transform, "Fill", new Rect(leftX + 140f, 310f, 64f, 30f), () => SetTool(EditorTool.FillBucket));
-        _mirrorButton = CreateAnchoredButton(panel.transform, "Mirror", new Rect(leftX + 210f, 310f, 64f, 30f), ToggleMirror);
-        _decalButton = CreateAnchoredButton(panel.transform, "Decal", new Rect(leftX, 346f, 64f, 30f), () => SetTool(EditorTool.Decal));
-        _textButton = CreateAnchoredButton(panel.transform, "Text", new Rect(leftX + 70f, 346f, 64f, 30f), () => SetTool(EditorTool.Text));
-        _eyedropperButton = CreateAnchoredButton(panel.transform, "Eyedropper", new Rect(leftX + 140f, 346f, 134f, 30f), () => SetTool(EditorTool.Eyedropper));
+        CreateSectionDivider(panel.transform, new Rect(leftX, 274f, leftW, 1f));
+        CreateAnchoredText(panel.transform, "ToolHeader", "Tools", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 282f, 72f, 24f), TerminalTextColor);
+        _activeToolLabel = CreateAnchoredText(panel.transform, "ActiveToolLabel", string.Empty, 13, FontStyle.Normal, TextAnchor.MiddleRight, new Rect(leftX + 86f, 282f, leftW - 86f, 24f), TerminalMutedTextColor);
+        const float toolIcon = 42f;
+        const float toolGap = 8f;
+        _paintButton = CreateAnchoredIconButton(panel.transform, "Paint", ToolIconKind.Paint, new Rect(leftX, 310f, toolIcon, 34f), () => SetTool(EditorTool.Paint));
+        _eraseButton = CreateAnchoredIconButton(panel.transform, "Erase", ToolIconKind.Erase, new Rect(leftX + (toolIcon + toolGap), 310f, toolIcon, 34f), () => SetTool(EditorTool.Erase));
+        _fillButton = CreateAnchoredIconButton(panel.transform, "Fill", ToolIconKind.Fill, new Rect(leftX + (toolIcon + toolGap) * 2f, 310f, toolIcon, 34f), () => SetTool(EditorTool.FillBucket));
+        _mirrorButton = CreateAnchoredIconButton(panel.transform, "Mirror", ToolIconKind.Mirror, new Rect(leftX + (toolIcon + toolGap) * 3f, 310f, toolIcon, 34f), ToggleMirror);
+        _decalButton = CreateAnchoredIconButton(panel.transform, "Decal", ToolIconKind.Decal, new Rect(leftX, 352f, toolIcon, 34f), () => SetTool(EditorTool.Decal));
+        _textButton = CreateAnchoredIconButton(panel.transform, "Text", ToolIconKind.Text, new Rect(leftX + (toolIcon + toolGap), 352f, toolIcon, 34f), () => SetTool(EditorTool.Text));
+        _eyedropperButton = CreateAnchoredIconButton(panel.transform, "Eyedropper", ToolIconKind.Eyedropper, new Rect(leftX + (toolIcon + toolGap) * 2f, 352f, toolIcon, 34f), () => SetTool(EditorTool.Eyedropper));
 
-        CreateAnchoredText(panel.transform, "BrushHeader", "Brush", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 394f, leftW, 24f), Color.white);
-        _brushShapeLabel = CreateAnchoredText(panel.transform, "BrushShapeLabel", "Shape", 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 424f, 94f, 24f), Color.white);
+        CreateSectionDivider(panel.transform, new Rect(leftX, 390f, leftW, 1f));
+        CreateAnchoredText(panel.transform, "BrushHeader", "Brush", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 394f, leftW, 24f), TerminalTextColor);
+        _brushShapeLabel = CreateAnchoredText(panel.transform, "BrushShapeLabel", "Shape", 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 424f, 94f, 24f), TerminalTextColor);
         _brushShapeButton = CreateAnchoredButton(panel.transform, BrushShapeDisplayName(_brushShape), new Rect(leftX + 100f, 420f, 174f, 30f), ToggleBrushShapeMenu);
         BuildBrushShapeMenu(panel.transform, new Rect(leftX + 100f, 452f, 174f, 178f));
-        _brushSizeLabel = CreateAnchoredText(panel.transform, "BrushSizeLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 458f, 94f, 24f), Color.white);
+        _brushSizeLabel = CreateAnchoredText(panel.transform, "BrushSizeLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 458f, 94f, 24f), TerminalTextColor);
         _brushSizeSlider = CreateAnchoredSlider(panel.transform, "BrushSize", 1f, 96f, _brushSize, new Rect(leftX + 100f, 460f, 174f, 24f), value => _brushSize = value);
-        _brushOpacityLabel = CreateAnchoredText(panel.transform, "BrushOpacityLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 492f, 94f, 24f), Color.white);
+        _brushOpacityLabel = CreateAnchoredText(panel.transform, "BrushOpacityLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 492f, 94f, 24f), TerminalTextColor);
         _brushOpacitySlider = CreateAnchoredSlider(panel.transform, "BrushOpacity", 0.05f, 1f, _brushOpacity, new Rect(leftX + 100f, 494f, 174f, 24f), value => _brushOpacity = value);
-        _fillToleranceLabel = CreateAnchoredText(panel.transform, "FillToleranceLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 526f, 104f, 24f), Color.white);
+        _fillToleranceLabel = CreateAnchoredText(panel.transform, "FillToleranceLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 526f, 104f, 24f), TerminalTextColor);
         _fillToleranceSlider = CreateAnchoredSlider(panel.transform, "FillTolerance", 0f, 0.5f, _fillTolerance, new Rect(leftX + 110f, 528f, 164f, 24f), value => _fillTolerance = value);
 
-        CreateAnchoredText(panel.transform, "ColorHeader", "Color", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 564f, leftW, 24f), Color.white);
+        CreateSectionDivider(panel.transform, new Rect(leftX, 556f, leftW, 1f));
+        CreateAnchoredText(panel.transform, "ColorHeader", "Color", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 564f, leftW, 24f), TerminalTextColor);
         _colorPicker = CreateAnchoredColorPicker(panel.transform, new Rect(leftX, 588f, leftW, 104f), _brushColor, color =>
         {
             _brushColor = color;
@@ -2006,14 +2162,15 @@ internal sealed class SuitEditorController : MonoBehaviour
         }, out _colorSwatch, out _colorHexInput);
         _colorHexInput.onValueChanged.AddListener(PreviewHexInput);
         _colorHexInput.onEndEdit.AddListener(ApplyHexInput);
-        _recentColorsLabel = CreateAnchoredText(panel.transform, "RecentColorsHeader", "Recent Colors", 14, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 704f, leftW, 22f), Color.white);
+        _recentColorsLabel = CreateAnchoredText(panel.transform, "RecentColorsHeader", "Recent Colors", 14, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 704f, leftW, 22f), TerminalTextColor);
         BuildRecentColorSwatches(panel.transform, new Rect(leftX, 730f, leftW, 64f));
 
         _uvFallbackButton = CreateAnchoredButton(panel.transform, "Use UV Fallback", new Rect(rightX, 54f, 150f, 34f), ToggleUvFallback);
-        CreateAnchoredText(panel.transform, "WorldHelp", "Third-person mode: aim at the visible suit and hold left mouse or right trigger to paint. Eyedropper samples once, then returns to the previous tool. Right mouse/right stick or bumpers orbit. Wheel or D-pad up/down zooms.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(rightX, 96f, rightW, 76f), new Color(0.86f, 0.9f, 0.94f, 1f));
+        CreateAnchoredText(panel.transform, "WorldHelp", "Aim at suit or UV panel. Hold paint/erase; RT stamps or samples. Orbit: right mouse/stick. Zoom: wheel/D-pad.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(rightX, 96f, rightW, 76f), TerminalMutedTextColor);
 
-        _placementHeaderLabel = CreateAnchoredText(panel.transform, "PlacementHeader", "Decal", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 188f, rightW, 24f), Color.white);
-        _decalSizeLabel = CreateAnchoredText(panel.transform, "DecalSizeLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(rightX, 218f, 112f, 24f), Color.white);
+        CreateSectionDivider(panel.transform, new Rect(rightX, 180f, rightW, 1f));
+        _placementHeaderLabel = CreateAnchoredText(panel.transform, "PlacementHeader", "Decal", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 188f, rightW, 24f), TerminalTextColor);
+        _decalSizeLabel = CreateAnchoredText(panel.transform, "DecalSizeLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(rightX, 218f, 112f, 24f), TerminalTextColor);
         _decalSizeSlider = CreateAnchoredSlider(panel.transform, "DecalSize", 16f, 512f, _decalSize, new Rect(rightX + 120f, 220f, 160f, 24f), value =>
         {
             if (_tool == EditorTool.Text)
@@ -2026,7 +2183,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             }
             InvalidateDecalPreview("placement size changed");
         });
-        _decalRotationLabel = CreateAnchoredText(panel.transform, "DecalRotationLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(rightX, 252f, 112f, 24f), Color.white);
+        _decalRotationLabel = CreateAnchoredText(panel.transform, "DecalRotationLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(rightX, 252f, 112f, 24f), TerminalTextColor);
         _decalRotationSlider = CreateAnchoredSlider(panel.transform, "DecalRotation", -180f, 180f, _decalRotation, new Rect(rightX + 120f, 254f, 160f, 24f), value =>
         {
             if (_tool == EditorTool.Text)
@@ -2051,7 +2208,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         CreateAnchoredButton(panel.transform, "Refresh Decals", new Rect(rightX + 150f, 290f, 136f, 34f), ImportDecalFromDialog);
         _decalListContent = CreateAnchoredScrollList(panel.transform, "DecalList", new Rect(rightX, 334f, rightW, 84f));
 
-        CreateAnchoredText(panel.transform, "DesignHeader", "Design Name", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 590f, rightW, 24f), Color.white);
+        CreateSectionDivider(panel.transform, new Rect(rightX, 580f, rightW, 1f));
+        CreateAnchoredText(panel.transform, "DesignHeader", "Design Name", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 590f, rightW, 24f), TerminalTextColor);
         _designNameInput = CreateAnchoredInputField(panel.transform, _designName, new Rect(rightX, 620f, rightW, 34f));
         _designNameInput.onValueChanged.AddListener(value => _designName = value);
 
@@ -2073,7 +2231,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         _saveButton = CreateAnchoredButton(panel.transform, "Save", new Rect(rightX + 92f, 750f, 84f, 34f), SaveDesign);
         _savedDesignsButton = CreateAnchoredButton(panel.transform, "Designs", new Rect(rightX + 184f, 750f, 84f, 34f), OpenSavedDesignsPanel);
 
-        CreateAnchoredText(panel.transform, "UndoHistoryHeader", "Undo History", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 804f, rightW, 24f), Color.white);
+        CreateSectionDivider(panel.transform, new Rect(rightX, 796f, rightW, 1f));
+        CreateAnchoredText(panel.transform, "UndoHistoryHeader", "Undo History", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 804f, rightW, 24f), TerminalTextColor);
         BuildUndoHistoryPanel(panel.transform, new Rect(rightX, 828f, rightW, 118f));
 
         var fallbackPreview = CreateUiObject("PreviewViewport", panel.transform, typeof(RectTransform), typeof(Image));
@@ -2081,8 +2240,9 @@ internal sealed class SuitEditorController : MonoBehaviour
         SetAnchoredRect(_previewViewportRect, new Rect(rightX, 430f, rightW, 142f));
         fallbackPreview.transform.SetSiblingIndex(_decalListContent != null ? _decalListContent.GetSiblingIndex() + 1 : fallbackPreview.transform.GetSiblingIndex());
         var previewBackground = fallbackPreview.GetComponent<Image>();
-        previewBackground.color = new Color(0.025f, 0.028f, 0.032f, 1f);
+        previewBackground.color = new Color(0.015f, 0.016f, 0.018f, 1f);
         previewBackground.raycastTarget = true;
+        ApplyTerminalOutline(fallbackPreview, TerminalOutlineColor);
 
         var previewImageObject = CreateUiObject("TexturePreviewImage", fallbackPreview.transform, typeof(RectTransform), typeof(RawImage));
         var previewImageRect = previewImageObject.GetComponent<RectTransform>();
@@ -2126,7 +2286,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         _brushIndicator.gameObject.SetActive(false);
         fallbackPreview.SetActive(false);
 
-        CreateAnchoredText(panel.transform, "ControllerHelp", "Controller: left stick cursor, A clicks UI, RT paints/samples, X undo, Start save.", 12, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 960f, leftW, 34f), Color.white);
+        CreateAnchoredText(panel.transform, "ControllerHelp", "Controller: left stick cursor, A click, RT use, X undo, Start save.", 12, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 960f, leftW, 34f), TerminalMutedTextColor);
 
         BuildDesignCodePanel();
         BuildSavedDesignsPanel();
@@ -2136,6 +2296,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         UpdateUiState();
         RebuildSelectableNavigation();
         LogEditorControlTree(panel.transform);
+        DrawableSuitsDiagnostics.Info($"EditorThemeBuilt: theme=ImperiumInspiredTerminal; iconButtons=True; panelColor={panelImage.color}; accent={TerminalAccentColor}; text={TerminalTextColor}");
         DrawableSuitsDiagnostics.Info($"BuildEditorCanvas complete. childCount={_editorCanvasObject.transform.childCount}; panelChildren={panel.transform.childCount}; graphicRaycaster={_editorCanvasObject.GetComponent<GraphicRaycaster>() != null}; mode=compactThirdPerson");
     }
 
@@ -2159,11 +2320,12 @@ internal sealed class SuitEditorController : MonoBehaviour
         dialogRect.anchoredPosition = Vector2.zero;
         dialogRect.sizeDelta = new Vector2(760f, 430f);
         var dialogImage = dialog.GetComponent<Image>();
-        dialogImage.color = new Color(0.025f, 0.03f, 0.035f, 0.98f);
+        dialogImage.color = TerminalDialogColor;
         dialogImage.raycastTarget = true;
+        ApplyTerminalOutline(dialog, TerminalOutlineColor);
 
-        CreateAnchoredText(dialog.transform, "DesignCodeTitle", "Design Code Import / Export", 22, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(18f, 14f, 560f, 34f), new Color(1f, 0.62f, 0.25f, 1f));
-        CreateAnchoredText(dialog.transform, "DesignCodeHelp", "Export creates a compact shareable DSUIT2 code for the current editable texture. Import accepts DSUIT2 or legacy DSUIT1 codes into the current suit only; press Save or Apply when ready.", 14, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(18f, 54f, 724f, 48f), Color.white);
+        CreateAnchoredText(dialog.transform, "DesignCodeTitle", "Design Code Import / Export", 22, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(18f, 14f, 560f, 34f), TerminalStatusColor);
+        CreateAnchoredText(dialog.transform, "DesignCodeHelp", "Export creates a compact shareable DSUIT2 code for the current editable texture. Import accepts DSUIT2 or legacy DSUIT1 codes into the current suit only; press Save or Apply when ready.", 14, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(18f, 54f, 724f, 48f), TerminalTextColor);
 
         _designCodeInput = CreateAnchoredInputField(dialog.transform, "DesignCodeInput", string.Empty, new Rect(18f, 112f, 724f, 194f));
         _designCodeInput.lineType = InputField.LineType.MultiLineNewline;
@@ -2178,7 +2340,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         CreateAnchoredButton(dialog.transform, "Import", new Rect(260f, 320f, 98f, 34f), ImportDesignCodeFromField);
         CreateAnchoredButton(dialog.transform, "Close", new Rect(644f, 320f, 98f, 34f), CloseDesignCodePanel);
 
-        _designCodeStatusLabel = CreateAnchoredText(dialog.transform, "DesignCodeStatus", string.Empty, 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(18f, 366f, 724f, 46f), new Color(1f, 0.74f, 0.42f, 1f));
+        _designCodeStatusLabel = CreateAnchoredText(dialog.transform, "DesignCodeStatus", string.Empty, 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(18f, 366f, 724f, 46f), TerminalStatusColor);
         _designCodePanelObject.SetActive(false);
         DrawableSuitsDiagnostics.Info("DesignCodePanel built.");
     }
@@ -2203,17 +2365,18 @@ internal sealed class SuitEditorController : MonoBehaviour
         dialogRect.anchoredPosition = Vector2.zero;
         dialogRect.sizeDelta = new Vector2(520f, 520f);
         var dialogImage = dialog.GetComponent<Image>();
-        dialogImage.color = new Color(0.025f, 0.03f, 0.035f, 0.98f);
+        dialogImage.color = TerminalDialogColor;
         dialogImage.raycastTarget = true;
+        ApplyTerminalOutline(dialog, TerminalOutlineColor);
 
-        CreateAnchoredText(dialog.transform, "SavedDesignsTitle", "Saved Designs", 22, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(18f, 14f, 360f, 34f), new Color(1f, 0.62f, 0.25f, 1f));
-        CreateAnchoredText(dialog.transform, "SavedDesignsHelp", "Select a saved design, then load it into the current suit. Save and Apply stay explicit.", 14, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(18f, 54f, 484f, 42f), Color.white);
+        CreateAnchoredText(dialog.transform, "SavedDesignsTitle", "Saved Designs", 22, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(18f, 14f, 360f, 34f), TerminalStatusColor);
+        CreateAnchoredText(dialog.transform, "SavedDesignsHelp", "Select a saved design, then load it into the current suit. Save and Apply stay explicit.", 14, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(18f, 54f, 484f, 42f), TerminalTextColor);
         _designListContent = CreateAnchoredScrollList(dialog.transform, "DesignList", new Rect(18f, 104f, 484f, 276f));
 
         _loadSelectedDesignButton = CreateAnchoredButton(dialog.transform, "Load Selected", new Rect(18f, 394f, 132f, 34f), LoadSelectedDesign);
         CreateAnchoredButton(dialog.transform, "Refresh", new Rect(160f, 394f, 94f, 34f), RefreshSavedDesignsPanel);
         CreateAnchoredButton(dialog.transform, "Close", new Rect(404f, 394f, 98f, 34f), CloseSavedDesignsPanel);
-        _savedDesignsStatusLabel = CreateAnchoredText(dialog.transform, "SavedDesignsStatus", string.Empty, 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(18f, 442f, 484f, 48f), new Color(1f, 0.74f, 0.42f, 1f));
+        _savedDesignsStatusLabel = CreateAnchoredText(dialog.transform, "SavedDesignsStatus", string.Empty, 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(18f, 442f, 484f, 48f), TerminalStatusColor);
 
         _savedDesignsPanelObject.SetActive(false);
         DrawableSuitsDiagnostics.Info("SavedDesignsPanel built.");
@@ -2386,13 +2549,72 @@ internal sealed class SuitEditorController : MonoBehaviour
         return label;
     }
 
+    private static void CreateSectionDivider(Transform parent, Rect rect)
+    {
+        var go = CreateUiObject("TerminalDivider", parent, typeof(RectTransform), typeof(Image));
+        SetAnchoredRect(go.GetComponent<RectTransform>(), rect);
+        var image = go.GetComponent<Image>();
+        image.color = new Color(TerminalAccentColor.r, TerminalAccentColor.g, TerminalAccentColor.b, 0.45f);
+        image.raycastTarget = false;
+    }
+
+    private static void ApplyTerminalOutline(GameObject go, Color color)
+    {
+        if (go == null)
+        {
+            return;
+        }
+
+        var outline = go.GetComponent<Outline>() ?? go.AddComponent<Outline>();
+        outline.effectColor = color;
+        outline.effectDistance = new Vector2(1.25f, -1.25f);
+        outline.useGraphicAlpha = true;
+    }
+
+    private static Button CreateAnchoredIconButton(Transform parent, string toolName, ToolIconKind iconKind, Rect rect, Action onClick)
+    {
+        var go = CreateUiObject(toolName + "IconButton", parent, typeof(RectTransform), typeof(Image), typeof(Button));
+        SetAnchoredRect(go.GetComponent<RectTransform>(), rect);
+
+        var image = go.GetComponent<Image>();
+        image.color = TerminalButtonColor;
+        ApplyTerminalOutline(go, TerminalOutlineColor);
+
+        var button = go.GetComponent<Button>();
+        button.targetGraphic = image;
+        button.onClick.AddListener(() =>
+        {
+            onClick?.Invoke();
+            ClearSelectedNormalButton();
+        });
+
+        var colors = button.colors;
+        colors.normalColor = TerminalButtonColor;
+        colors.highlightedColor = new Color(0.2f, 0.02f, 0.018f, 1f);
+        colors.pressedColor = TerminalButtonPressedColor;
+        colors.selectedColor = colors.normalColor;
+        button.colors = colors;
+
+        var iconObject = CreateUiObject("Icon", go.transform, typeof(RectTransform), typeof(DrawableToolIconGraphic));
+        var iconRect = iconObject.GetComponent<RectTransform>();
+        iconRect.anchorMin = Vector2.zero;
+        iconRect.anchorMax = Vector2.one;
+        iconRect.offsetMin = new Vector2(7f, 5f);
+        iconRect.offsetMax = new Vector2(-7f, -5f);
+        iconObject.GetComponent<DrawableToolIconGraphic>().Configure(iconKind, TerminalTextColor);
+
+        DrawableSuitsDiagnostics.Info($"IconButtonBuilt: name={toolName}; icon={iconKind}; rect={rect}");
+        return button;
+    }
+
     private static Button CreateAnchoredButton(Transform parent, string text, Rect rect, Action onClick)
     {
         var go = CreateUiObject(text + "Button", parent, typeof(RectTransform), typeof(Image), typeof(Button));
         SetAnchoredRect(go.GetComponent<RectTransform>(), rect);
 
         var image = go.GetComponent<Image>();
-        image.color = new Color(0.14f, 0.15f, 0.16f, 0.98f);
+        image.color = TerminalButtonColor;
+        ApplyTerminalOutline(go, TerminalOutlineColor);
 
         var button = go.GetComponent<Button>();
         button.targetGraphic = image;
@@ -2405,11 +2627,11 @@ internal sealed class SuitEditorController : MonoBehaviour
         var colors = button.colors;
         colors.normalColor = image.color;
         colors.highlightedColor = colors.normalColor;
-        colors.pressedColor = new Color(0.34f, 0.36f, 0.38f, 1f);
+        colors.pressedColor = TerminalButtonPressedColor;
         colors.selectedColor = colors.normalColor;
         button.colors = colors;
 
-        var label = CreateAnchoredText(go.transform, "Label", text, 15, FontStyle.Normal, TextAnchor.MiddleCenter, new Rect(0f, 0f, rect.width, rect.height), Color.white);
+        var label = CreateAnchoredText(go.transform, "Label", text, 15, FontStyle.Normal, TextAnchor.MiddleCenter, new Rect(0f, 0f, rect.width, rect.height), TerminalTextColor);
         var labelRect = label.GetComponent<RectTransform>();
         labelRect.anchorMin = Vector2.zero;
         labelRect.anchorMax = Vector2.one;
@@ -2438,7 +2660,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             SetAnchoredRect(go.GetComponent<RectTransform>(), new Rect(x, y, size, size));
 
             var image = go.GetComponent<Image>();
-            image.color = new Color(0.06f, 0.065f, 0.07f, 0.95f);
+            image.color = TerminalInputColor;
             image.raycastTarget = true;
 
             var button = go.GetComponent<Button>();
@@ -2469,10 +2691,11 @@ internal sealed class SuitEditorController : MonoBehaviour
         var panel = CreateUiObject("UndoHistoryPanel", parent, typeof(RectTransform), typeof(Image));
         SetAnchoredRect(panel.GetComponent<RectTransform>(), rect);
         var panelImage = panel.GetComponent<Image>();
-        panelImage.color = new Color(0.035f, 0.04f, 0.05f, 0.78f);
+        panelImage.color = TerminalCardColor;
         panelImage.raycastTarget = false;
+        ApplyTerminalOutline(panel, TerminalOutlineColor);
 
-        _undoHistoryEmptyLabel = CreateAnchoredText(panel.transform, "UndoHistoryEmpty", "No undo history", 13, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(8f, 6f, rect.width - 16f, 22f), new Color(0.76f, 0.78f, 0.82f, 1f));
+        _undoHistoryEmptyLabel = CreateAnchoredText(panel.transform, "UndoHistoryEmpty", "No undo history", 13, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(8f, 6f, rect.width - 16f, 22f), TerminalMutedTextColor);
 
         const int rowCount = 4;
         const float rowHeight = 16f;
@@ -2482,14 +2705,14 @@ internal sealed class SuitEditorController : MonoBehaviour
             var rowObject = CreateUiObject($"UndoHistoryRow{i + 1}", panel.transform, typeof(RectTransform), typeof(Image), typeof(Button));
             SetAnchoredRect(rowObject.GetComponent<RectTransform>(), new Rect(6f, 6f + i * (rowHeight + rowSpacing), rect.width - 12f, rowHeight));
             var rowImage = rowObject.GetComponent<Image>();
-            rowImage.color = new Color(0.07f, 0.075f, 0.085f, 0.92f);
+            rowImage.color = TerminalInputColor;
             rowImage.raycastTarget = true;
             var rowButton = rowObject.GetComponent<Button>();
             rowButton.targetGraphic = rowImage;
             rowButton.onClick.RemoveAllListeners();
             ApplyNormalListButtonStyle(rowButton);
 
-            var label = CreateAnchoredText(rowObject.transform, "Label", string.Empty, 12, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(6f, 0f, rect.width - 24f, rowHeight), Color.white);
+            var label = CreateAnchoredText(rowObject.transform, "Label", string.Empty, 12, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(6f, 0f, rect.width - 24f, rowHeight), TerminalTextColor);
             _undoHistoryRows.Add(new UndoHistoryRow
             {
                 GameObject = rowObject,
@@ -2501,7 +2724,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         _undoToSelectedButton = CreateAnchoredButton(panel.transform, "Undo Selected", new Rect(6f, 82f, 132f, 26f), UndoToSelectedHistory);
-        _undoHistorySelectionLabel = CreateAnchoredText(panel.transform, "UndoHistorySelection", "Select a row first.", 11, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(146f, 78f, rect.width - 152f, 34f), new Color(0.82f, 0.86f, 0.9f, 1f));
+        _undoHistorySelectionLabel = CreateAnchoredText(panel.transform, "UndoHistorySelection", "Select a row first.", 11, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(146f, 78f, rect.width - 152f, 34f), TerminalMutedTextColor);
 
         UpdateUndoHistoryUi();
     }
@@ -2512,8 +2735,9 @@ internal sealed class SuitEditorController : MonoBehaviour
         _brushShapeMenuObject = CreateUiObject("BrushShapeDropdown", parent, typeof(RectTransform), typeof(Image));
         SetAnchoredRect(_brushShapeMenuObject.GetComponent<RectTransform>(), rect);
         var image = _brushShapeMenuObject.GetComponent<Image>();
-        image.color = new Color(0.04f, 0.05f, 0.06f, 0.98f);
+        image.color = TerminalDialogColor;
         image.raycastTarget = true;
+        ApplyTerminalOutline(_brushShapeMenuObject, TerminalOutlineColor);
 
         var values = (BrushShape[])Enum.GetValues(typeof(BrushShape));
         for (var i = 0; i < values.Length; i++)
@@ -2552,7 +2776,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         bgRect.offsetMin = new Vector2(0f, -4f);
         bgRect.offsetMax = new Vector2(0f, 4f);
         var backgroundImage = background.GetComponent<Image>();
-        backgroundImage.color = new Color(0.08f, 0.08f, 0.09f, 1f);
+        backgroundImage.color = TerminalSliderTrackColor;
         backgroundImage.raycastTarget = true;
 
         var fill = CreateUiObject("Fill", go.transform, typeof(RectTransform), typeof(Image));
@@ -2563,7 +2787,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         fillRect.offsetMin = new Vector2(0f, -4f);
         fillRect.offsetMax = new Vector2(0f, 4f);
         var fillImage = fill.GetComponent<Image>();
-        fillImage.color = new Color(0.95f, 0.42f, 0.16f, 1f);
+        fillImage.color = TerminalSliderFillColor;
         fillImage.raycastTarget = false;
 
         var handle = CreateUiObject("Handle", go.transform, typeof(RectTransform), typeof(Image));
@@ -2574,7 +2798,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         handleRect.anchoredPosition = Vector2.zero;
         handleRect.sizeDelta = new Vector2(16f, 28f);
         var handleImage = handle.GetComponent<Image>();
-        handleImage.color = Color.white;
+        handleImage.color = TerminalTextColor;
         handleImage.raycastTarget = true;
 
         var slider = go.GetComponent<DrawableSliderControl>();
@@ -2672,7 +2896,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         var go = CreateUiObject(name, parent, typeof(RectTransform), typeof(Image), typeof(InputField));
         SetAnchoredRect(go.GetComponent<RectTransform>(), rect);
-        go.GetComponent<Image>().color = new Color(0.08f, 0.085f, 0.09f, 1f);
+        go.GetComponent<Image>().color = TerminalInputColor;
+        ApplyTerminalOutline(go, TerminalOutlineColor);
 
         var textObject = CreateUiObject("Text", go.transform, typeof(RectTransform), typeof(Text));
         var textRect = textObject.GetComponent<RectTransform>();
@@ -2684,7 +2909,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         var text = textObject.GetComponent<Text>();
         text.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
         text.fontSize = 16;
-        text.color = Color.white;
+        text.color = TerminalTextColor;
         text.alignment = TextAnchor.MiddleLeft;
         text.horizontalOverflow = HorizontalWrapMode.Overflow;
         text.verticalOverflow = VerticalWrapMode.Truncate;
@@ -2694,8 +2919,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         input.textComponent = text;
         input.text = value;
         input.lineType = InputField.LineType.SingleLine;
-        input.caretColor = Color.white;
-        input.selectionColor = new Color(0.95f, 0.42f, 0.16f, 0.45f);
+        input.caretColor = TerminalTextColor;
+        input.selectionColor = new Color(TerminalAccentHotColor.r, TerminalAccentHotColor.g, TerminalAccentHotColor.b, 0.45f);
         return input;
     }
 
@@ -2705,8 +2930,9 @@ internal sealed class SuitEditorController : MonoBehaviour
         var rootRect = root.GetComponent<RectTransform>();
         SetAnchoredRect(rootRect, rect);
         var image = root.GetComponent<Image>();
-        image.color = new Color(0.06f, 0.065f, 0.07f, 0.9f);
+        image.color = TerminalCardColor;
         image.raycastTarget = true;
+        ApplyTerminalOutline(root, TerminalOutlineColor);
         return rootRect;
     }
     private void BeginEditorUiInput()
@@ -3613,7 +3839,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             var color = Color.white;
             var hasColor = i < _recentColors.Count && TryParseHexColor(_recentColors[i], out color);
             button.interactable = hasColor;
-            image.color = hasColor ? color : new Color(0.06f, 0.065f, 0.07f, 0.95f);
+            image.color = hasColor ? color : TerminalInputColor;
 
             var colors = button.colors;
             colors.normalColor = image.color;
@@ -3638,6 +3864,12 @@ internal sealed class SuitEditorController : MonoBehaviour
         SetToolButtonColor(_eyedropperButton, _tool == EditorTool.Eyedropper);
         SetToolButtonColor(_textButton, _tool == EditorTool.Text);
         SetToolButtonColor(_mirrorButton, _mirrorEnabled);
+        if (_activeToolLabel != null)
+        {
+            _activeToolLabel.text = _mirrorEnabled
+                ? $"Active: {ToolDisplayName(_tool)} | Mirror"
+                : $"Active: {ToolDisplayName(_tool)}";
+        }
         UpdateBrushShapeButton();
     }
 
@@ -3670,10 +3902,41 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         var image = button.GetComponent<Image>();
+        var normal = button.interactable ? TerminalButtonColor : new Color(0.04f, 0.02f, 0.02f, 0.72f);
+        var selectedColor = button.interactable ? TerminalAccentColor : new Color(0.16f, 0.035f, 0.03f, 0.72f);
         if (image != null)
         {
-            image.color = selected ? new Color(0.95f, 0.42f, 0.16f, 1f) : new Color(0.14f, 0.15f, 0.16f, 0.98f);
+            image.color = selected ? selectedColor : normal;
         }
+
+        var colors = button.colors;
+        colors.normalColor = selected ? selectedColor : normal;
+        colors.highlightedColor = selected ? TerminalAccentHotColor : normal;
+        colors.selectedColor = colors.normalColor;
+        colors.pressedColor = TerminalButtonPressedColor;
+        button.colors = colors;
+
+        var icon = button.GetComponentInChildren<DrawableToolIconGraphic>(true);
+        if (icon != null)
+        {
+            icon.SetIconColor(button.interactable
+                ? (selected ? TerminalTextColor : new Color(0.88f, 0.34f, 0.24f, 1f))
+                : new Color(0.38f, 0.28f, 0.25f, 0.9f));
+        }
+    }
+
+    private static string ToolDisplayName(EditorTool tool)
+    {
+        return tool switch
+        {
+            EditorTool.Paint => "Paint",
+            EditorTool.Erase => "Erase",
+            EditorTool.FillBucket => "Fill",
+            EditorTool.Decal => "Decal",
+            EditorTool.Eyedropper => "Eyedropper",
+            EditorTool.Text => "Text",
+            _ => tool.ToString()
+        };
     }
 
     private void SetTool(EditorTool tool)
@@ -4068,7 +4331,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         if (pageLabel == null)
         {
-            pageLabel = CreateAnchoredText(content, $"{listName}Page", string.Empty, 12, FontStyle.Normal, TextAnchor.MiddleCenter, new Rect(54f, content.rect.height - 32f, 64f, 26f), Color.white);
+            pageLabel = CreateAnchoredText(content, $"{listName}Page", string.Empty, 12, FontStyle.Normal, TextAnchor.MiddleCenter, new Rect(54f, content.rect.height - 32f, 64f, 26f), TerminalTextColor);
             pageLabel.gameObject.SetActive(false);
         }
 
@@ -4166,13 +4429,14 @@ internal sealed class SuitEditorController : MonoBehaviour
         var image = button.GetComponent<Image>();
         if (image != null)
         {
-            image.color = new Color(0.95f, 0.42f, 0.16f, 1f);
+            image.color = TerminalAccentColor;
         }
 
         var colors = button.colors;
-        colors.normalColor = new Color(0.95f, 0.42f, 0.16f, 1f);
-        colors.highlightedColor = new Color(1f, 0.54f, 0.24f, 1f);
+        colors.normalColor = TerminalAccentColor;
+        colors.highlightedColor = TerminalAccentHotColor;
         colors.selectedColor = colors.highlightedColor;
+        colors.pressedColor = TerminalButtonPressedColor;
         button.colors = colors;
     }
 
@@ -4183,7 +4447,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        var normal = new Color(0.14f, 0.15f, 0.16f, 0.98f);
+        var normal = TerminalButtonColor;
         var image = button.GetComponent<Image>();
         if (image != null)
         {
@@ -4194,7 +4458,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         colors.normalColor = normal;
         colors.highlightedColor = normal;
         colors.selectedColor = normal;
-        colors.pressedColor = new Color(0.34f, 0.36f, 0.38f, 1f);
+        colors.pressedColor = TerminalButtonPressedColor;
         button.colors = colors;
     }
 
@@ -9535,8 +9799,8 @@ internal sealed class SuitEditorController : MonoBehaviour
             else if (row.Image != null)
             {
                 row.Image.color = row.EntryId == _selectedUndoHistoryId
-                    ? new Color(0.95f, 0.42f, 0.16f, 0.94f)
-                    : new Color(0.07f, 0.075f, 0.085f, 0.92f);
+                    ? TerminalAccentColor
+                    : TerminalInputColor;
             }
         }
     }
