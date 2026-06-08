@@ -5,7 +5,7 @@ DrawableSuits is a Lethal Company v81 BepInEx mod that lets players draw on suit
 ## Features
 
 - Default third-person paint editor: opening DrawableSuits switches to an editor camera around the local player so you can paint directly on the visible suit.
-- Imperium-inspired terminal overlay with red/dark panels, generated asset-backed Paint, Erase, Fill, Decal, Text, Sticker, Eyedropper, and Mirror icon buttons, brush shape selector, brush/fill sliders, a hue/SV color picker, persistent recent color swatches, decal/text/sticker controls, design name, visible decal rows, a Saved Designs menu, share-code import/export, Undo, Redo, a selectable labeled undo history panel, Reset, Apply, Save, and Close.
+- Imperium-inspired terminal overlay with red/dark panels, generated asset-backed Paint, Erase, Fill, Decal, Text, Sticker, Eyedropper, and Mirror icon buttons, brush shape selector, brush/fill sliders, a hue/SV color picker, persistent recent color swatches, decal/text/sticker controls, design name, Decals/Stickers/Saved Designs menus, share-code import/export, Undo, Redo, a selectable labeled undo history panel, Reset, Apply, Save, and Close.
 - The editor always edits the local player's currently worn suit. Manual cross-suit selection is not available in the editor.
 - Fill Bucket flood-fills contiguous matching texture regions under the cursor using the current brush color, opacity, and Fill Tolerance slider.
 - Brush shapes for Paint and Erase: Circle, Square, Pixel, Spray Paint, Soft Airbrush, and Noise/Scatter.
@@ -44,7 +44,8 @@ Keyboard and mouse:
 - Recent Colors: click a recent swatch below the color picker to restore that brush color. Colors are added only after Paint, Fill, Text, or Sticker successfully writes onto the suit.
 - Fill: click the `Fill` UI button, adjust Fill Tolerance if needed, then left-click a contiguous color region on the suit.
 - Text: click the `Text` UI button, type up to 64 characters, then left-click the suit to stamp it. Text uses the current brush color and opacity.
-- Sticker: click the `Sticker` UI button, choose a built-in shape, then left-click the suit to stamp it. Stickers use the current brush color and opacity.
+- Decal: click the `Decal` UI button, open the `Decals` menu to choose a decal, then left-click the suit to stamp it.
+- Sticker: click the `Sticker` UI button, open the `Stickers` menu to choose a built-in shape, then left-click the suit to stamp it. Stickers use the current brush color and opacity.
 - Eyedropper: click the `Eyedropper` UI button, then left-click the suit to sample that texture color. It returns to the previous tool after one successful sample.
 - Mirror: click the `Mirror` UI button to duplicate paint, erase, fill, decal stamps, text stamps, and sticker stamps onto the opposite suit surface.
 - Export Code / Import Code: use the design code panel to copy the current editable texture as a compact `DSUIT2:` code or paste a shared `DSUIT2:` or legacy `DSUIT1:` code into the current suit.
@@ -63,7 +64,8 @@ Controller:
 - `A`: click the button, field, slider, or color picker region directly under the cursor.
 - Tool icons: move the virtual cursor over a red icon button and press `A`; the active tool label confirms the selected tool.
 - Text: move the virtual cursor over the `Text` UI button and press `A`, type text with the UI field, then aim at the suit and press right trigger once to stamp it.
-- Sticker: move the virtual cursor over the `Sticker` UI button and press `A`, choose a built-in sticker shape with `A`, then aim at the suit and press right trigger once to stamp it.
+- Decal: move the virtual cursor over the `Decal` UI button and press `A`, open `Decals`, choose a decal row with `A`, then aim at the suit and press right trigger once to stamp it.
+- Sticker: move the virtual cursor over the `Sticker` UI button and press `A`, open `Stickers`, choose a built-in sticker shape with `A`, then aim at the suit and press right trigger once to stamp it.
 - Fill: move the virtual cursor over the `Fill` UI button and press `A`, adjust Fill Tolerance if needed, then aim at a matching color region and press right trigger once.
 - Brush Shape: move the virtual cursor over the Brush Shape dropdown and press `A`, then pick a shape with `A`.
 - Recent Colors: move the virtual cursor over a recent color swatch and press `A` to restore that brush color.
@@ -88,7 +90,7 @@ DrawableSuits creates these folders after launch:
 - `BepInEx/config/DrawableSuits/Decals` stores user decal images.
 - `BepInEx/config/DrawableSuits/Logs` stores the diagnostics log.
 
-Put `.png`, `.jpg`, or `.jpeg` files in `Decals` and press `Refresh Decals` in the editor to use them.
+Put `.png`, `.jpg`, or `.jpeg` files in `Decals`, open the in-game `Decals` menu, and press `Refresh` to use them.
 
 ## Multiplayer
 
@@ -135,7 +137,7 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.43 behavior:
+Expected 0.5.44 behavior:
 
 - Opening the editor shows an Imperium-inspired red/dark terminal overlay and a third-person camera view of the local player.
 - Paint, Erase, Fill, Decal, Text, Sticker, Eyedropper, and Mirror use embedded generated PNG icon masks instead of large text tool buttons or procedural mesh glyphs. The active tool label names the current icon, and Mirror remains a UI-only modifier.
@@ -146,8 +148,8 @@ Expected 0.5.43 behavior:
 - The visible editor model is `DrawableSuitsWorldAvatarProxy`, a baked suit/body proxy on an isolated layer, not the live first-person local rig. First-person helmet/viewmodel renderers are hidden during editing and restored on close.
 - Normal session startup should log `SessionSafetyCheck` with `EditorOpen=False`, no active DrawableSuits cameras, `Camera.main` state, local player state, prompt context, and `jetpackWarningGuard` status.
 - If third-person setup fails, the editor falls back to texture-only `TextureFallback` and logs the reason.
-- The UV texture panel shows the editable texture in a reserved right-column preview slot below the decal list. It should not cover the color picker, brush controls, tools, design controls, or saved-design rows.
-- Decal rows are explicit anchored buttons, and saved designs open in a separate modal menu with larger selectable rows.
+- The UV texture panel shows the editable texture in a reserved right-column preview slot below the placement controls. It should not cover the color picker, brush controls, tools, design controls, or modal selectors.
+- Decals, Stickers, and saved designs open in separate modal menus with larger selectable rows/buttons.
 - Controller right trigger paints only. Camera zoom uses mouse wheel or controller D-pad up/down.
 - Active edited textures are per player/client, not global per suit type.
 - The color changer is a compact side-by-side hue ring and saturation/value square with a swatch and editable `#RRGGBB` hex field.
@@ -158,7 +160,7 @@ Expected 0.5.43 behavior:
 - Third-person camera yaw, pitch, and distance are preserved when loading a design or importing a design code while the editor is open.
 - Controller `A` does not activate UI immediately after opening; move the left stick once to arm the virtual cursor, then `A` clicks the control under the cursor.
 - Normal buttons should not stay highlighted after unrelated clicks; only selected tools, decals, and saved designs keep orange selection styling.
-- The decal section has one `Refresh Decals` button. It refreshes decal and save rows and shows only a short status line.
+- The decal section has a `Decals` menu button. Its modal `Refresh` button refreshes decal rows and shows only a short status line.
 - In Decal mode with a selected decal, hovering over the suit shows a translucent preview and status `Previewing decal. Click/RT to stamp.`
 - Decal placement is single-shot: holding left mouse or RT places one decal until the input is released and pressed again.
 - Third-person Decal preview and stamping project onto the visible suit surface and fill between valid projected samples, so decals avoid both UV-island wrapping and small suit-background cracks on curved geometry. The UV panel keeps direct flat UV decal stamping.
@@ -170,7 +172,7 @@ Expected 0.5.43 behavior:
 - Third-person Text should read left-to-right from the editor camera. Mirrored Text should only appear when the UI-only `Mirror` button is enabled.
 - The UV panel keeps direct flat UV Text stamping for texture-layout editing.
 - Text is baked into the suit texture after stamping. It is not an editable layer after placement.
-- In Sticker mode, the shape selector offers Circle, Square, Triangle, Diamond, Star, Heart, Arrow, Lightning Bolt, Plus/Cross, Ring, Crescent, and Shield. Stickers use the current brush color and opacity, preview live on the suit or UV panel, stamp once per press, and are baked into the texture.
+- In Sticker mode, the `Stickers` menu offers Circle, Square, Triangle, Diamond, Star, Heart, Arrow, Lightning Bolt, Plus/Cross, Ring, Crescent, and Shield. Stickers use the current brush color and opacity, preview live on the suit or UV panel, stamp once per press, and are baked into the texture.
 - The `Fill` button is a UI-only tool. It flood-fills the contiguous same-color region under the cursor using the current brush color and opacity.
 - Fill is single-shot: holding left mouse or controller RT fills once until the input is released and pressed again.
 - The Fill Tolerance slider appears when Fill is active. Lower tolerance fills tighter matching regions; higher tolerance accepts more color variation.
@@ -190,6 +192,7 @@ Expected 0.5.43 behavior:
 Troubleshooting:
 
 - If no decal preview appears, confirm a decal row is selected and Decal tool is active, then check `DecalPreviewUpdated` or `DecalPreviewHidden` diagnostics.
+- If Decal or Sticker preview movement feels laggy, check `PlacementPreviewReused`, `PlacementPreviewThrottled`, `DecalPreviewUpdated`, or `StickerPreviewUpdated` diagnostics. Third-person placement previews are throttled to reduce expensive projection rebuilds, while final stamps still use the full-quality projection path.
 - If decals stamp repeatedly while holding input, confirm the installed package is 0.4.8 or newer and check for `DecalStampCommitted` entries; there should be one per press/release cycle.
 - If Mirror does not appear to find the opposite side, check `MirrorSurfaceMap built` and `MirrorSurfaceTarget` diagnostics. Asymmetric or unusual modded meshes may not have a reliable opposite surface for every hit.
 - If entering a session starts on a black screen before opening DrawableSuits, check `SessionSafetyCheck` lines. They list `Camera.main`, active cameras, camera target textures, local player flags, prompt context such as grab/hover fields, local renderer materials, and any repaired DrawableSuits objects. DrawableSuits should report no active DrawableSuits cameras while `EditorOpen=False`.
@@ -228,7 +231,7 @@ Troubleshooting:
 - If scan, inventory scroll, or item use still happen while the editor is open, check for `Global gameplay actions locked` and `Blocked PlayerControllerB` entries.
 - If keyboard or controller shortcuts do not open the editor, use the pause-menu `DrawableSuits` button.
 - If the mouse cannot move after opening from pause, check cursor unlock and `pointerSource=Mouse` diagnostics.
-- Pressing `Refresh Decals` is safe in-game and shows only a short status line. To import decals, place image files in `BepInEx/config/DrawableSuits/Decals`, then press `Refresh Decals`.
+- Pressing `Refresh` in the `Decals` menu is safe in-game and shows only a short status line. To import decals, place image files in `BepInEx/config/DrawableSuits/Decals`, then open `Decals` and press `Refresh`.
 - If you quit to the main menu while the editor is open, DrawableSuits closes the editor during the scene change so main-menu navigation is restored.
 - Lethal Company v81 uses Unity's Input System path; repeated `UnityEngine.Input` exceptions should not appear from DrawableSuits.
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.44
+
+- Replaced inline decal and sticker selectors with separate modal menus so they no longer cover the UV editor or each other.
+- Fixed the Sticker toolbar icon asset so it tints with the same brightness as the other terminal icons.
+- Reduced third-person Decal and Sticker preview rebuild cost with preview caching, throttling, and coarser hover keys while keeping final stamps full quality.
+
 ## 0.5.43
 
 - Added a UI-only Sticker tool with built-in shape stamps, live preview, one-shot placement, Mirror support, undo history, and recent-color tracking.

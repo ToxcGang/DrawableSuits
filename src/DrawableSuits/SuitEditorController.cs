@@ -86,6 +86,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private const float DotCursorRootSize = 17f;
     private const float DotCursorBackSize = 15f;
     private const float DotCursorFrontSize = 9f;
+    private const float WorldPlacementPreviewMinInterval = 0.05f;
 
     private static readonly Color TerminalPanelColor = new(0.018f, 0.022f, 0.024f, 0.88f);
     private static readonly Color TerminalDialogColor = new(0.022f, 0.024f, 0.026f, 0.98f);
@@ -264,6 +265,16 @@ internal sealed class SuitEditorController : MonoBehaviour
     private float _lastDecalPreviewLogTime;
     private string _lastStickerPreviewLogKey = string.Empty;
     private float _lastStickerPreviewLogTime;
+    private string _lastPlacementPreviewThrottleLogKey = string.Empty;
+    private float _lastPlacementPreviewThrottleLogTime;
+    private string _lastPlacementPreviewReuseLogKey = string.Empty;
+    private float _lastPlacementPreviewReuseLogTime;
+    private string _lastPlacementPreviewRebuildLogKey = string.Empty;
+    private float _lastPlacementPreviewRebuildLogTime;
+    private float _lastWorldPlacementPreviewRebuildTime;
+    private Color32[] _placementPreviewBasePixels;
+    private Texture2D _placementPreviewBaseSource;
+    private int _placementPreviewBaseSerial = -1;
     private string _lastDecalCoverageWarningKey = string.Empty;
     private float _lastDecalCoverageWarningTime;
     private string _lastBrushSurfaceDiagnosticsKey = string.Empty;
@@ -377,6 +388,15 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Button _stickerShapeButton;
     private GameObject _stickerShapeMenuObject;
     private readonly List<Button> _stickerShapeOptionButtons = new();
+    private Text _selectedDecalLabel;
+    private Button _decalsMenuButton;
+    private Text _selectedStickerShapeLabel;
+    private Button _stickersMenuButton;
+    private GameObject _decalsPanelObject;
+    private Text _decalsStatusLabel;
+    private GameObject _stickersPanelObject;
+    private Text _stickersStatusLabel;
+    private readonly List<Button> _stickerPanelShapeButtons = new();
     private readonly List<Button> _recentColorButtons = new(MaxRecentColors);
     private readonly List<Image> _recentColorImages = new(MaxRecentColors);
     private Button _applyButton;
@@ -2063,6 +2083,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         _isOpen = false;
         CloseDesignCodePanel();
         CloseSavedDesignsPanel();
+        CloseDecalsPanel();
+        CloseStickersPanel();
         HideCanvasCursor($"close {reason}", true);
         if (_editorCanvasObject != null)
         {
@@ -2357,10 +2379,11 @@ internal sealed class SuitEditorController : MonoBehaviour
             InvalidateTextStampTexture("text input changed");
             InvalidateDecalPreview("text input changed");
         });
-        _stickerShapeButton = CreateAnchoredButton(panel.transform, StickerShapeDisplayName(_stickerShape), new Rect(rightX, 290f, 142f, 34f), ToggleStickerShapeMenu);
-        BuildStickerShapeMenu(panel.transform, new Rect(rightX, 328f, rightW, 154f));
-        CreateAnchoredButton(panel.transform, "Refresh Decals", new Rect(rightX + 150f, 290f, 136f, 34f), ImportDecalFromDialog);
-        _decalListContent = CreateAnchoredScrollList(panel.transform, "DecalList", new Rect(rightX, 334f, rightW, 84f));
+        _selectedDecalLabel = CreateAnchoredValueLabel(panel.transform, "SelectedDecalLabel", "No decal selected", new Rect(rightX, 334f, rightW, 34f));
+        _decalsMenuButton = CreateAnchoredButton(panel.transform, "Decals", new Rect(rightX + 150f, 290f, 136f, 34f), OpenDecalsPanel);
+        _selectedStickerShapeLabel = CreateAnchoredValueLabel(panel.transform, "SelectedStickerShapeLabel", StickerShapeDisplayName(_stickerShape), new Rect(rightX, 334f, rightW, 34f));
+        _stickersMenuButton = CreateAnchoredButton(panel.transform, "Stickers", new Rect(rightX + 150f, 290f, 136f, 34f), OpenStickersPanel);
+        _stickerShapeButton = _stickersMenuButton;
 
         CreateSectionDivider(panel.transform, new Rect(rightX, 580f, rightW, 1f));
         CreateAnchoredText(panel.transform, "DesignHeader", "Design Name", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 590f, rightW, 24f), TerminalTextColor);
@@ -2444,6 +2467,8 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         BuildDesignCodePanel();
         BuildSavedDesignsPanel();
+        BuildDecalsPanel();
+        BuildStickersPanel();
 
         _editorCanvasObject.SetActive(false);
         RefreshListButtons();
@@ -2534,6 +2559,92 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         _savedDesignsPanelObject.SetActive(false);
         DrawableSuitsDiagnostics.Info("SavedDesignsPanel built.");
+    }
+
+    private void BuildDecalsPanel()
+    {
+        _decalsPanelObject = CreateUiObject("DecalsPanel", _editorCanvasObject.transform, typeof(RectTransform), typeof(Image));
+        var overlayRect = _decalsPanelObject.GetComponent<RectTransform>();
+        overlayRect.anchorMin = Vector2.zero;
+        overlayRect.anchorMax = Vector2.one;
+        overlayRect.offsetMin = Vector2.zero;
+        overlayRect.offsetMax = Vector2.zero;
+        var overlayImage = _decalsPanelObject.GetComponent<Image>();
+        overlayImage.color = new Color(0f, 0f, 0f, 0.28f);
+        overlayImage.raycastTarget = true;
+
+        var dialog = CreateUiObject("DecalsDialog", _decalsPanelObject.transform, typeof(RectTransform), typeof(Image));
+        var dialogRect = dialog.GetComponent<RectTransform>();
+        dialogRect.anchorMin = new Vector2(0.5f, 0.5f);
+        dialogRect.anchorMax = new Vector2(0.5f, 0.5f);
+        dialogRect.pivot = new Vector2(0.5f, 0.5f);
+        dialogRect.anchoredPosition = Vector2.zero;
+        dialogRect.sizeDelta = new Vector2(520f, 520f);
+        var dialogImage = dialog.GetComponent<Image>();
+        dialogImage.color = TerminalDialogColor;
+        dialogImage.raycastTarget = true;
+        ApplyTerminalOutline(dialog, TerminalOutlineColor);
+
+        CreateAnchoredText(dialog.transform, "DecalsTitle", "Decals", 22, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(18f, 14f, 360f, 34f), TerminalStatusColor);
+        CreateAnchoredText(dialog.transform, "DecalsHelp", "Select a decal to load it into the current tool. PNG and JPG files are read from the DrawableSuits Decals folder.", 14, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(18f, 54f, 484f, 42f), TerminalTextColor);
+        _decalListContent = CreateAnchoredScrollList(dialog.transform, "DecalList", new Rect(18f, 104f, 484f, 276f));
+
+        CreateAnchoredButton(dialog.transform, "Refresh", new Rect(18f, 394f, 94f, 34f), RefreshDecalsPanel);
+        CreateAnchoredButton(dialog.transform, "Close", new Rect(404f, 394f, 98f, 34f), CloseDecalsPanel);
+        _decalsStatusLabel = CreateAnchoredText(dialog.transform, "DecalsStatus", string.Empty, 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(18f, 442f, 484f, 48f), TerminalStatusColor);
+
+        _decalsPanelObject.SetActive(false);
+        DrawableSuitsDiagnostics.Info("DecalsPanel built.");
+    }
+
+    private void BuildStickersPanel()
+    {
+        _stickerPanelShapeButtons.Clear();
+        _stickersPanelObject = CreateUiObject("StickersPanel", _editorCanvasObject.transform, typeof(RectTransform), typeof(Image));
+        var overlayRect = _stickersPanelObject.GetComponent<RectTransform>();
+        overlayRect.anchorMin = Vector2.zero;
+        overlayRect.anchorMax = Vector2.one;
+        overlayRect.offsetMin = Vector2.zero;
+        overlayRect.offsetMax = Vector2.zero;
+        var overlayImage = _stickersPanelObject.GetComponent<Image>();
+        overlayImage.color = new Color(0f, 0f, 0f, 0.28f);
+        overlayImage.raycastTarget = true;
+
+        var dialog = CreateUiObject("StickersDialog", _stickersPanelObject.transform, typeof(RectTransform), typeof(Image));
+        var dialogRect = dialog.GetComponent<RectTransform>();
+        dialogRect.anchorMin = new Vector2(0.5f, 0.5f);
+        dialogRect.anchorMax = new Vector2(0.5f, 0.5f);
+        dialogRect.pivot = new Vector2(0.5f, 0.5f);
+        dialogRect.anchoredPosition = Vector2.zero;
+        dialogRect.sizeDelta = new Vector2(520f, 420f);
+        var dialogImage = dialog.GetComponent<Image>();
+        dialogImage.color = TerminalDialogColor;
+        dialogImage.raycastTarget = true;
+        ApplyTerminalOutline(dialog, TerminalOutlineColor);
+
+        CreateAnchoredText(dialog.transform, "StickersTitle", "Stickers", 22, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(18f, 14f, 360f, 34f), TerminalStatusColor);
+        CreateAnchoredText(dialog.transform, "StickersHelp", "Choose a built-in sticker shape. Stickers use the current brush color and opacity, then bake into the suit texture when stamped.", 14, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(18f, 54f, 484f, 42f), TerminalTextColor);
+
+        var values = (StickerShape[])Enum.GetValues(typeof(StickerShape));
+        const int columns = 3;
+        const float buttonWidth = 150f;
+        const float buttonHeight = 34f;
+        const float gap = 12f;
+        for (var i = 0; i < values.Length; i++)
+        {
+            var shape = values[i];
+            var column = i % columns;
+            var row = i / columns;
+            var rect = new Rect(18f + column * (buttonWidth + gap), 108f + row * (buttonHeight + gap), buttonWidth, buttonHeight);
+            var button = CreateAnchoredButton(dialog.transform, StickerShapeDisplayName(shape), rect, () => SelectStickerShape(shape));
+            _stickerPanelShapeButtons.Add(button);
+        }
+
+        CreateAnchoredButton(dialog.transform, "Close", new Rect(404f, 346f, 98f, 34f), CloseStickersPanel);
+        _stickersStatusLabel = CreateAnchoredText(dialog.transform, "StickersStatus", string.Empty, 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(18f, 344f, 380f, 48f), TerminalStatusColor);
+
+        _stickersPanelObject.SetActive(false);
+        DrawableSuitsDiagnostics.Info("StickersPanel built.");
     }
 
     private void BuildFallbackDiagnosticsCanvas(Exception originalException)
@@ -2723,6 +2834,21 @@ internal sealed class SuitEditorController : MonoBehaviour
         outline.effectColor = color;
         outline.effectDistance = new Vector2(1.25f, -1.25f);
         outline.useGraphicAlpha = true;
+    }
+
+    private static Text CreateAnchoredValueLabel(Transform parent, string name, string text, Rect rect)
+    {
+        var go = CreateUiObject(name, parent, typeof(RectTransform), typeof(Image));
+        SetAnchoredRect(go.GetComponent<RectTransform>(), rect);
+        var image = go.GetComponent<Image>();
+        image.color = TerminalInputColor;
+        image.raycastTarget = false;
+        ApplyTerminalOutline(go, TerminalOutlineColor);
+
+        var label = CreateAnchoredText(go.transform, "Label", text, 14, FontStyle.Normal, TextAnchor.MiddleCenter, new Rect(8f, 0f, rect.width - 16f, rect.height), TerminalTextColor);
+        label.horizontalOverflow = HorizontalWrapMode.Overflow;
+        label.verticalOverflow = VerticalWrapMode.Truncate;
+        return label;
     }
 
     private static Button CreateAnchoredIconButton(Transform parent, string toolName, ToolIconKind iconKind, Rect rect, Action onClick)
@@ -3791,6 +3917,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         SetInteractable(_mirrorButton, _canPaint && hasEditableTexture);
         SetInteractable(_brushShapeButton, _canPaint && hasEditableTexture);
         SetInteractable(_stickerShapeButton, _canPaint && hasEditableTexture);
+        SetInteractable(_decalsMenuButton, _canPaint && hasEditableTexture);
+        SetInteractable(_stickersMenuButton, _canPaint && hasEditableTexture);
         SetInteractable(_applyButton, _canPaint && hasEditableTexture);
         SetInteractable(_saveButton, hasEditableTexture);
         SetInteractable(_exportCodeButton, hasEditableTexture);
@@ -3878,6 +4006,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         var fillActive = _tool == EditorTool.FillBucket;
         var stickerActive = _tool == EditorTool.Sticker;
+        var textActive = _tool == EditorTool.Text;
+        var decalControlsActive = !textActive && !stickerActive;
         var pixelBrush = _brushShape == BrushShape.Pixel;
         if (fillActive)
         {
@@ -3914,16 +4044,36 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             _fillToleranceSlider.gameObject.SetActive(fillActive);
         }
-        if (_placementHeaderLabel != null) _placementHeaderLabel.text = _tool == EditorTool.Text ? "Text" : stickerActive ? "Sticker" : "Decal";
-        if (_decalSizeLabel != null) _decalSizeLabel.text = _tool == EditorTool.Text ? $"Height: {Mathf.RoundToInt(_textSize)} px" : stickerActive ? $"Size: {Mathf.RoundToInt(_stickerSize)} px" : $"Size: {Mathf.RoundToInt(_decalSize)} px";
+        if (_placementHeaderLabel != null) _placementHeaderLabel.text = textActive ? "Text" : stickerActive ? "Sticker" : "Decal";
+        if (_decalSizeLabel != null) _decalSizeLabel.text = textActive ? $"Height: {Mathf.RoundToInt(_textSize)} px" : stickerActive ? $"Size: {Mathf.RoundToInt(_stickerSize)} px" : $"Size: {Mathf.RoundToInt(_decalSize)} px";
         if (_decalRotationLabel != null) _decalRotationLabel.text = $"Rotation: {Mathf.RoundToInt(CurrentPlacementRotation())} deg";
         if (_textStampInput != null)
         {
-            _textStampInput.gameObject.SetActive(_tool == EditorTool.Text || _tool == EditorTool.Decal);
+            _textStampInput.gameObject.SetActive(textActive);
         }
         if (_stickerShapeButton != null)
         {
             _stickerShapeButton.gameObject.SetActive(stickerActive);
+        }
+        if (_stickersMenuButton != null)
+        {
+            _stickersMenuButton.gameObject.SetActive(stickerActive);
+        }
+        if (_selectedStickerShapeLabel != null)
+        {
+            _selectedStickerShapeLabel.gameObject.transform.parent.gameObject.SetActive(stickerActive);
+            _selectedStickerShapeLabel.text = StickerShapeDisplayName(_stickerShape);
+        }
+        if (_decalsMenuButton != null)
+        {
+            _decalsMenuButton.gameObject.SetActive(decalControlsActive);
+        }
+        if (_selectedDecalLabel != null)
+        {
+            _selectedDecalLabel.gameObject.transform.parent.gameObject.SetActive(decalControlsActive);
+            _selectedDecalLabel.text = _selectedDecalIndex >= 0 && _selectedDecalIndex < _decalFiles.Count
+                ? Path.GetFileName(_decalFiles[_selectedDecalIndex])
+                : "No decal selected";
         }
     }
 
@@ -4385,19 +4535,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void ToggleStickerShapeMenu()
     {
-        if (_stickerShapeMenuObject == null)
-        {
-            return;
-        }
-
-        var nextState = !_stickerShapeMenuObject.activeSelf;
-        _stickerShapeMenuObject.SetActive(nextState);
-        if (nextState)
-        {
-            _stickerShapeMenuObject.transform.SetAsLastSibling();
-            _canvasCursorObject?.transform.SetAsLastSibling();
-        }
-        DrawableSuitsDiagnostics.Info($"StickerShapeMenuToggled: open={nextState}; shape={_stickerShape}; tool={_tool}; cursor={_cursor}");
+        OpenStickersPanel();
     }
 
     private void HideStickerShapeMenu()
@@ -4412,7 +4550,11 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         if (_stickerShapeButton != null)
         {
-            SetButtonLabel(_stickerShapeButton, StickerShapeDisplayName(_stickerShape));
+            SetButtonLabel(_stickerShapeButton, "Stickers");
+        }
+        if (_selectedStickerShapeLabel != null)
+        {
+            _selectedStickerShapeLabel.text = StickerShapeDisplayName(_stickerShape);
         }
 
         var values = (StickerShape[])Enum.GetValues(typeof(StickerShape));
@@ -4427,12 +4569,24 @@ internal sealed class SuitEditorController : MonoBehaviour
             var selected = i < values.Length && values[i] == _stickerShape;
             SetToolButtonColor(button, selected);
         }
+        for (var i = 0; i < _stickerPanelShapeButtons.Count; i++)
+        {
+            var button = _stickerPanelShapeButtons[i];
+            if (button == null)
+            {
+                continue;
+            }
+
+            var selected = i < values.Length && values[i] == _stickerShape;
+            SetToolButtonColor(button, selected);
+        }
     }
 
     private void SelectStickerShape(StickerShape shape)
     {
         _stickerShape = shape;
         HideStickerShapeMenu();
+        CloseStickersPanel();
         UpdateStickerShapeButton();
         InvalidateDecalPreview("sticker shape changed");
         SetStatus($"Sticker shape: {StickerShapeDisplayName(_stickerShape)}.", false);
@@ -5670,9 +5824,19 @@ internal sealed class SuitEditorController : MonoBehaviour
         return _savedDesignsPanelObject != null && _savedDesignsPanelObject.activeInHierarchy;
     }
 
+    private bool IsDecalsPanelOpen()
+    {
+        return _decalsPanelObject != null && _decalsPanelObject.activeInHierarchy;
+    }
+
+    private bool IsStickersPanelOpen()
+    {
+        return _stickersPanelObject != null && _stickersPanelObject.activeInHierarchy;
+    }
+
     private bool IsEditorModalOpen()
     {
-        return IsDesignCodePanelOpen() || IsSavedDesignsPanelOpen();
+        return IsDesignCodePanelOpen() || IsSavedDesignsPanelOpen() || IsDecalsPanelOpen() || IsStickersPanelOpen();
     }
 
     private Texture2D EnsureCursorDotTexture()
@@ -6037,9 +6201,29 @@ internal sealed class SuitEditorController : MonoBehaviour
         TextSurfaceStampStats primaryStats = default;
         TextSurfaceStampStats mirrorStats = default;
         var previewRebuilt = false;
-        if (!string.Equals(key, _lastDecalPreviewKey, StringComparison.Ordinal))
+        var keyChanged = !string.Equals(key, _lastDecalPreviewKey, StringComparison.Ordinal);
+        if (!keyChanged)
         {
-            _decalPreviewTexture.SetPixels32(sourceTexture.GetPixels32());
+            LogPlacementPreviewReused(key, sourceTexture, hit, stampTexture);
+        }
+        else if (_decalPreviewVisible
+            && _worldDecalPreviewApplied
+            && Time.unscaledTime - _lastWorldPlacementPreviewRebuildTime < WorldPlacementPreviewMinInterval)
+        {
+            LogPlacementPreviewThrottled(key, sourceTexture, hit, stampTexture);
+            SetPlacementPreviewStatus(mirrorTarget);
+            return;
+        }
+
+        if (keyChanged)
+        {
+            var rebuildStart = Time.realtimeSinceStartup;
+            if (!CopySourceTextureToPlacementPreview(sourceTexture, "world placement preview"))
+            {
+                HideDecalPlacementPreview("preview source copy failed", true);
+                return;
+            }
+
             var touchedPixels = mirrorTarget.Enabled && mirrorTarget.Available ? new HashSet<int>() : null;
             var tintWithBrushColor = _tool == EditorTool.Sticker;
             var primaryChanged = CompositeDecalSurfaceStamp(_decalPreviewTexture, stampTexture, hit.point, hit.normal, CurrentPlacementRotation(), false, Mathf.Clamp01(_brushOpacity * 0.62f), touchedPixels, out primaryStats, tintWithBrushColor);
@@ -6065,6 +6249,8 @@ internal sealed class SuitEditorController : MonoBehaviour
 
             _decalPreviewTexture.Apply(false, false);
             _lastDecalPreviewKey = key;
+            _lastWorldPlacementPreviewRebuildTime = Time.unscaledTime;
+            LogPlacementPreviewRebuildTiming(key, sourceTexture, stampTexture, (Time.realtimeSinceStartup - rebuildStart) * 1000f);
             previewRebuilt = true;
         }
 
@@ -6271,6 +6457,96 @@ internal sealed class SuitEditorController : MonoBehaviour
         return true;
     }
 
+    private bool CopySourceTextureToPlacementPreview(Texture2D sourceTexture, string context)
+    {
+        if (sourceTexture == null || _decalPreviewTexture == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            Graphics.CopyTexture(sourceTexture, _decalPreviewTexture);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            var pixelCount = sourceTexture.width * sourceTexture.height;
+            if (_placementPreviewBasePixels == null
+                || _placementPreviewBasePixels.Length != pixelCount
+                || !ReferenceEquals(_placementPreviewBaseSource, sourceTexture)
+                || _placementPreviewBaseSerial != _decalPreviewSerial)
+            {
+                try
+                {
+                    _placementPreviewBasePixels = sourceTexture.GetPixels32();
+                    _placementPreviewBaseSource = sourceTexture;
+                    _placementPreviewBaseSerial = _decalPreviewSerial;
+                }
+                catch (Exception readEx)
+                {
+                    DrawableSuitsDiagnostics.Exception($"PlacementPreview source read failed. context={context}; source={sourceTexture.name}; size={sourceTexture.width}x{sourceTexture.height}; copyException={ex.GetType().Name}: {ex.Message}", readEx);
+                    return false;
+                }
+            }
+
+            _decalPreviewTexture.SetPixels32(_placementPreviewBasePixels);
+            if (Time.unscaledTime - _lastPlacementPreviewThrottleLogTime > 2f)
+            {
+                _lastPlacementPreviewThrottleLogTime = Time.unscaledTime;
+                DrawableSuitsDiagnostics.Warn($"PlacementPreview source copy fallback. context={context}; source={sourceTexture.name}; preview={_decalPreviewTexture.name}; reason={ex.GetType().Name}: {ex.Message}; cachedPixels={_placementPreviewBasePixels.Length}");
+            }
+            return true;
+        }
+    }
+
+    private void LogPlacementPreviewReused(string key, Texture2D sourceTexture, RaycastHit hit, Texture2D stampTexture)
+    {
+        if (string.Equals(key, _lastPlacementPreviewReuseLogKey, StringComparison.Ordinal)
+            || Time.unscaledTime - _lastPlacementPreviewReuseLogTime < 0.75f)
+        {
+            return;
+        }
+
+        _lastPlacementPreviewReuseLogKey = key;
+        _lastPlacementPreviewReuseLogTime = Time.unscaledTime;
+        var pixel = sourceTexture != null
+            ? new Vector2Int(Mathf.RoundToInt(hit.textureCoord.x * (sourceTexture.width - 1)), Mathf.RoundToInt(hit.textureCoord.y * (sourceTexture.height - 1)))
+            : new Vector2Int(-1, -1);
+        DrawableSuitsDiagnostics.Info($"PlacementPreviewReused: tool={_tool}; pixel={pixel.x},{pixel.y}; stamp={stampTexture?.name ?? "null"}; stampSize={stampTexture?.width ?? 0}x{stampTexture?.height ?? 0}; key={key.GetHashCode()}");
+    }
+
+    private void LogPlacementPreviewThrottled(string key, Texture2D sourceTexture, RaycastHit hit, Texture2D stampTexture)
+    {
+        var pixel = sourceTexture != null
+            ? new Vector2Int(Mathf.RoundToInt(hit.textureCoord.x * (sourceTexture.width - 1)), Mathf.RoundToInt(hit.textureCoord.y * (sourceTexture.height - 1)))
+            : new Vector2Int(-1, -1);
+        var logKey = $"{_tool}|{pixel.x},{pixel.y}|{stampTexture?.name ?? "null"}|{Mathf.RoundToInt(CurrentPlacementSize())}|{Mathf.RoundToInt(CurrentPlacementRotation())}";
+        if (string.Equals(logKey, _lastPlacementPreviewThrottleLogKey, StringComparison.Ordinal)
+            && Time.unscaledTime - _lastPlacementPreviewThrottleLogTime < 0.75f)
+        {
+            return;
+        }
+
+        _lastPlacementPreviewThrottleLogKey = logKey;
+        _lastPlacementPreviewThrottleLogTime = Time.unscaledTime;
+        DrawableSuitsDiagnostics.Info($"PlacementPreviewThrottled: tool={_tool}; pixel={pixel.x},{pixel.y}; interval={(Time.unscaledTime - _lastWorldPlacementPreviewRebuildTime):0.###}; minInterval={WorldPlacementPreviewMinInterval:0.###}; stamp={stampTexture?.name ?? "null"}; stampSize={stampTexture?.width ?? 0}x{stampTexture?.height ?? 0}; key={key.GetHashCode()}");
+    }
+
+    private void LogPlacementPreviewRebuildTiming(string key, Texture2D sourceTexture, Texture2D stampTexture, float elapsedMs)
+    {
+        var logKey = $"{_tool}|{sourceTexture?.width ?? 0}x{sourceTexture?.height ?? 0}|{stampTexture?.name ?? "null"}|{Mathf.RoundToInt(CurrentPlacementSize())}|{Mathf.RoundToInt(CurrentPlacementRotation())}";
+        if (string.Equals(logKey, _lastPlacementPreviewRebuildLogKey, StringComparison.Ordinal)
+            && Time.unscaledTime - _lastPlacementPreviewRebuildLogTime < 0.75f)
+        {
+            return;
+        }
+
+        _lastPlacementPreviewRebuildLogKey = logKey;
+        _lastPlacementPreviewRebuildLogTime = Time.unscaledTime;
+        DrawableSuitsDiagnostics.Info($"PlacementPreviewRebuilt: tool={_tool}; source={sourceTexture?.name ?? "null"}; sourceSize={sourceTexture?.width ?? 0}x{sourceTexture?.height ?? 0}; stamp={stampTexture?.name ?? "null"}; stampSize={stampTexture?.width ?? 0}x{stampTexture?.height ?? 0}; elapsedMs={elapsedMs:0.##}; key={key.GetHashCode()}");
+    }
+
     private Material EnsureWorldDecalPreviewMaterial(Texture2D sourceTexture)
     {
         var baseMaterial = DrawableSuitsPlugin.Registry.GetRuntimeMaterial(_selectedSuitId)
@@ -6367,12 +6643,17 @@ internal sealed class SuitEditorController : MonoBehaviour
             _worldDecalPreviewMaterial = null;
         }
         _lastDecalPreviewKey = string.Empty;
+        _placementPreviewBasePixels = null;
+        _placementPreviewBaseSource = null;
+        _placementPreviewBaseSerial = -1;
     }
 
     private void InvalidateDecalPreview(string reason)
     {
         _decalPreviewSerial++;
         _lastDecalPreviewKey = string.Empty;
+        _placementPreviewBaseSource = null;
+        _placementPreviewBaseSerial = -1;
         if (_decalPreviewVisible)
         {
             LogDecalPreviewHidden($"invalidated: {reason}", false);
@@ -6390,9 +6671,9 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         var px = sourceTexture != null ? Mathf.RoundToInt(hit.textureCoord.x * (sourceTexture.width - 1)) : -1;
         var py = sourceTexture != null ? Mathf.RoundToInt(hit.textureCoord.y * (sourceTexture.height - 1)) : -1;
-        var pointKey = $"{Mathf.RoundToInt(hit.point.x * 1000f)},{Mathf.RoundToInt(hit.point.y * 1000f)},{Mathf.RoundToInt(hit.point.z * 1000f)}";
-        var normalKey = $"{Mathf.RoundToInt(hit.normal.x * 1000f)},{Mathf.RoundToInt(hit.normal.y * 1000f)},{Mathf.RoundToInt(hit.normal.z * 1000f)}";
-        return $"{_decalPreviewSerial}|{mode}|tool={_tool}|suit={_selectedSuitId}|pixel={px},{py}|point={pointKey}|normal={normalKey}|mirror={DescribeMirrorTarget(sourceTexture, mirrorTarget)}|size={Mathf.RoundToInt(CurrentPlacementSize())}|rot={Mathf.RoundToInt(CurrentPlacementRotation() * 10f)}|opacity={Mathf.RoundToInt(_brushOpacity * 1000f)}|stamp={CurrentPlacementName()}|stampKey={_textStampTextureKey}|color={ColorToHex(_brushColor)}|texture={sourceTexture?.width ?? 0}x{sourceTexture?.height ?? 0}";
+        var pointKey = $"{Mathf.RoundToInt(hit.point.x * 80f)},{Mathf.RoundToInt(hit.point.y * 80f)},{Mathf.RoundToInt(hit.point.z * 80f)}";
+        var normalKey = $"{Mathf.RoundToInt(hit.normal.x * 24f)},{Mathf.RoundToInt(hit.normal.y * 24f)},{Mathf.RoundToInt(hit.normal.z * 24f)}";
+        return $"{_decalPreviewSerial}|{mode}|tool={_tool}|suit={_selectedSuitId}|pixel={px},{py}|triangle={hit.triangleIndex}|point={pointKey}|normal={normalKey}|mirror={DescribeMirrorTarget(sourceTexture, mirrorTarget)}|size={Mathf.RoundToInt(CurrentPlacementSize())}|rot={Mathf.RoundToInt(CurrentPlacementRotation() * 10f)}|opacity={Mathf.RoundToInt(_brushOpacity * 1000f)}|stamp={CurrentPlacementName()}|stampKey={_textStampTextureKey}|color={ColorToHex(_brushColor)}|texture={sourceTexture?.width ?? 0}x{sourceTexture?.height ?? 0}";
     }
 
     private void SetPlacementPreviewStatus(MirrorPaintTarget mirrorTarget)
@@ -10815,6 +11096,95 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawableSuitsDiagnostics.Info($"SavedDesignsPanelLoaded: designCount={_designFiles.Count}; selectedDesignIndex={_selectedDesignIndex}; selectedDesign={GetSelectedFilePath(_designFiles, _selectedDesignIndex) ?? "none"}");
     }
 
+    private void OpenDecalsPanel()
+    {
+        if (_decalsPanelObject == null)
+        {
+            return;
+        }
+
+        RefreshFileLists();
+        _decalsPanelObject.SetActive(true);
+        SetDecalsStatus(_decalFiles.Count == 0
+            ? "No decals found. Add PNG/JPG files to the Decals folder."
+            : "Select a decal to load it.");
+        UpdateUiState();
+        RebuildSelectableNavigation();
+        DrawableSuitsDiagnostics.Info($"DecalsPanelOpened: decalCount={_decalFiles.Count}; selectedDecalIndex={_selectedDecalIndex}; selectedDecal={GetSelectedFilePath(_decalFiles, _selectedDecalIndex) ?? "none"}");
+    }
+
+    private void CloseDecalsPanel()
+    {
+        var wasOpen = IsDecalsPanelOpen();
+        if (_decalsPanelObject != null)
+        {
+            _decalsPanelObject.SetActive(false);
+        }
+
+        SetDecalsStatus(string.Empty);
+        RebuildSelectableNavigation();
+        if (wasOpen)
+        {
+            DrawableSuitsDiagnostics.Info($"DecalsPanelClosed: selectedDecalIndex={_selectedDecalIndex}; selectedDecal={GetSelectedFilePath(_decalFiles, _selectedDecalIndex) ?? "none"}");
+        }
+    }
+
+    private void RefreshDecalsPanel()
+    {
+        RefreshFileLists();
+        SetDecalsStatus(_decalFiles.Count == 0
+            ? "No decals found."
+            : $"Loaded {_decalFiles.Count} decal{(_decalFiles.Count == 1 ? string.Empty : "s")}.");
+        UpdateUiState();
+        DrawableSuitsDiagnostics.Info($"DecalsPanelRefreshed: decalCount={_decalFiles.Count}; selectedDecalIndex={_selectedDecalIndex}; selectedDecal={GetSelectedFilePath(_decalFiles, _selectedDecalIndex) ?? "none"}");
+    }
+
+    private void SetDecalsStatus(string message)
+    {
+        if (_decalsStatusLabel != null)
+        {
+            _decalsStatusLabel.text = message ?? string.Empty;
+        }
+    }
+
+    private void OpenStickersPanel()
+    {
+        if (_stickersPanelObject == null)
+        {
+            return;
+        }
+
+        _stickersPanelObject.SetActive(true);
+        UpdateStickerShapeButton();
+        SetStickersStatus($"Selected: {StickerShapeDisplayName(_stickerShape)}.");
+        RebuildSelectableNavigation();
+        DrawableSuitsDiagnostics.Info($"StickersPanelOpened: shape={_stickerShape}; display={StickerShapeDisplayName(_stickerShape)}; tool={_tool}; cursor={_cursor}");
+    }
+
+    private void CloseStickersPanel()
+    {
+        var wasOpen = IsStickersPanelOpen();
+        if (_stickersPanelObject != null)
+        {
+            _stickersPanelObject.SetActive(false);
+        }
+
+        SetStickersStatus(string.Empty);
+        RebuildSelectableNavigation();
+        if (wasOpen)
+        {
+            DrawableSuitsDiagnostics.Info($"StickersPanelClosed: shape={_stickerShape}; display={StickerShapeDisplayName(_stickerShape)}");
+        }
+    }
+
+    private void SetStickersStatus(string message)
+    {
+        if (_stickersStatusLabel != null)
+        {
+            _stickersStatusLabel.text = message ?? string.Empty;
+        }
+    }
+
     private void SetSavedDesignsStatus(string message)
     {
         if (_savedDesignsStatusLabel != null)
@@ -10940,8 +11310,10 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         _loadedDecal = TextureTools.LoadImageFile(_decalFiles[index], DrawableSuitsPlugin.ModConfig.MaxTextureSize.Value);
         SetTool(EditorTool.Decal);
+        CloseDecalsPanel();
         RefreshListButtons();
         UpdateUiState();
+        SetStatus($"Decal selected: {Path.GetFileName(_decalFiles[index])}.", false);
         DrawableSuitsDiagnostics.Info($"Selected decal index={index}; file={_decalFiles[index]}; loaded={_loadedDecal != null}");
     }
 
