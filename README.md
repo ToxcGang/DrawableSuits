@@ -5,13 +5,14 @@ DrawableSuits is a Lethal Company v81 BepInEx mod that lets players draw on suit
 ## Features
 
 - Default third-person paint editor: opening DrawableSuits switches to an editor camera around the local player so you can paint directly on the visible suit.
-- Imperium-inspired terminal overlay with red/dark panels, generated asset-backed Paint, Erase, Fill, Decal, Text, Eyedropper, and Mirror icon buttons, brush shape selector, brush/fill sliders, a hue/SV color picker, persistent recent color swatches, decal/text controls, design name, visible decal rows, a Saved Designs menu, share-code import/export, Undo, Redo, a selectable labeled undo history panel, Reset, Apply, Save, and Close.
+- Imperium-inspired terminal overlay with red/dark panels, generated asset-backed Paint, Erase, Fill, Decal, Text, Sticker, Eyedropper, and Mirror icon buttons, brush shape selector, brush/fill sliders, a hue/SV color picker, persistent recent color swatches, decal/text/sticker controls, design name, visible decal rows, a Saved Designs menu, share-code import/export, Undo, Redo, a selectable labeled undo history panel, Reset, Apply, Save, and Close.
 - The editor always edits the local player's currently worn suit. Manual cross-suit selection is not available in the editor.
 - Fill Bucket flood-fills contiguous matching texture regions under the cursor using the current brush color, opacity, and Fill Tolerance slider.
 - Brush shapes for Paint and Erase: Circle, Square, Pixel, Spray Paint, Soft Airbrush, and Noise/Scatter.
-- Mirror painting duplicates Paint, Erase, Fill, Decal, and Text edits onto the opposite suit surface using the editor's baked avatar mesh, without adding keyboard or controller shortcuts.
+- Mirror painting duplicates Paint, Erase, Fill, Decal, Text, and Sticker edits onto the opposite suit surface using the editor's baked avatar mesh, without adding keyboard or controller shortcuts.
 - Decal placement preview: Decal mode shows a translucent live preview before stamping, then places one projected decal per click or right-trigger press in third-person mode.
 - Text stamping: Text mode previews typed single-line text on the suit as a transparent alpha-mask stamp, then bakes it into the texture once per click or right-trigger press. In third-person mode, text is projected onto the visible suit surface instead of stamped as a flat UV rectangle.
+- Sticker stamping: Sticker mode previews built-in transparent shape masks such as Star, Heart, Arrow, Ring, and Shield, then bakes one tinted sticker into the suit texture per click or right-trigger press.
 - Pause-menu entry point: use the `DrawableSuits` button below Resume.
 - Fallback shortcuts: `F8` on keyboard or `View/Back + Y` on controller.
 - Emergency open shortcut: `F10`, which opens the editor and does not toggle it closed.
@@ -37,18 +38,19 @@ Keyboard and mouse:
 - Pause menu `DrawableSuits`: primary open path.
 - `F8`: toggle editor.
 - `F10`: emergency open.
-- Left mouse: paint/erase continuously; in Fill mode, fill once per press; in Decal or Text mode, stamp one preview at the cursor location.
+- Left mouse: paint/erase continuously; in Fill mode, fill once per press; in Decal, Text, or Sticker mode, stamp one preview at the cursor location.
 - Brush Shape: choose Circle, Square, Pixel, Spray Paint, Soft Airbrush, or Noise/Scatter from the Brush dropdown. Pixel ignores the brush size slider and edits one texture pixel.
-- Tool icons: Paint, Erase, Fill, Decal, Text, Eyedropper, and Mirror are selected with compact red icon buttons. The active tool label names the current icon selection, and the icons are embedded generated PNG masks tinted by the terminal UI.
-- Recent Colors: click a recent swatch below the color picker to restore that brush color. Colors are added only after Paint, Fill, or Text successfully writes onto the suit.
+- Tool icons: Paint, Erase, Fill, Decal, Text, Sticker, Eyedropper, and Mirror are selected with compact red icon buttons. The active tool label names the current icon selection, and the icons are embedded generated PNG masks tinted by the terminal UI.
+- Recent Colors: click a recent swatch below the color picker to restore that brush color. Colors are added only after Paint, Fill, Text, or Sticker successfully writes onto the suit.
 - Fill: click the `Fill` UI button, adjust Fill Tolerance if needed, then left-click a contiguous color region on the suit.
 - Text: click the `Text` UI button, type up to 64 characters, then left-click the suit to stamp it. Text uses the current brush color and opacity.
+- Sticker: click the `Sticker` UI button, choose a built-in shape, then left-click the suit to stamp it. Stickers use the current brush color and opacity.
 - Eyedropper: click the `Eyedropper` UI button, then left-click the suit to sample that texture color. It returns to the previous tool after one successful sample.
-- Mirror: click the `Mirror` UI button to duplicate paint, erase, fill, decal stamps, and text stamps onto the opposite suit surface.
+- Mirror: click the `Mirror` UI button to duplicate paint, erase, fill, decal stamps, text stamps, and sticker stamps onto the opposite suit surface.
 - Export Code / Import Code: use the design code panel to copy the current editable texture as a compact `DSUIT2:` code or paste a shared `DSUIT2:` or legacy `DSUIT1:` code into the current suit.
 - Saved Designs: open the `Designs` menu to select and load saved designs into the current suit.
 - Undo History: click a history row to select it, then press `Undo Selected` to undo only that labeled action where possible. Use Undo/Redo to step one action at a time.
-- UV texture panel: move the cursor over the right-column texture panel to paint, erase, fill, stamp decals/text, or sample colors directly on the UV layout while the third-person view remains active.
+- UV texture panel: move the cursor over the right-column texture panel to paint, erase, fill, stamp decals/text/stickers, or sample colors directly on the UV layout while the third-person view remains active.
 - Right mouse: orbit the third-person editor camera.
 - Mouse wheel: zoom the third-person camera.
 - Ctrl + mouse wheel: change brush size.
@@ -61,6 +63,7 @@ Controller:
 - `A`: click the button, field, slider, or color picker region directly under the cursor.
 - Tool icons: move the virtual cursor over a red icon button and press `A`; the active tool label confirms the selected tool.
 - Text: move the virtual cursor over the `Text` UI button and press `A`, type text with the UI field, then aim at the suit and press right trigger once to stamp it.
+- Sticker: move the virtual cursor over the `Sticker` UI button and press `A`, choose a built-in sticker shape with `A`, then aim at the suit and press right trigger once to stamp it.
 - Fill: move the virtual cursor over the `Fill` UI button and press `A`, adjust Fill Tolerance if needed, then aim at a matching color region and press right trigger once.
 - Brush Shape: move the virtual cursor over the Brush Shape dropdown and press `A`, then pick a shape with `A`.
 - Recent Colors: move the virtual cursor over a recent color swatch and press `A` to restore that brush color.
@@ -69,10 +72,10 @@ Controller:
 - Export Code / Import Code: use `A` on the design code UI buttons. There are no shortcuts for import/export.
 - Saved Designs: move the virtual cursor over `Designs`, press `A`, select a saved design row, then press `Load Selected`.
 - Undo History: move the virtual cursor over a history row and press `A` to select it, then press `A` on `Undo Selected` to undo only that action where possible. Use `X` or the Undo/Redo buttons for one-step history.
-- Right trigger: paint/erase continuously; in Fill mode, fill once per press; in Decal or Text mode, stamp one preview at the cursor location.
+- Right trigger: paint/erase continuously; in Fill mode, fill once per press; in Decal, Text, or Sticker mode, stamp one preview at the cursor location.
 - Right stick or bumpers: orbit the third-person editor camera.
 - D-pad up/down: zoom the third-person editor camera.
-- `Y`: cycle Paint/Erase/Decal. Fill, Text, Eyedropper, Mirror, and Brush Shape are UI-only and are not part of this shortcut.
+- `Y`: cycle Paint/Erase/Decal. Fill, Text, Sticker, Eyedropper, Mirror, and Brush Shape are UI-only and are not part of this shortcut.
 - `X`: undo.
 - Start: save.
 
@@ -120,7 +123,7 @@ The BepInEx config file controls:
 - Max sync payload size and chunk size.
 - `StartInUvFallbackMode`, disabled by default, opens directly into texture-only UV panel mode for diagnostics.
 - `ThirdPersonCameraDistance`, the default third-person editor camera distance.
-- `RecentColors`, a comma-separated list of up to 12 recent `#RRGGBB` brush colors populated only after Paint, Fill, or Text writes to the suit.
+- `RecentColors`, a comma-separated list of up to 12 recent `#RRGGBB` brush colors populated only after Paint, Fill, Text, or Sticker writes to the suit.
 - `ApplyLocalFirstPersonArms`, disabled by default, is experimental and allows edited materials on local first-person arms/body outside the editor.
 - `AutoDisableBrokenJetpackWarningLateUpdatePatch`, enabled by default, disables only the broken JetpackWarning `PlayerControllerB.LateUpdate` postfix after repeated null-reference errors are detected.
 - `EnableExperimentalModelPreview`, disabled by default, keeps the old RenderTexture model preview as diagnostics only.
@@ -132,10 +135,10 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.42 behavior:
+Expected 0.5.43 behavior:
 
 - Opening the editor shows an Imperium-inspired red/dark terminal overlay and a third-person camera view of the local player.
-- Paint, Erase, Fill, Decal, Text, Eyedropper, and Mirror use embedded generated PNG icon masks instead of large text tool buttons or procedural mesh glyphs. The active tool label names the current icon, and Mirror remains a UI-only modifier.
+- Paint, Erase, Fill, Decal, Text, Sticker, Eyedropper, and Mirror use embedded generated PNG icon masks instead of large text tool buttons or procedural mesh glyphs. The active tool label names the current icon, and Mirror remains a UI-only modifier.
 - Paint, Fill, and Eyedropper icons should read clearly as a paint brush, paint bucket, and eyedropper at the in-game toolbar size.
 - The editor edits only the local player's currently worn suit. The old Previous, Use Current, and Next suit-selection buttons are not present.
 - The diagnostics text should show `Preview mode: WorldThirdPerson` when the default path succeeds.
@@ -148,8 +151,8 @@ Expected 0.5.42 behavior:
 - Controller right trigger paints only. Camera zoom uses mouse wheel or controller D-pad up/down.
 - Active edited textures are per player/client, not global per suit type.
 - The color changer is a compact side-by-side hue ring and saturation/value square with a swatch and editable `#RRGGBB` hex field.
-- Recent Colors swatches appear below the color picker. Dragging the picker, typing hex, or using Eyedropper does not add a swatch until that color is placed by Paint, Fill, or Text.
-- Undo History shows the newest undoable action labels first, including Brush stroke, Erase, Decal placed, Text placed, Color fill, Reset, Load design, and Import code. Clicking a row only selects it; `Undo Selected` removes only that selected action where the snapshot diff can be isolated, preserves newer overlapping pixels, and keeps redo history available.
+- Recent Colors swatches appear below the color picker. Dragging the picker, typing hex, or using Eyedropper does not add a swatch until that color is placed by Paint, Fill, Text, or Sticker.
+- Undo History shows the newest undoable action labels first, including Brush stroke, Erase, Decal placed, Text placed, Sticker placed, Color fill, Reset, Load design, and Import code. Clicking a row only selects it; `Undo Selected` removes only that selected action where the snapshot diff can be isolated, preserves newer overlapping pixels, and keeps redo history available.
 - Color picker handles are tied to the same coordinate conversion used for mouse/controller input, so the visible handle positions should match the selected hue, saturation, value, and typed hex color.
 - Reset and Save no longer rebuild list hitboxes during the click; decal rows only change selection when their rows are clicked directly, and saved-design rows live in the separate Designs menu.
 - Third-person camera yaw, pitch, and distance are preserved when loading a design or importing a design code while the editor is open.
@@ -159,7 +162,7 @@ Expected 0.5.42 behavior:
 - In Decal mode with a selected decal, hovering over the suit shows a translucent preview and status `Previewing decal. Click/RT to stamp.`
 - Decal placement is single-shot: holding left mouse or RT places one decal until the input is released and pressed again.
 - Third-person Decal preview and stamping project onto the visible suit surface and fill between valid projected samples, so decals avoid both UV-island wrapping and small suit-background cracks on curved geometry. The UV panel keeps direct flat UV decal stamping.
-- The editor cursor is dynamic and rendered as a top-level non-raycastable graphic inside the visible editor canvas: Paint and Erase show a hollow brush ring sized to the current editable target, while UI hover, invalid targets, Decal, Text, Eyedropper, and normal navigation show a small white dot.
+- The editor cursor is dynamic and rendered as a top-level non-raycastable graphic inside the visible editor canvas: Paint and Erase show a hollow brush ring sized to the current editable target, while UI hover, invalid targets, Decal, Text, Sticker, Eyedropper, and normal navigation show a small white dot.
 - The old filled UV brush indicator and world-space sphere marker are kept hidden, so there should not be a colored square or blob following the cursor.
 - In Text mode, the text input uses Unity's built-in Arial font, accepts one line up to 64 characters, and shows `Previewing text. Click/RT to stamp.` when the cursor is over a valid suit target.
 - Text stamps are generated as transparent alpha-mask textures and tinted with the current brush color/opacity, so they should not stamp a black rectangle behind the letters.
@@ -167,12 +170,13 @@ Expected 0.5.42 behavior:
 - Third-person Text should read left-to-right from the editor camera. Mirrored Text should only appear when the UI-only `Mirror` button is enabled.
 - The UV panel keeps direct flat UV Text stamping for texture-layout editing.
 - Text is baked into the suit texture after stamping. It is not an editable layer after placement.
+- In Sticker mode, the shape selector offers Circle, Square, Triangle, Diamond, Star, Heart, Arrow, Lightning Bolt, Plus/Cross, Ring, Crescent, and Shield. Stickers use the current brush color and opacity, preview live on the suit or UV panel, stamp once per press, and are baked into the texture.
 - The `Fill` button is a UI-only tool. It flood-fills the contiguous same-color region under the cursor using the current brush color and opacity.
 - Fill is single-shot: holding left mouse or controller RT fills once until the input is released and pressed again.
 - The Fill Tolerance slider appears when Fill is active. Lower tolerance fills tighter matching regions; higher tolerance accepts more color variation.
 - `Export Code` copies a compact lossless `DSUIT2:` code to the clipboard and fills the design code field. `Import Code` validates a pasted `DSUIT2:` or legacy `DSUIT1:` code and loads it into the current suit without auto-saving, broadcasting, or resetting the third-person camera.
 - The UV panel shows a non-interactive rotated decal preview over the texture panel.
-- The `Mirror` button is a UI-only modifier. When it is orange, paint, erase, fill, decal stamps, and text stamps use a surface-map mirror target on the opposite side of the baked suit mesh in one undo action.
+- The `Mirror` button is a UI-only modifier. When it is orange, paint, erase, fill, decal stamps, text stamps, and sticker stamps use a surface-map mirror target on the opposite side of the baked suit mesh in one undo action.
 - Mirrored decal previews show both the primary and mirrored decal. The mirrored decal is horizontally flipped and uses inverse rotation.
 - The UV panel also uses the mesh mirror map when the clicked UV maps back to a suit triangle. If no mirror target is available, DrawableSuits applies the primary edit only and shows a short status.
 - The `Eyedropper` button is a UI-only one-shot tool. It samples the editable suit texture at the cursor hit point, updates the swatch, color picker, hex field, and brush color, then returns to the previous Paint, Erase, or Decal tool.
@@ -205,6 +209,7 @@ Troubleshooting:
 - If painting misses the suit, check `PaintAttempt` entries for `world paint input`, UV coordinates, and whether the cursor is over the editor panel.
 - If Eyedropper does not sample a color, check `EyedropperMiss` entries for whether the cursor was over the visible suit or UV panel. A successful sample logs `EyedropperSampled` with UV, pixel, sampled hex color, and return tool.
 - If Text does not preview or stamp, check that the text field is not empty, then search `diagnostics.log` for `TextStampRendered`, `TextPreviewUpdated`, `TextPreviewHidden`, `TextStampCommitted`, or `TextStampSkipped`.
+- If Sticker does not preview or stamp, confirm Sticker tool is active and a shape is selected, then search `diagnostics.log` for `StickerShapeSelected`, `StickerPreviewUpdated`, `StickerPreviewHidden`, `StickerStampCommitted`, or `StickerStampSkipped`.
 - If Text stamps with a black rectangle, confirm the installed package is 0.5.10 or newer. `TextStampRendered` should report `alphaMode=luminance`, glyph bounds, and a trimmed final texture size.
 - If third-person Text drops side letters, confirm the installed package is 0.5.11 or newer and check `TextSurfacePreviewUpdated`, `TextSurfaceStampCommitted`, or `TextSurfaceStampSkipped` for written and skipped glyph-pixel counts.
 - If third-person Text appears backwards, confirm the installed package is 0.5.12 or newer and check `TextProjectionFrameBuilt` for camera-right alignment and sample order diagnostics.
@@ -229,7 +234,7 @@ Troubleshooting:
 
 ## Known Limits
 
-- Third-person Paint, Erase, Decal, and Text project onto the visible suit surface before resolving to texture UVs. Unusual modded suit UV layouts may still make edits appear somewhere unexpected, and seam guards may skip ambiguous pixels instead of bleeding across unrelated islands.
+- Third-person Paint, Erase, Decal, Text, and Sticker project onto the visible suit surface before resolving to texture UVs. Unusual modded suit UV layouts may still make edits appear somewhere unexpected, and seam guards may skip ambiguous pixels instead of bleeding across unrelated islands.
 - Mirror mode uses a mesh surface map, so unusual or asymmetric meshes may skip the mirrored edit when no reliable opposite surface can be found.
 - Text stamps use Unity's built-in Arial font only in this version and are baked as tinted transparent alpha masks. Third-person Text projection can still skip letters that physically land off the visible suit surface.
 - Cross-suit loading depends on UV compatibility.

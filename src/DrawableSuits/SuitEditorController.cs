@@ -31,7 +31,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         FillBucket,
         Decal,
         Eyedropper,
-        Text
+        Text,
+        Sticker
     }
 
     private enum CursorVisualMode
@@ -52,6 +53,22 @@ internal sealed class SuitEditorController : MonoBehaviour
         NoiseScatter
     }
 
+    private enum StickerShape
+    {
+        Circle,
+        Square,
+        Triangle,
+        Diamond,
+        Star,
+        Heart,
+        Arrow,
+        LightningBolt,
+        Plus,
+        Ring,
+        Crescent,
+        Shield
+    }
+
     private enum ToolIconKind
     {
         Paint,
@@ -60,7 +77,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         Decal,
         Text,
         Eyedropper,
-        Mirror
+        Mirror,
+        Sticker
     }
 
     private const int EditorCanvasSortingOrder = 32760;
@@ -85,12 +103,17 @@ internal sealed class SuitEditorController : MonoBehaviour
     private static readonly Color TerminalSliderFillColor = new(0.82f, 0.06f, 0.035f, 1f);
     private static readonly Color TerminalOutlineColor = new(0.42f, 0.025f, 0.02f, 0.9f);
     private static readonly Dictionary<ToolIconKind, Texture2D> ToolIconTextureCache = new();
+    private static readonly Vector2[] StickerTriangleVertices = { new(0f, 0.9f), new(-0.9f, -0.78f), new(0.9f, -0.78f) };
+    private static readonly Vector2[] StickerArrowVertices = { new(-0.9f, -0.28f), new(0.12f, -0.28f), new(0.12f, -0.62f), new(0.9f, 0f), new(0.12f, 0.62f), new(0.12f, 0.28f), new(-0.9f, 0.28f) };
+    private static readonly Vector2[] StickerLightningVertices = { new(-0.25f, 0.92f), new(0.55f, 0.92f), new(0.1f, 0.14f), new(0.64f, 0.14f), new(-0.32f, -0.96f), new(-0.02f, -0.24f), new(-0.58f, -0.24f) };
+    private static readonly Vector2[] StickerShieldVertices = { new(-0.72f, 0.7f), new(0.72f, 0.7f), new(0.62f, -0.18f), new(0f, -0.92f), new(-0.62f, -0.18f) };
 
     private readonly Stack<UndoHistoryEntry> _undo = new();
     private readonly Stack<UndoHistoryEntry> _redo = new();
     private readonly List<string> _designFiles = new();
     private readonly List<string> _decalFiles = new();
     private readonly List<string> _recentColors = new(MaxRecentColors);
+    private readonly Dictionary<StickerShape, Texture2D> _stickerStampTextures = new();
 
     private bool _isOpen;
     private Vector2 _cursor;
@@ -110,6 +133,9 @@ internal sealed class SuitEditorController : MonoBehaviour
     private string _textStampValue = "TEXT";
     private float _textSize = 96f;
     private float _textRotation;
+    private StickerShape _stickerShape = StickerShape.Star;
+    private float _stickerSize = 128f;
+    private float _stickerRotation;
     private bool _mirrorEnabled;
     private bool _strokeActive;
     private int _brushStrokeSeed = 1;
@@ -236,6 +262,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private string _lastDecalPreviewKey = string.Empty;
     private string _lastDecalPreviewLogKey = string.Empty;
     private float _lastDecalPreviewLogTime;
+    private string _lastStickerPreviewLogKey = string.Empty;
+    private float _lastStickerPreviewLogTime;
     private string _lastDecalCoverageWarningKey = string.Empty;
     private float _lastDecalCoverageWarningTime;
     private string _lastBrushSurfaceDiagnosticsKey = string.Empty;
@@ -341,10 +369,14 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Button _decalButton;
     private Button _eyedropperButton;
     private Button _textButton;
+    private Button _stickerButton;
     private Button _mirrorButton;
     private Button _brushShapeButton;
     private GameObject _brushShapeMenuObject;
     private readonly List<Button> _brushShapeOptionButtons = new();
+    private Button _stickerShapeButton;
+    private GameObject _stickerShapeMenuObject;
+    private readonly List<Button> _stickerShapeOptionButtons = new();
     private readonly List<Button> _recentColorButtons = new(MaxRecentColors);
     private readonly List<Image> _recentColorImages = new(MaxRecentColors);
     private Button _applyButton;
@@ -835,6 +867,23 @@ internal sealed class SuitEditorController : MonoBehaviour
                     AddLine(vh, rect, new Vector2(0.08f, -0.12f), new Vector2(0.32f, -0.12f), 0.055f, color);
                     AddLine(vh, rect, new Vector2(0.32f, -0.12f), new Vector2(0.2f, 0f), 0.045f, color);
                     AddLine(vh, rect, new Vector2(0.32f, -0.12f), new Vector2(0.2f, -0.24f), 0.045f, color);
+                    break;
+                case ToolIconKind.Sticker:
+                    AddPolygon(vh, rect, color,
+                        new Vector2(-0.3f, 0.36f),
+                        new Vector2(0.28f, 0.36f),
+                        new Vector2(0.38f, 0.22f),
+                        new Vector2(0.38f, -0.34f),
+                        new Vector2(-0.3f, -0.34f));
+                    AddPolygon(vh, rect, new Color(0f, 0f, 0f, 0.45f),
+                        new Vector2(0.2f, 0.36f),
+                        new Vector2(0.38f, 0.18f),
+                        new Vector2(0.2f, 0.18f));
+                    AddFilledCircle(vh, rect, new Vector2(-0.08f, 0f), 0.13f, color);
+                    AddPolygon(vh, rect, color,
+                        new Vector2(0.12f, 0.12f),
+                        new Vector2(0.28f, -0.14f),
+                        new Vector2(0f, -0.14f));
                     break;
             }
         }
@@ -1778,6 +1827,14 @@ internal sealed class SuitEditorController : MonoBehaviour
             _textStampRenderer = null;
             _textStampTexture = null;
         }
+        foreach (var stickerTexture in _stickerStampTextures.Values)
+        {
+            if (stickerTexture != null)
+            {
+                Destroy(stickerTexture);
+            }
+        }
+        _stickerStampTextures.Clear();
 
         if (_editorCanvasObject != null)
         {
@@ -2225,7 +2282,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         _mirrorButton = CreateAnchoredIconButton(panel.transform, "Mirror", ToolIconKind.Mirror, new Rect(leftX + (toolIcon + toolGap) * 3f, 310f, toolIcon, 34f), ToggleMirror);
         _decalButton = CreateAnchoredIconButton(panel.transform, "Decal", ToolIconKind.Decal, new Rect(leftX, 352f, toolIcon, 34f), () => SetTool(EditorTool.Decal));
         _textButton = CreateAnchoredIconButton(panel.transform, "Text", ToolIconKind.Text, new Rect(leftX + (toolIcon + toolGap), 352f, toolIcon, 34f), () => SetTool(EditorTool.Text));
-        _eyedropperButton = CreateAnchoredIconButton(panel.transform, "Eyedropper", ToolIconKind.Eyedropper, new Rect(leftX + (toolIcon + toolGap) * 2f, 352f, toolIcon, 34f), () => SetTool(EditorTool.Eyedropper));
+        _stickerButton = CreateAnchoredIconButton(panel.transform, "Sticker", ToolIconKind.Sticker, new Rect(leftX + (toolIcon + toolGap) * 2f, 352f, toolIcon, 34f), () => SetTool(EditorTool.Sticker));
+        _eyedropperButton = CreateAnchoredIconButton(panel.transform, "Eyedropper", ToolIconKind.Eyedropper, new Rect(leftX + (toolIcon + toolGap) * 3f, 352f, toolIcon, 34f), () => SetTool(EditorTool.Eyedropper));
 
         CreateSectionDivider(panel.transform, new Rect(leftX, 390f, leftW, 1f));
         CreateAnchoredText(panel.transform, "BrushHeader", "Brush", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 394f, leftW, 24f), TerminalTextColor);
@@ -2263,6 +2321,10 @@ internal sealed class SuitEditorController : MonoBehaviour
             {
                 _textSize = value;
             }
+            else if (_tool == EditorTool.Sticker)
+            {
+                _stickerSize = value;
+            }
             else
             {
                 _decalSize = value;
@@ -2275,6 +2337,10 @@ internal sealed class SuitEditorController : MonoBehaviour
             if (_tool == EditorTool.Text)
             {
                 _textRotation = value;
+            }
+            else if (_tool == EditorTool.Sticker)
+            {
+                _stickerRotation = value;
             }
             else
             {
@@ -2291,6 +2357,8 @@ internal sealed class SuitEditorController : MonoBehaviour
             InvalidateTextStampTexture("text input changed");
             InvalidateDecalPreview("text input changed");
         });
+        _stickerShapeButton = CreateAnchoredButton(panel.transform, StickerShapeDisplayName(_stickerShape), new Rect(rightX, 290f, 142f, 34f), ToggleStickerShapeMenu);
+        BuildStickerShapeMenu(panel.transform, new Rect(rightX, 328f, rightW, 154f));
         CreateAnchoredButton(panel.transform, "Refresh Decals", new Rect(rightX + 150f, 290f, 136f, 34f), ImportDecalFromDialog);
         _decalListContent = CreateAnchoredScrollList(panel.transform, "DecalList", new Rect(rightX, 334f, rightW, 84f));
 
@@ -2788,6 +2856,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             ToolIconKind.Text => "text.png",
             ToolIconKind.Eyedropper => "eyedropper.png",
             ToolIconKind.Mirror => "mirror.png",
+            ToolIconKind.Sticker => "sticker.png",
             _ => iconKind.ToString().ToLowerInvariant() + ".png"
         };
     }
@@ -2933,6 +3002,34 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         _brushShapeMenuObject.SetActive(false);
+    }
+
+    private void BuildStickerShapeMenu(Transform parent, Rect rect)
+    {
+        _stickerShapeOptionButtons.Clear();
+        _stickerShapeMenuObject = CreateUiObject("StickerShapeDropdown", parent, typeof(RectTransform), typeof(Image));
+        SetAnchoredRect(_stickerShapeMenuObject.GetComponent<RectTransform>(), rect);
+        var image = _stickerShapeMenuObject.GetComponent<Image>();
+        image.color = TerminalDialogColor;
+        image.raycastTarget = true;
+        ApplyTerminalOutline(_stickerShapeMenuObject, TerminalOutlineColor);
+
+        var values = (StickerShape[])Enum.GetValues(typeof(StickerShape));
+        const int columns = 3;
+        const float gap = 6f;
+        var rowHeight = 26f;
+        var columnWidth = (rect.width - 12f - (columns - 1) * gap) / columns;
+        for (var i = 0; i < values.Length; i++)
+        {
+            var shape = values[i];
+            var column = i % columns;
+            var rowIndex = i / columns;
+            var buttonRect = new Rect(6f + column * (columnWidth + gap), 6f + rowIndex * (rowHeight + gap), columnWidth, rowHeight);
+            var row = CreateAnchoredButton(_stickerShapeMenuObject.transform, StickerShapeShortName(shape), buttonRect, () => SelectStickerShape(shape));
+            _stickerShapeOptionButtons.Add(row);
+        }
+
+        _stickerShapeMenuObject.SetActive(false);
     }
 
     private static void ClearSelectedNormalButton()
@@ -3690,8 +3787,10 @@ internal sealed class SuitEditorController : MonoBehaviour
         SetInteractable(_decalButton, _canPaint);
         SetInteractable(_eyedropperButton, _canPaint && hasEditableTexture);
         SetInteractable(_textButton, _canPaint && hasEditableTexture);
+        SetInteractable(_stickerButton, _canPaint && hasEditableTexture);
         SetInteractable(_mirrorButton, _canPaint && hasEditableTexture);
         SetInteractable(_brushShapeButton, _canPaint && hasEditableTexture);
+        SetInteractable(_stickerShapeButton, _canPaint && hasEditableTexture);
         SetInteractable(_applyButton, _canPaint && hasEditableTexture);
         SetInteractable(_saveButton, hasEditableTexture);
         SetInteractable(_exportCodeButton, hasEditableTexture);
@@ -3708,6 +3807,10 @@ internal sealed class SuitEditorController : MonoBehaviour
         if ((!_canPaint || !hasEditableTexture) && _brushShapeMenuObject != null && _brushShapeMenuObject.activeSelf)
         {
             _brushShapeMenuObject.SetActive(false);
+        }
+        if ((!_canPaint || !hasEditableTexture) && _stickerShapeMenuObject != null && _stickerShapeMenuObject.activeSelf)
+        {
+            _stickerShapeMenuObject.SetActive(false);
         }
 
         UpdateToolButtons();
@@ -3774,10 +3877,15 @@ internal sealed class SuitEditorController : MonoBehaviour
     private void UpdateLabels()
     {
         var fillActive = _tool == EditorTool.FillBucket;
+        var stickerActive = _tool == EditorTool.Sticker;
         var pixelBrush = _brushShape == BrushShape.Pixel;
         if (fillActive)
         {
             HideBrushShapeMenu();
+        }
+        if (!stickerActive)
+        {
+            HideStickerShapeMenu();
         }
         if (_brushShapeLabel != null)
         {
@@ -3806,19 +3914,27 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             _fillToleranceSlider.gameObject.SetActive(fillActive);
         }
-        if (_placementHeaderLabel != null) _placementHeaderLabel.text = _tool == EditorTool.Text ? "Text" : "Decal";
-        if (_decalSizeLabel != null) _decalSizeLabel.text = _tool == EditorTool.Text ? $"Height: {Mathf.RoundToInt(_textSize)} px" : $"Size: {Mathf.RoundToInt(_decalSize)} px";
+        if (_placementHeaderLabel != null) _placementHeaderLabel.text = _tool == EditorTool.Text ? "Text" : stickerActive ? "Sticker" : "Decal";
+        if (_decalSizeLabel != null) _decalSizeLabel.text = _tool == EditorTool.Text ? $"Height: {Mathf.RoundToInt(_textSize)} px" : stickerActive ? $"Size: {Mathf.RoundToInt(_stickerSize)} px" : $"Size: {Mathf.RoundToInt(_decalSize)} px";
         if (_decalRotationLabel != null) _decalRotationLabel.text = $"Rotation: {Mathf.RoundToInt(CurrentPlacementRotation())} deg";
+        if (_textStampInput != null)
+        {
+            _textStampInput.gameObject.SetActive(_tool == EditorTool.Text || _tool == EditorTool.Decal);
+        }
+        if (_stickerShapeButton != null)
+        {
+            _stickerShapeButton.gameObject.SetActive(stickerActive);
+        }
     }
 
     private float CurrentPlacementSize()
     {
-        return _tool == EditorTool.Text ? _textSize : _decalSize;
+        return _tool == EditorTool.Text ? _textSize : _tool == EditorTool.Sticker ? _stickerSize : _decalSize;
     }
 
     private float CurrentPlacementRotation()
     {
-        return _tool == EditorTool.Text ? _textRotation : _decalRotation;
+        return _tool == EditorTool.Text ? _textRotation : _tool == EditorTool.Sticker ? _stickerRotation : _decalRotation;
     }
 
     private void UpdateColorUi()
@@ -4048,6 +4164,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         SetToolButtonColor(_decalButton, _tool == EditorTool.Decal);
         SetToolButtonColor(_eyedropperButton, _tool == EditorTool.Eyedropper);
         SetToolButtonColor(_textButton, _tool == EditorTool.Text);
+        SetToolButtonColor(_stickerButton, _tool == EditorTool.Sticker);
         SetToolButtonColor(_mirrorButton, _mirrorEnabled);
         if (_activeToolLabel != null)
         {
@@ -4056,6 +4173,7 @@ internal sealed class SuitEditorController : MonoBehaviour
                 : $"Active: {ToolDisplayName(_tool)}";
         }
         UpdateBrushShapeButton();
+        UpdateStickerShapeButton();
     }
 
     private void UpdateBrushShapeButton()
@@ -4128,6 +4246,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             EditorTool.Decal => "Decal",
             EditorTool.Eyedropper => "Eyedropper",
             EditorTool.Text => "Text",
+            EditorTool.Sticker => "Sticker",
             _ => tool.ToString()
         };
     }
@@ -4135,6 +4254,10 @@ internal sealed class SuitEditorController : MonoBehaviour
     private void SetTool(EditorTool tool)
     {
         HideBrushShapeMenu();
+        if (tool != EditorTool.Sticker)
+        {
+            HideStickerShapeMenu();
+        }
         if (tool == EditorTool.Eyedropper)
         {
             _previousToolBeforeEyedropper = IsReturnableEyedropperTool(_tool) ? _tool : EditorTool.Paint;
@@ -4154,9 +4277,9 @@ internal sealed class SuitEditorController : MonoBehaviour
         _decalStampArmed = true;
         _suppressPaintInputUntilRelease = false;
         _suppressDecalPreviewUntilRelease = false;
-        if (tool == EditorTool.Decal)
+        if (tool == EditorTool.Decal || tool == EditorTool.Sticker)
         {
-            InvalidateDecalPreview("decal tool selected");
+            InvalidateDecalPreview($"{tool} tool selected");
         }
         else
         {
@@ -4174,6 +4297,10 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             SetStatus("Eyedropper active. Aim at the suit to sample a color.", false);
         }
+        if (tool == EditorTool.Sticker)
+        {
+            SetStatus($"Sticker active: {StickerShapeDisplayName(_stickerShape)}. Click/RT to stamp.", false);
+        }
         if (tool == EditorTool.FillBucket)
         {
             SetStatus("Fill active. Click or RT a matching color region to fill.", false);
@@ -4187,7 +4314,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private static bool IsReturnableEyedropperTool(EditorTool tool)
     {
-        return tool == EditorTool.Paint || tool == EditorTool.Erase || tool == EditorTool.FillBucket || tool == EditorTool.Decal || tool == EditorTool.Text;
+        return tool == EditorTool.Paint || tool == EditorTool.Erase || tool == EditorTool.FillBucket || tool == EditorTool.Decal || tool == EditorTool.Text || tool == EditorTool.Sticker;
     }
 
     private void UpdatePlacementControlsForTool()
@@ -4256,6 +4383,62 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawableSuitsDiagnostics.Info($"Brush shape selected. shape={_brushShape}; tool={_tool}; brushSize={_brushSize:0.#}; suit={_selectedSuitId}");
     }
 
+    private void ToggleStickerShapeMenu()
+    {
+        if (_stickerShapeMenuObject == null)
+        {
+            return;
+        }
+
+        var nextState = !_stickerShapeMenuObject.activeSelf;
+        _stickerShapeMenuObject.SetActive(nextState);
+        if (nextState)
+        {
+            _stickerShapeMenuObject.transform.SetAsLastSibling();
+            _canvasCursorObject?.transform.SetAsLastSibling();
+        }
+        DrawableSuitsDiagnostics.Info($"StickerShapeMenuToggled: open={nextState}; shape={_stickerShape}; tool={_tool}; cursor={_cursor}");
+    }
+
+    private void HideStickerShapeMenu()
+    {
+        if (_stickerShapeMenuObject != null && _stickerShapeMenuObject.activeSelf)
+        {
+            _stickerShapeMenuObject.SetActive(false);
+        }
+    }
+
+    private void UpdateStickerShapeButton()
+    {
+        if (_stickerShapeButton != null)
+        {
+            SetButtonLabel(_stickerShapeButton, StickerShapeDisplayName(_stickerShape));
+        }
+
+        var values = (StickerShape[])Enum.GetValues(typeof(StickerShape));
+        for (var i = 0; i < _stickerShapeOptionButtons.Count; i++)
+        {
+            var button = _stickerShapeOptionButtons[i];
+            if (button == null)
+            {
+                continue;
+            }
+
+            var selected = i < values.Length && values[i] == _stickerShape;
+            SetToolButtonColor(button, selected);
+        }
+    }
+
+    private void SelectStickerShape(StickerShape shape)
+    {
+        _stickerShape = shape;
+        HideStickerShapeMenu();
+        UpdateStickerShapeButton();
+        InvalidateDecalPreview("sticker shape changed");
+        SetStatus($"Sticker shape: {StickerShapeDisplayName(_stickerShape)}.", false);
+        DrawableSuitsDiagnostics.Info($"StickerShapeSelected: shape={_stickerShape}; display={StickerShapeDisplayName(_stickerShape)}; tool={_tool}; size={_stickerSize:0.#}; rotation={_stickerRotation:0.#}; suit={_selectedSuitId}");
+    }
+
     private static string BrushShapeDisplayName(BrushShape shape)
     {
         return shape switch
@@ -4267,6 +4450,36 @@ internal sealed class SuitEditorController : MonoBehaviour
             BrushShape.SoftAirbrush => "Soft Airbrush",
             BrushShape.NoiseScatter => "Noise/Scatter",
             _ => shape.ToString()
+        };
+    }
+
+    private static string StickerShapeDisplayName(StickerShape shape)
+    {
+        return shape switch
+        {
+            StickerShape.Circle => "Circle",
+            StickerShape.Square => "Square",
+            StickerShape.Triangle => "Triangle",
+            StickerShape.Diamond => "Diamond",
+            StickerShape.Star => "Star",
+            StickerShape.Heart => "Heart",
+            StickerShape.Arrow => "Arrow",
+            StickerShape.LightningBolt => "Lightning Bolt",
+            StickerShape.Plus => "Plus/Cross",
+            StickerShape.Ring => "Ring",
+            StickerShape.Crescent => "Crescent",
+            StickerShape.Shield => "Shield",
+            _ => shape.ToString()
+        };
+    }
+
+    private static string StickerShapeShortName(StickerShape shape)
+    {
+        return shape switch
+        {
+            StickerShape.LightningBolt => "Bolt",
+            StickerShape.Plus => "Plus",
+            _ => StickerShapeDisplayName(shape)
         };
     }
 
@@ -5773,7 +5986,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private bool IsPlacementTool(EditorTool tool)
     {
-        return tool == EditorTool.Decal || tool == EditorTool.Text;
+        return tool == EditorTool.Decal || tool == EditorTool.Text || tool == EditorTool.Sticker;
     }
 
     private bool TryGetActivePlacementStamp(out Texture2D stampTexture, out string failureReason)
@@ -5795,6 +6008,11 @@ internal sealed class SuitEditorController : MonoBehaviour
         if (_tool == EditorTool.Text)
         {
             return TryGetTextStampTexture(out stampTexture, out failureReason);
+        }
+
+        if (_tool == EditorTool.Sticker)
+        {
+            return TryGetStickerStampTexture(_stickerShape, out stampTexture, out failureReason);
         }
 
         failureReason = "not a placement tool";
@@ -5823,17 +6041,25 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             _decalPreviewTexture.SetPixels32(sourceTexture.GetPixels32());
             var touchedPixels = mirrorTarget.Enabled && mirrorTarget.Available ? new HashSet<int>() : null;
-            var primaryChanged = CompositeDecalSurfaceStamp(_decalPreviewTexture, stampTexture, hit.point, hit.normal, _decalRotation, false, Mathf.Clamp01(_brushOpacity * 0.62f), touchedPixels, out primaryStats);
+            var tintWithBrushColor = _tool == EditorTool.Sticker;
+            var primaryChanged = CompositeDecalSurfaceStamp(_decalPreviewTexture, stampTexture, hit.point, hit.normal, CurrentPlacementRotation(), false, Mathf.Clamp01(_brushOpacity * 0.62f), touchedPixels, out primaryStats, tintWithBrushColor);
             var mirrorChanged = false;
             if (ShouldApplyMirror(sourceTexture, hit.textureCoord, mirrorTarget) && TryGetMirrorWorldPlacement(mirrorTarget, out var mirrorPoint, out var mirrorNormal))
             {
-                mirrorChanged = CompositeDecalSurfaceStamp(_decalPreviewTexture, stampTexture, mirrorPoint, mirrorNormal, -_decalRotation, true, Mathf.Clamp01(_brushOpacity * 0.62f), touchedPixels, out mirrorStats);
+                mirrorChanged = CompositeDecalSurfaceStamp(_decalPreviewTexture, stampTexture, mirrorPoint, mirrorNormal, -CurrentPlacementRotation(), true, Mathf.Clamp01(_brushOpacity * 0.62f), touchedPixels, out mirrorStats, tintWithBrushColor);
             }
 
             if (!primaryChanged && !mirrorChanged)
             {
                 HideDecalPlacementPreview("decal surface preview projected no pixels", false);
-                LogDecalSurfacePreviewSkipped(sourceTexture, hit, mirrorTarget, stampTexture, primaryStats, mirrorStats);
+                if (_tool == EditorTool.Sticker)
+                {
+                    LogStickerSurfacePreviewSkipped(sourceTexture, hit, mirrorTarget, stampTexture, primaryStats, mirrorStats, "surface preview projected no pixels");
+                }
+                else
+                {
+                    LogDecalSurfacePreviewSkipped(sourceTexture, hit, mirrorTarget, stampTexture, primaryStats, mirrorStats);
+                }
                 return;
             }
 
@@ -5873,7 +6099,14 @@ internal sealed class SuitEditorController : MonoBehaviour
         SetPlacementPreviewStatus(mirrorTarget);
         if (previewRebuilt)
         {
-            LogDecalSurfacePreviewUpdated(sourceTexture, hit, mirrorTarget, stampTexture, primaryStats, mirrorStats);
+            if (_tool == EditorTool.Sticker)
+            {
+                LogStickerSurfacePreviewUpdated(sourceTexture, hit, mirrorTarget, stampTexture, primaryStats, mirrorStats);
+            }
+            else
+            {
+                LogDecalSurfacePreviewUpdated(sourceTexture, hit, mirrorTarget, stampTexture, primaryStats, mirrorStats);
+            }
         }
     }
 
@@ -5996,7 +6229,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         var displayHeight = Mathf.Clamp(stampSize.y / Mathf.Max(1f, sourceTexture.height) * rect.height, 4f, rect.height * 1.5f);
 
         previewImage.texture = stampTexture;
-        previewImage.color = _tool == EditorTool.Text
+        previewImage.color = _tool == EditorTool.Text || _tool == EditorTool.Sticker
             ? new Color(_brushColor.r, _brushColor.g, _brushColor.b, mirrored ? 0.5f : 0.62f)
             : mirrored ? new Color(1f, 1f, 1f, 0.5f) : new Color(1f, 1f, 1f, 0.62f);
         previewImage.raycastTarget = false;
@@ -6093,7 +6326,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
         _decalPreviewVisible = false;
         if (_statusMessage.StartsWith("Previewing decal", StringComparison.OrdinalIgnoreCase)
-            || _statusMessage.StartsWith("Previewing text", StringComparison.OrdinalIgnoreCase))
+            || _statusMessage.StartsWith("Previewing text", StringComparison.OrdinalIgnoreCase)
+            || _statusMessage.StartsWith("Previewing sticker", StringComparison.OrdinalIgnoreCase))
         {
             SetStatus(BuildReadinessStatus(), false);
         }
@@ -6163,7 +6397,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void SetPlacementPreviewStatus(MirrorPaintTarget mirrorTarget)
     {
-        var noun = _tool == EditorTool.Text ? "text" : "decal";
+        var noun = _tool == EditorTool.Text ? "text" : _tool == EditorTool.Sticker ? "sticker" : "decal";
         if (mirrorTarget.Enabled && !mirrorTarget.Available)
         {
             if (!_statusMessage.StartsWith($"Previewing {noun}. Mirror target not found", StringComparison.OrdinalIgnoreCase))
@@ -6188,14 +6422,18 @@ internal sealed class SuitEditorController : MonoBehaviour
             return new Vector2(Mathf.Max(1f, height * aspect), height);
         }
 
-        return new Vector2(Mathf.Max(1f, _decalSize), Mathf.Max(1f, _decalSize));
+        var size = _tool == EditorTool.Sticker ? _stickerSize : _decalSize;
+        return new Vector2(Mathf.Max(1f, size), Mathf.Max(1f, size));
     }
 
     private string CurrentPlacementName()
     {
-        return _tool == EditorTool.Text
-            ? $"text:{NormalizeTextStampValue(_textStampValue).Length}"
-            : CurrentDecalName();
+        return _tool switch
+        {
+            EditorTool.Text => $"text:{NormalizeTextStampValue(_textStampValue).Length}",
+            EditorTool.Sticker => $"sticker:{_stickerShape}",
+            _ => CurrentDecalName()
+        };
     }
 
     private bool TryGetTextStampTexture(out Texture2D texture, out string failureReason)
@@ -6212,6 +6450,160 @@ internal sealed class SuitEditorController : MonoBehaviour
         texture = _textStampRenderer.GetOrRender(text, out _textStampTextureKey, out failureReason);
         _textStampTexture = texture;
         return texture != null;
+    }
+
+    private bool TryGetStickerStampTexture(StickerShape shape, out Texture2D texture, out string failureReason)
+    {
+        failureReason = string.Empty;
+        if (_stickerStampTextures.TryGetValue(shape, out texture) && texture != null)
+        {
+            return true;
+        }
+
+        texture = GenerateStickerStampTexture(shape);
+        if (texture == null)
+        {
+            failureReason = $"failed to generate {StickerShapeDisplayName(shape)}";
+            return false;
+        }
+
+        _stickerStampTextures[shape] = texture;
+        DrawableSuitsDiagnostics.Info($"StickerStampGenerated: shape={shape}; display={StickerShapeDisplayName(shape)}; texture={texture.width}x{texture.height}");
+        return true;
+    }
+
+    private static Texture2D GenerateStickerStampTexture(StickerShape shape)
+    {
+        const int size = 256;
+        const int samplesPerAxis = 3;
+        var texture = new Texture2D(size, size, TextureFormat.RGBA32, false)
+        {
+            name = $"DrawableSuitsSticker_{shape}",
+            filterMode = FilterMode.Bilinear,
+            wrapMode = TextureWrapMode.Clamp,
+            hideFlags = HideFlags.HideAndDontSave
+        };
+
+        var pixels = new Color32[size * size];
+        var sampleCount = samplesPerAxis * samplesPerAxis;
+        for (var y = 0; y < size; y++)
+        {
+            for (var x = 0; x < size; x++)
+            {
+                var covered = 0;
+                for (var sy = 0; sy < samplesPerAxis; sy++)
+                {
+                    for (var sx = 0; sx < samplesPerAxis; sx++)
+                    {
+                        var px = ((x + (sx + 0.5f) / samplesPerAxis) / size) * 2f - 1f;
+                        var py = ((y + (sy + 0.5f) / samplesPerAxis) / size) * 2f - 1f;
+                        if (IsInsideStickerShape(shape, new Vector2(px, py)))
+                        {
+                            covered++;
+                        }
+                    }
+                }
+
+                var alpha = Mathf.RoundToInt(255f * covered / sampleCount);
+                pixels[(y * size) + x] = new Color32(255, 255, 255, (byte)alpha);
+            }
+        }
+
+        texture.SetPixels32(pixels);
+        texture.Apply(false, false);
+        return texture;
+    }
+
+    private static bool IsInsideStickerShape(StickerShape shape, Vector2 p)
+    {
+        var ax = Mathf.Abs(p.x);
+        var ay = Mathf.Abs(p.y);
+        switch (shape)
+        {
+            case StickerShape.Circle:
+                return p.sqrMagnitude <= 0.82f * 0.82f;
+            case StickerShape.Square:
+                return ax <= 0.78f && ay <= 0.78f;
+            case StickerShape.Triangle:
+                return PointInPolygon(p, StickerTriangleVertices);
+            case StickerShape.Diamond:
+                return ax + ay <= 1.05f;
+            case StickerShape.Star:
+                return IsInsideStar(p);
+            case StickerShape.Heart:
+                return IsInsideHeart(p);
+            case StickerShape.Arrow:
+                return PointInPolygon(p, StickerArrowVertices);
+            case StickerShape.LightningBolt:
+                return PointInPolygon(p, StickerLightningVertices);
+            case StickerShape.Plus:
+                return (ax <= 0.22f && ay <= 0.8f) || (ay <= 0.22f && ax <= 0.8f);
+            case StickerShape.Ring:
+            {
+                var distance = p.magnitude;
+                return distance >= 0.52f && distance <= 0.82f;
+            }
+            case StickerShape.Crescent:
+            {
+                var outer = (p + new Vector2(0.12f, 0f)).sqrMagnitude <= 0.78f * 0.78f;
+                var inner = (p - new Vector2(0.22f, 0.08f)).sqrMagnitude <= 0.72f * 0.72f;
+                return outer && !inner;
+            }
+            case StickerShape.Shield:
+                return PointInPolygon(p, StickerShieldVertices);
+            default:
+                return false;
+        }
+    }
+
+    private static bool IsInsideStar(Vector2 p)
+    {
+        var distance = p.magnitude;
+        if (distance > 0.9f)
+        {
+            return false;
+        }
+
+        if (distance < 0.26f)
+        {
+            return true;
+        }
+
+        var angle = Mathf.Atan2(p.y, p.x) - Mathf.PI * 0.5f;
+        var sector = Mathf.PI * 2f / 5f;
+        var local = Mathf.Abs(Mathf.Repeat(angle + sector * 0.5f, sector) - sector * 0.5f);
+        var limit = Mathf.Lerp(0.9f, 0.36f, local / (sector * 0.5f));
+        return distance <= limit;
+    }
+
+    private static bool IsInsideHeart(Vector2 p)
+    {
+        var x = p.x * 1.15f;
+        var y = (p.y + 0.08f) * 1.18f;
+        var a = (x * x) + (y * y) - 0.58f;
+        return (a * a * a) - (x * x * y * y * y) <= 0f;
+    }
+
+    private static bool PointInPolygon(Vector2 point, Vector2[] polygon)
+    {
+        var inside = false;
+        for (int i = 0, j = polygon.Length - 1; i < polygon.Length; j = i++)
+        {
+            var pi = polygon[i];
+            var pj = polygon[j];
+            var denominator = pj.y - pi.y;
+            if (Mathf.Abs(denominator) < 0.0001f)
+            {
+                denominator = denominator < 0f ? -0.0001f : 0.0001f;
+            }
+            if (((pi.y > point.y) != (pj.y > point.y))
+                && point.x < (pj.x - pi.x) * (point.y - pi.y) / denominator + pi.x)
+            {
+                inside = !inside;
+            }
+        }
+
+        return inside;
     }
 
     private void InvalidateTextStampTexture(string reason)
@@ -6237,6 +6629,11 @@ internal sealed class SuitEditorController : MonoBehaviour
         if (_tool == EditorTool.Text)
         {
             LogTextPreviewUpdated(mode, texture, uv, mirrorTarget, stampTexture, force);
+            return;
+        }
+        if (_tool == EditorTool.Sticker)
+        {
+            LogStickerPreviewUpdated(mode, texture, uv, mirrorTarget, stampTexture, force);
             return;
         }
 
@@ -6360,11 +6757,69 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawableSuitsDiagnostics.Info($"TextSurfacePreviewSkipped: {key}; hitPoint={hit.point}; hitNormal={hit.normal}; pointerSource={_pointerSource}; cursor={_cursor}");
     }
 
+    private void LogStickerPreviewUpdated(string mode, Texture2D texture, Vector2 uv, MirrorPaintTarget mirrorTarget, Texture2D stampTexture, bool force)
+    {
+        if (texture == null || stampTexture == null)
+        {
+            return;
+        }
+
+        var px = Mathf.RoundToInt(uv.x * (texture.width - 1));
+        var py = Mathf.RoundToInt(uv.y * (texture.height - 1));
+        var key = $"updated|mode={mode}|pixel={px},{py}|mirror={DescribeMirrorTarget(texture, mirrorTarget)}|shape={_stickerShape}|size={Mathf.RoundToInt(_stickerSize)}|rotation={Mathf.RoundToInt(_stickerRotation)}|color={ColorToHex(_brushColor)}|opacity={_brushOpacity:0.##}|stampTexture={stampTexture.width}x{stampTexture.height}";
+        if (!force && Time.unscaledTime - _lastStickerPreviewLogTime < 0.5f && string.Equals(key, _lastStickerPreviewLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastStickerPreviewLogTime = Time.unscaledTime;
+        _lastStickerPreviewLogKey = key;
+        DrawableSuitsDiagnostics.Info($"StickerPreviewUpdated: {key}; uv={uv}; pointerSource={_pointerSource}; cursor={_cursor}");
+    }
+
+    private void LogStickerSurfacePreviewUpdated(Texture2D texture, RaycastHit hit, MirrorPaintTarget mirrorTarget, Texture2D stampTexture, TextSurfaceStampStats primaryStats, TextSurfaceStampStats mirrorStats)
+    {
+        if (texture == null || stampTexture == null)
+        {
+            return;
+        }
+
+        var pixel = TexturePixel(texture, hit.textureCoord);
+        var key = $"surfacePreview|pixel={pixel.x},{pixel.y}|mirror={DescribeMirrorTarget(texture, mirrorTarget)}|shape={_stickerShape}|size={Mathf.RoundToInt(_stickerSize)}|rotation={Mathf.RoundToInt(_stickerRotation)}|color={ColorToHex(_brushColor)}|opacity={_brushOpacity:0.##}|stampTexture={stampTexture.width}x{stampTexture.height}|primaryWritten={primaryStats.WrittenPixels}|mirrorWritten={mirrorStats.WrittenPixels}|primaryCells={primaryStats.RasterizedCells}|mirrorCells={mirrorStats.RasterizedCells}|primarySeams={primaryStats.SeamSkippedCells}|mirrorSeams={mirrorStats.SeamSkippedCells}";
+        if (Time.unscaledTime - _lastStickerPreviewLogTime < 0.5f && string.Equals(key, _lastStickerPreviewLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastStickerPreviewLogTime = Time.unscaledTime;
+        _lastStickerPreviewLogKey = key;
+        DrawableSuitsDiagnostics.Info($"StickerPreviewUpdated: {key}; hitPoint={hit.point}; hitNormal={hit.normal}; primarySamples={primaryStats.ProjectionSamples}; primaryHits={primaryStats.SurfaceHits}; primaryAlpha={primaryStats.AlphaPixels}; primarySkipped={primaryStats.SkippedPixels}; primaryOffSuit={primaryStats.OffSuitSamples}; primaryWorldSize={primaryStats.WorldWidth:0.###}x{primaryStats.WorldHeight:0.###}; mirrorSamples={mirrorStats.ProjectionSamples}; mirrorHits={mirrorStats.SurfaceHits}; mirrorAlpha={mirrorStats.AlphaPixels}; mirrorSkipped={mirrorStats.SkippedPixels}; mirrorOffSuit={mirrorStats.OffSuitSamples}; mirrorWorldSize={mirrorStats.WorldWidth:0.###}x{mirrorStats.WorldHeight:0.###}; pointerSource={_pointerSource}; cursor={_cursor}");
+    }
+
+    private void LogStickerSurfacePreviewSkipped(Texture2D texture, RaycastHit hit, MirrorPaintTarget mirrorTarget, Texture2D stampTexture, TextSurfaceStampStats primaryStats, TextSurfaceStampStats mirrorStats, string reason)
+    {
+        var pixel = texture != null ? TexturePixel(texture, hit.textureCoord) : new Vector2Int(-1, -1);
+        var key = $"surfacePreviewSkipped|reason={reason}|pixel={pixel.x},{pixel.y}|mirror={DescribeMirrorTarget(texture, mirrorTarget)}|shape={_stickerShape}|stampTexture={stampTexture?.width ?? 0}x{stampTexture?.height ?? 0}|primarySkipped={primaryStats.SkippedPixels}|mirrorSkipped={mirrorStats.SkippedPixels}|primaryCells={primaryStats.RasterizedCells}|mirrorCells={mirrorStats.RasterizedCells}";
+        if (Time.unscaledTime - _lastStickerPreviewLogTime < 0.75f && string.Equals(key, _lastStickerPreviewLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastStickerPreviewLogTime = Time.unscaledTime;
+        _lastStickerPreviewLogKey = key;
+        DrawableSuitsDiagnostics.Info($"StickerPreviewHidden: {key}; hitPoint={hit.point}; hitNormal={hit.normal}; primarySamples={primaryStats.ProjectionSamples}; primaryHits={primaryStats.SurfaceHits}; primaryOffSuit={primaryStats.OffSuitSamples}; primarySeams={primaryStats.SeamSkippedCells}; mirrorSamples={mirrorStats.ProjectionSamples}; mirrorHits={mirrorStats.SurfaceHits}; mirrorOffSuit={mirrorStats.OffSuitSamples}; mirrorSeams={mirrorStats.SeamSkippedCells}; pointerSource={_pointerSource}; cursor={_cursor}");
+    }
+
     private void LogPlacementPreviewHidden(string reason, bool force)
     {
         if (_placementPreviewTool == EditorTool.Text || _tool == EditorTool.Text)
         {
             LogTextPreviewHidden(reason, force);
+            return;
+        }
+        if (_placementPreviewTool == EditorTool.Sticker || _tool == EditorTool.Sticker)
+        {
+            LogStickerPreviewHidden(reason, force);
             return;
         }
 
@@ -6395,6 +6850,19 @@ internal sealed class SuitEditorController : MonoBehaviour
         _lastTextPreviewLogTime = Time.unscaledTime;
         _lastTextPreviewLogKey = key;
         DrawableSuitsDiagnostics.Info($"TextPreviewHidden: {key}; pointerSource={_pointerSource}; cursor={_cursor}");
+    }
+
+    private void LogStickerPreviewHidden(string reason, bool force)
+    {
+        var key = $"hidden|reason={reason}|mode={_previewMode}|shape={_stickerShape}|size={Mathf.RoundToInt(_stickerSize)}|rotation={Mathf.RoundToInt(_stickerRotation)}";
+        if (!force && Time.unscaledTime - _lastStickerPreviewLogTime < 0.75f && string.Equals(key, _lastStickerPreviewLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastStickerPreviewLogTime = Time.unscaledTime;
+        _lastStickerPreviewLogKey = key;
+        DrawableSuitsDiagnostics.Info($"StickerPreviewHidden: {key}; pointerSource={_pointerSource}; cursor={_cursor}");
     }
 
     private void LogDecalStampCommitted(string mode, Texture2D texture, Vector2 uv, MirrorPaintTarget mirrorTarget)
@@ -6447,6 +6915,18 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawableSuitsDiagnostics.Info($"TextStampCommitted: mode={mode}; pointerSource={_pointerSource}; uv={uv}; pixel={px},{py}; {DescribeMirrorTarget(texture, mirrorTarget)}; textLength={NormalizeTextStampValue(_textStampValue).Length}; fontSize={Mathf.RoundToInt(_textSize)}; rotation={Mathf.RoundToInt(_textRotation)}; color={ColorToHex(_brushColor)}; opacity={_brushOpacity:0.##}; generatedTexture={stampTexture?.width ?? 0}x{stampTexture?.height ?? 0}; stampSize={Mathf.RoundToInt(stampSize.x)}x{Mathf.RoundToInt(stampSize.y)}");
     }
 
+    private void LogStickerStampCommitted(string mode, Texture2D texture, Vector2 uv, MirrorPaintTarget mirrorTarget, Texture2D stampTexture)
+    {
+        if (texture == null)
+        {
+            return;
+        }
+
+        var px = Mathf.RoundToInt(uv.x * (texture.width - 1));
+        var py = Mathf.RoundToInt(uv.y * (texture.height - 1));
+        DrawableSuitsDiagnostics.Info($"StickerStampCommitted: mode={mode}; pointerSource={_pointerSource}; uv={uv}; pixel={px},{py}; {DescribeMirrorTarget(texture, mirrorTarget)}; shape={_stickerShape}; size={Mathf.RoundToInt(_stickerSize)}; rotation={Mathf.RoundToInt(_stickerRotation)}; color={ColorToHex(_brushColor)}; opacity={_brushOpacity:0.##}; stampTexture={stampTexture?.width ?? 0}x{stampTexture?.height ?? 0}; previewTexture={_decalPreviewTexture?.width ?? 0}x{_decalPreviewTexture?.height ?? 0}");
+    }
+
     private void LogTextSurfaceStampCommitted(Texture2D texture, RaycastHit hit, MirrorPaintTarget mirrorTarget, Texture2D stampTexture, TextSurfaceStampStats primaryStats, TextSurfaceStampStats mirrorStats)
     {
         if (texture == null)
@@ -6456,6 +6936,17 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         var pixel = TexturePixel(texture, hit.textureCoord);
         DrawableSuitsDiagnostics.Info($"TextSurfaceStampCommitted: mode=WorldThirdPerson; pointerSource={_pointerSource}; uv={hit.textureCoord}; pixel={pixel.x},{pixel.y}; {DescribeMirrorTarget(texture, mirrorTarget)}; textLength={NormalizeTextStampValue(_textStampValue).Length}; fontSize={Mathf.RoundToInt(_textSize)}; rotation={Mathf.RoundToInt(_textRotation)}; color={ColorToHex(_brushColor)}; opacity={_brushOpacity:0.##}; generatedTexture={stampTexture?.width ?? 0}x{stampTexture?.height ?? 0}; hitPoint={hit.point}; hitNormal={hit.normal}; primaryWritten={primaryStats.WrittenPixels}; primarySkipped={primaryStats.SkippedPixels}; primaryAlpha={primaryStats.AlphaPixels}; primaryWorldSize={primaryStats.WorldWidth:0.###}x{primaryStats.WorldHeight:0.###}; mirrorWritten={mirrorStats.WrittenPixels}; mirrorSkipped={mirrorStats.SkippedPixels}; mirrorAlpha={mirrorStats.AlphaPixels}; mirrorWorldSize={mirrorStats.WorldWidth:0.###}x{mirrorStats.WorldHeight:0.###}");
+    }
+
+    private void LogStickerSurfaceStampCommitted(Texture2D texture, RaycastHit hit, MirrorPaintTarget mirrorTarget, Texture2D stampTexture, TextSurfaceStampStats primaryStats, TextSurfaceStampStats mirrorStats)
+    {
+        if (texture == null)
+        {
+            return;
+        }
+
+        var pixel = TexturePixel(texture, hit.textureCoord);
+        DrawableSuitsDiagnostics.Info($"StickerStampCommitted: mode=WorldThirdPerson; pointerSource={_pointerSource}; uv={hit.textureCoord}; pixel={pixel.x},{pixel.y}; {DescribeMirrorTarget(texture, mirrorTarget)}; shape={_stickerShape}; size={Mathf.RoundToInt(_stickerSize)}; rotation={Mathf.RoundToInt(_stickerRotation)}; color={ColorToHex(_brushColor)}; opacity={_brushOpacity:0.##}; stampTexture={stampTexture?.width ?? 0}x{stampTexture?.height ?? 0}; hitPoint={hit.point}; hitNormal={hit.normal}; primarySamples={primaryStats.ProjectionSamples}; primaryHits={primaryStats.SurfaceHits}; primaryCells={primaryStats.RasterizedCells}; primarySeams={primaryStats.SeamSkippedCells}; primaryWritten={primaryStats.WrittenPixels}; primarySkipped={primaryStats.SkippedPixels}; primaryOffSuit={primaryStats.OffSuitSamples}; primaryAlpha={primaryStats.AlphaPixels}; primaryWorldSize={primaryStats.WorldWidth:0.###}x{primaryStats.WorldHeight:0.###}; mirrorSamples={mirrorStats.ProjectionSamples}; mirrorHits={mirrorStats.SurfaceHits}; mirrorCells={mirrorStats.RasterizedCells}; mirrorSeams={mirrorStats.SeamSkippedCells}; mirrorWritten={mirrorStats.WrittenPixels}; mirrorSkipped={mirrorStats.SkippedPixels}; mirrorOffSuit={mirrorStats.OffSuitSamples}; mirrorAlpha={mirrorStats.AlphaPixels}; mirrorWorldSize={mirrorStats.WorldWidth:0.###}x{mirrorStats.WorldHeight:0.###}");
     }
 
     private void LogTextSurfaceStampSkipped(string mode, string reason, Texture2D texture, RaycastHit hit, MirrorPaintTarget mirrorTarget, Texture2D stampTexture, TextSurfaceStampStats primaryStats, TextSurfaceStampStats mirrorStats)
@@ -6483,6 +6974,33 @@ internal sealed class SuitEditorController : MonoBehaviour
         _lastTextPreviewLogTime = Time.unscaledTime;
         _lastTextPreviewLogKey = key;
         DrawableSuitsDiagnostics.Info($"TextStampSkipped: {key}; pointerSource={_pointerSource}; cursor={_cursor}");
+    }
+
+    private void LogStickerSurfaceStampSkipped(string mode, string reason, Texture2D texture, RaycastHit hit, MirrorPaintTarget mirrorTarget, Texture2D stampTexture, TextSurfaceStampStats primaryStats, TextSurfaceStampStats mirrorStats)
+    {
+        var pixel = texture != null ? TexturePixel(texture, hit.textureCoord) : new Vector2Int(-1, -1);
+        var key = $"surfaceStampSkipped|mode={mode}|reason={reason}|pixel={pixel.x},{pixel.y}|mirror={DescribeMirrorTarget(texture, mirrorTarget)}|shape={_stickerShape}|stampTexture={stampTexture?.width ?? 0}x{stampTexture?.height ?? 0}|primaryWritten={primaryStats.WrittenPixels}|mirrorWritten={mirrorStats.WrittenPixels}|primaryCells={primaryStats.RasterizedCells}|mirrorCells={mirrorStats.RasterizedCells}";
+        if (Time.unscaledTime - _lastStickerPreviewLogTime < 0.75f && string.Equals(key, _lastStickerPreviewLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastStickerPreviewLogTime = Time.unscaledTime;
+        _lastStickerPreviewLogKey = key;
+        DrawableSuitsDiagnostics.Info($"StickerStampSkipped: {key}; hitPoint={hit.point}; hitNormal={hit.normal}; primarySamples={primaryStats.ProjectionSamples}; primaryHits={primaryStats.SurfaceHits}; primarySkipped={primaryStats.SkippedPixels}; primaryOffSuit={primaryStats.OffSuitSamples}; primarySeams={primaryStats.SeamSkippedCells}; mirrorSamples={mirrorStats.ProjectionSamples}; mirrorHits={mirrorStats.SurfaceHits}; mirrorSkipped={mirrorStats.SkippedPixels}; mirrorOffSuit={mirrorStats.OffSuitSamples}; mirrorSeams={mirrorStats.SeamSkippedCells}; pointerSource={_pointerSource}; cursor={_cursor}");
+    }
+
+    private void LogStickerStampSkipped(string mode, string reason)
+    {
+        var key = $"skipped|mode={mode}|reason={reason}|shape={_stickerShape}|size={Mathf.RoundToInt(_stickerSize)}|rotation={Mathf.RoundToInt(_stickerRotation)}|color={ColorToHex(_brushColor)}";
+        if (Time.unscaledTime - _lastStickerPreviewLogTime < 0.75f && string.Equals(key, _lastStickerPreviewLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastStickerPreviewLogTime = Time.unscaledTime;
+        _lastStickerPreviewLogKey = key;
+        DrawableSuitsDiagnostics.Info($"StickerStampSkipped: {key}; pointerSource={_pointerSource}; cursor={_cursor}");
     }
 
     private string CurrentDecalName()
@@ -7329,6 +7847,11 @@ internal sealed class SuitEditorController : MonoBehaviour
                 HandleWorldTextStampInput(texture, hitAvailable, hit, mirrorTarget);
                 return;
             }
+            if (_tool == EditorTool.Sticker)
+            {
+                HandleWorldStickerStampInput(texture, hitAvailable, hit, mirrorTarget);
+                return;
+            }
 
             HandleWorldDecalStampInput(texture, hitAvailable, hit, mirrorTarget);
             return;
@@ -7703,7 +8226,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             if (string.Equals(mode, "WorldThirdPerson", StringComparison.OrdinalIgnoreCase))
             {
-                SetStatus(_tool == EditorTool.Text ? "Aim at your visible suit to stamp text." : "Aim at your visible suit to stamp the decal.", false);
+                SetStatus(_tool == EditorTool.Text ? "Aim at your visible suit to stamp text." : _tool == EditorTool.Sticker ? "Aim at your visible suit to stamp the sticker." : "Aim at your visible suit to stamp the decal.", false);
             }
             return;
         }
@@ -7716,6 +8239,11 @@ internal sealed class SuitEditorController : MonoBehaviour
                 _tool = EditorTool.Paint;
                 UpdateToolButtons();
             }
+            else if (_tool == EditorTool.Sticker)
+            {
+                SetStatus($"Sticker failed: {failureReason}.", false);
+                LogStickerStampSkipped(mode, failureReason);
+            }
             else
             {
                 SetStatus("Enter text before stamping.", false);
@@ -7724,7 +8252,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        var historyLabel = _tool == EditorTool.Text ? "Text placed" : "Decal placed";
+        var historyLabel = _tool == EditorTool.Text ? "Text placed" : _tool == EditorTool.Sticker ? "Sticker placed" : "Decal placed";
         SaveUndo(historyLabel);
         ClearRedoHistory("placement stamp");
         if (PaintAtCursor(texture, uv, mirrorTarget))
@@ -7732,6 +8260,10 @@ internal sealed class SuitEditorController : MonoBehaviour
             if (_tool == EditorTool.Text)
             {
                 LogTextStampCommitted(mode, texture, uv, mirrorTarget, stampTexture);
+            }
+            else if (_tool == EditorTool.Sticker)
+            {
+                LogStickerStampCommitted(mode, texture, uv, mirrorTarget, stampTexture);
             }
             else
             {
@@ -7859,6 +8391,65 @@ internal sealed class SuitEditorController : MonoBehaviour
         LogPaintApplied(texture, hit.textureCoord, mirrorTarget);
         UpdateBrushIndicator();
     }
+
+    private void HandleWorldStickerStampInput(Texture2D texture, bool targetAvailable, RaycastHit hit, MirrorPaintTarget mirrorTarget)
+    {
+        _strokeActive = false;
+        if (!_decalStampArmed)
+        {
+            return;
+        }
+
+        _decalStampArmed = false;
+        _suppressDecalPreviewUntilRelease = true;
+        HideDecalPlacementPreview("sticker stamp input", false);
+
+        if (!targetAvailable || texture == null)
+        {
+            SetStatus("Aim at your visible suit to stamp the sticker.", false);
+            LogStickerSurfaceStampSkipped("WorldThirdPerson", "cursor miss", texture, hit, mirrorTarget, null, default, default);
+            return;
+        }
+
+        if (!TryGetStickerStampTexture(_stickerShape, out var stampTexture, out var failureReason))
+        {
+            SetStatus($"Sticker failed: {failureReason}.", false);
+            LogStickerSurfaceStampSkipped("WorldThirdPerson", failureReason, texture, hit, mirrorTarget, stampTexture, default, default);
+            return;
+        }
+
+        SaveUndo("Sticker placed");
+        ClearRedoHistory("world sticker stamp");
+        var touchedPixels = mirrorTarget.Enabled && mirrorTarget.Available ? new HashSet<int>() : null;
+        var primaryChanged = CompositeDecalSurfaceStamp(texture, stampTexture, hit.point, hit.normal, _stickerRotation, false, _brushOpacity, touchedPixels, out var primaryStats, true);
+        var mirrorChanged = false;
+        TextSurfaceStampStats mirrorStats = default;
+        if (ShouldApplyMirror(texture, hit.textureCoord, mirrorTarget) && TryGetMirrorWorldPlacement(mirrorTarget, out var mirrorPoint, out var mirrorNormal))
+        {
+            mirrorChanged = CompositeDecalSurfaceStamp(texture, stampTexture, mirrorPoint, mirrorNormal, -_stickerRotation, true, _brushOpacity, touchedPixels, out mirrorStats, true);
+        }
+
+        if (!primaryChanged && !mirrorChanged)
+        {
+            LogStickerSurfaceStampSkipped("WorldThirdPerson", "surface projection wrote no pixels", texture, hit, mirrorTarget, stampTexture, primaryStats, mirrorStats);
+            DropLastUndoEntry("Sticker placed wrote no pixels");
+            return;
+        }
+
+        texture.Apply(false, false);
+        InvalidateDecalPreview("texture changed by sticker surface stamp");
+        DrawableSuitsPlugin.Registry.ApplyEditedTexture(_selectedSuitId, _designName, false);
+        RefreshTexturePanelPreview("WorldStickerStamp", false);
+        if (_mirrorEnabled && !mirrorTarget.Available)
+        {
+            SetStatus("Mirror target not found; applied primary sticker only.", false);
+        }
+        AddRecentColorFromBrush("Sticker");
+        LogStickerSurfaceStampCommitted(texture, hit, mirrorTarget, stampTexture, primaryStats, mirrorStats);
+        LogPaintApplied(texture, hit.textureCoord, mirrorTarget);
+        UpdateBrushIndicator();
+    }
+
     private void LogPaintAttemptIfNeeded(string reason, bool overPreview, bool uvAvailable, Vector2 uv, Texture2D texture, MirrorPaintTarget mirrorTarget, bool force)
     {
         var pixel = "none";
@@ -8030,6 +8621,14 @@ internal sealed class SuitEditorController : MonoBehaviour
                 }
                 _strokeActive = false;
                 break;
+            case EditorTool.Sticker:
+                changed = ApplyStickerStamp(texture, uv, false, touchedPixels);
+                if (applyMirror)
+                {
+                    changed |= ApplyStickerStamp(texture, mirrorTarget.Uv, true, touchedPixels);
+                }
+                _strokeActive = false;
+                break;
             default:
                 changed = false;
                 break;
@@ -8061,6 +8660,10 @@ internal sealed class SuitEditorController : MonoBehaviour
         else if (_tool == EditorTool.Text)
         {
             AddRecentColorFromBrush("Text");
+        }
+        else if (_tool == EditorTool.Sticker)
+        {
+            AddRecentColorFromBrush("Sticker");
         }
 
         LogPaintApplied(texture, uv, mirrorTarget, primaryBrushStats, mirrorBrushStats);
@@ -8832,20 +9435,33 @@ internal sealed class SuitEditorController : MonoBehaviour
         return CompositePlacementStamp(target, stampTexture, uv, _textSize, mirrored ? -_textRotation : _textRotation, _brushOpacity, mirrored, touchedPixels, true);
     }
 
+    private bool ApplyStickerStamp(Texture2D target, Vector2 uv, bool mirrored = false, HashSet<int> touchedPixels = null)
+    {
+        if (!TryGetStickerStampTexture(_stickerShape, out var stampTexture, out var failureReason))
+        {
+            LogStickerStampSkipped("ApplyStickerStamp", failureReason);
+            return false;
+        }
+
+        return CompositePlacementStamp(target, stampTexture, uv, _stickerSize, mirrored ? -_stickerRotation : _stickerRotation, _brushOpacity, mirrored, touchedPixels, true);
+    }
+
     private bool CompositeTextSurfaceStamp(Texture2D target, Texture2D stamp, Vector3 center, Vector3 normal, float rotation, bool mirrored, float opacity, HashSet<int> touchedPixels, out TextSurfaceStampStats stats)
     {
         return CompositeSurfaceStamp(target, stamp, center, normal, rotation, CalculateTextWorldHeight(), mirrored, opacity, touchedPixels, true, out stats);
     }
 
-    private bool CompositeDecalSurfaceStamp(Texture2D target, Texture2D stamp, Vector3 center, Vector3 normal, float rotation, bool mirrored, float opacity, HashSet<int> touchedPixels, out TextSurfaceStampStats stats)
+    private bool CompositeDecalSurfaceStamp(Texture2D target, Texture2D stamp, Vector3 center, Vector3 normal, float rotation, bool mirrored, float opacity, HashSet<int> touchedPixels, out TextSurfaceStampStats stats, bool tintWithBrushColor = false)
     {
-        var sampleHeight = Mathf.Clamp(Mathf.RoundToInt(_decalSize), 12, 160);
+        var placementSize = _tool == EditorTool.Sticker ? _stickerSize : _decalSize;
+        var sampleHeight = Mathf.Clamp(Mathf.RoundToInt(placementSize), 12, 160);
         var aspect = stamp != null ? stamp.width / Mathf.Max(1f, (float)stamp.height) : 1f;
         var sampleWidth = Mathf.Clamp(Mathf.RoundToInt(sampleHeight * aspect), 12, 256);
-        return CompositeDecalSurfaceCoverageStamp(target, stamp, center, normal, rotation, CalculateDecalWorldHeight(), mirrored, opacity, touchedPixels, sampleWidth, sampleHeight, out stats);
+        var worldHeight = _tool == EditorTool.Sticker ? CalculateStickerWorldHeight() : CalculateDecalWorldHeight();
+        return CompositeDecalSurfaceCoverageStamp(target, stamp, center, normal, rotation, worldHeight, mirrored, opacity, touchedPixels, sampleWidth, sampleHeight, out stats, tintWithBrushColor);
     }
 
-    private bool CompositeDecalSurfaceCoverageStamp(Texture2D target, Texture2D stamp, Vector3 center, Vector3 normal, float rotation, float worldHeight, bool mirrored, float opacity, HashSet<int> touchedPixels, int sampleWidth, int sampleHeight, out TextSurfaceStampStats stats)
+    private bool CompositeDecalSurfaceCoverageStamp(Texture2D target, Texture2D stamp, Vector3 center, Vector3 normal, float rotation, float worldHeight, bool mirrored, float opacity, HashSet<int> touchedPixels, int sampleWidth, int sampleHeight, out TextSurfaceStampStats stats, bool tintWithBrushColor = false)
     {
         stats = default;
         stats.Mirrored = mirrored;
@@ -8907,7 +9523,7 @@ internal sealed class SuitEditorController : MonoBehaviour
                 };
                 grid[GridIndex(gx, gy, gridWidth)] = sample;
                 stats.SurfaceHits++;
-                AddProjectedStampPixel(target, stamp, sample.StampUv, sample.Pixel, opacity01, projectedSamples, ref stats);
+                AddProjectedStampPixel(target, stamp, sample.StampUv, sample.Pixel, opacity01, projectedSamples, ref stats, tintWithBrushColor);
             }
         }
 
@@ -8931,8 +9547,8 @@ internal sealed class SuitEditorController : MonoBehaviour
                 }
 
                 stats.RasterizedCells++;
-                RasterizeProjectedDecalTriangle(target, stamp, s00, s10, s01, opacity01, projectedSamples, ref stats);
-                RasterizeProjectedDecalTriangle(target, stamp, s10, s11, s01, opacity01, projectedSamples, ref stats);
+                RasterizeProjectedDecalTriangle(target, stamp, s00, s10, s01, opacity01, projectedSamples, ref stats, tintWithBrushColor);
+                RasterizeProjectedDecalTriangle(target, stamp, s10, s11, s01, opacity01, projectedSamples, ref stats, tintWithBrushColor);
             }
         }
 
@@ -8982,7 +9598,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             || Vector2.Distance(s10.Pixel, s01.Pixel) > diagonalThreshold;
     }
 
-    private static void RasterizeProjectedDecalTriangle(Texture2D target, Texture2D stamp, SurfaceStampGridSample a, SurfaceStampGridSample b, SurfaceStampGridSample c, float opacity, Dictionary<int, SurfaceStampSample> projectedSamples, ref TextSurfaceStampStats stats)
+    private void RasterizeProjectedDecalTriangle(Texture2D target, Texture2D stamp, SurfaceStampGridSample a, SurfaceStampGridSample b, SurfaceStampGridSample c, float opacity, Dictionary<int, SurfaceStampSample> projectedSamples, ref TextSurfaceStampStats stats, bool tintWithBrushColor)
     {
         var minX = Mathf.Max(0, Mathf.FloorToInt(Mathf.Min(a.Pixel.x, Mathf.Min(b.Pixel.x, c.Pixel.x))));
         var maxX = Mathf.Min(target.width - 1, Mathf.CeilToInt(Mathf.Max(a.Pixel.x, Mathf.Max(b.Pixel.x, c.Pixel.x))));
@@ -9004,12 +9620,12 @@ internal sealed class SuitEditorController : MonoBehaviour
                 }
 
                 var stampUv = (a.StampUv * barycentric.x) + (b.StampUv * barycentric.y) + (c.StampUv * barycentric.z);
-                AddProjectedStampPixel(target, stamp, stampUv, new Vector2(x, y), opacity, projectedSamples, ref stats);
+                AddProjectedStampPixel(target, stamp, stampUv, new Vector2(x, y), opacity, projectedSamples, ref stats, tintWithBrushColor);
             }
         }
     }
 
-    private static void AddProjectedStampPixel(Texture2D target, Texture2D stamp, Vector2 stampUv, Vector2 pixel, float opacity, Dictionary<int, SurfaceStampSample> projectedSamples, ref TextSurfaceStampStats stats)
+    private void AddProjectedStampPixel(Texture2D target, Texture2D stamp, Vector2 stampUv, Vector2 pixel, float opacity, Dictionary<int, SurfaceStampSample> projectedSamples, ref TextSurfaceStampStats stats, bool tintWithBrushColor)
     {
         if (target == null || stamp == null || projectedSamples == null)
         {
@@ -9029,7 +9645,9 @@ internal sealed class SuitEditorController : MonoBehaviour
         var index = (y * target.width) + x;
         var projected = new SurfaceStampSample
         {
-            Color = sample,
+            Color = tintWithBrushColor
+                ? new Color(_brushColor.r, _brushColor.g, _brushColor.b, 1f)
+                : sample,
             Alpha = effectiveAlpha
         };
 
@@ -9276,6 +9894,17 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         return Mathf.Clamp((_decalSize / 512f) * boundsHeight, boundsHeight * 0.012f, boundsHeight * 0.55f);
+    }
+
+    private float CalculateStickerWorldHeight()
+    {
+        var boundsHeight = _worldAvatarRenderer != null ? _worldAvatarRenderer.bounds.size.y : 1.8f;
+        if (boundsHeight <= 0.01f)
+        {
+            boundsHeight = 1.8f;
+        }
+
+        return Mathf.Clamp((_stickerSize / 512f) * boundsHeight, boundsHeight * 0.012f, boundsHeight * 0.55f);
     }
 
     private bool TryRaycastSurfaceStampPoint(Vector3 planePoint, Vector3 normal, float offset, float distance, out RaycastHit hit)

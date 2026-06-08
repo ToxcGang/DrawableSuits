@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.43
+
+- Added a UI-only Sticker tool with built-in shape stamps, live preview, one-shot placement, Mirror support, undo history, and recent-color tracking.
+- Added Circle, Square, Triangle, Diamond, Star, Heart, Arrow, Lightning Bolt, Plus/Cross, Ring, Crescent, and Shield sticker shapes.
+- Kept stickers baked into the suit texture after stamping, with no editable layer system or new shortcuts.
+
 ## 0.5.42
 
 - Replaced the package icon with the new terminal artwork, cropped and resized for the 256x256 mod icon.
