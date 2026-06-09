@@ -3,6 +3,8 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
 using GameNetcodeStuff;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -89,6 +91,11 @@ internal sealed class SuitEditorController : MonoBehaviour
     private const float WorldPlacementPreviewMinInterval = 0.05f;
     private const float WorldPlacementPreviewIdleDelay = 0.15f;
     private const float WorldPlacementPreviewMoveThresholdPixels = 2f;
+    private const int OpenFileNameFileMustExist = 0x00001000;
+    private const int OpenFileNamePathMustExist = 0x00000800;
+    private const int OpenFileNameNoChangeDir = 0x00000008;
+    private const int OpenFileNameHideReadOnly = 0x00000004;
+    private const int OpenFileNameExplorer = 0x00080000;
 
     private static readonly Color TerminalPanelColor = new(0.018f, 0.022f, 0.024f, 0.88f);
     private static readonly Color TerminalDialogColor = new(0.022f, 0.024f, 0.026f, 0.98f);
@@ -110,6 +117,40 @@ internal sealed class SuitEditorController : MonoBehaviour
     private static readonly Vector2[] StickerArrowVertices = { new(-0.9f, -0.28f), new(0.12f, -0.28f), new(0.12f, -0.62f), new(0.9f, 0f), new(0.12f, 0.62f), new(0.12f, 0.28f), new(-0.9f, 0.28f) };
     private static readonly Vector2[] StickerLightningVertices = { new(-0.25f, 0.92f), new(0.55f, 0.92f), new(0.1f, 0.14f), new(0.64f, 0.14f), new(-0.32f, -0.96f), new(-0.02f, -0.24f), new(-0.58f, -0.24f) };
     private static readonly Vector2[] StickerShieldVertices = { new(-0.72f, 0.7f), new(0.72f, 0.7f), new(0.62f, -0.18f), new(0f, -0.92f), new(-0.62f, -0.18f) };
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private sealed class OpenFileName
+    {
+        public int lStructSize;
+        public IntPtr hwndOwner;
+        public IntPtr hInstance;
+        public string lpstrFilter;
+        public StringBuilder lpstrCustomFilter;
+        public int nMaxCustFilter;
+        public int nFilterIndex;
+        public StringBuilder lpstrFile;
+        public int nMaxFile;
+        public StringBuilder lpstrFileTitle;
+        public int nMaxFileTitle;
+        public string lpstrInitialDir;
+        public string lpstrTitle;
+        public int Flags;
+        public short nFileOffset;
+        public short nFileExtension;
+        public string lpstrDefExt;
+        public IntPtr lCustData;
+        public IntPtr lpfnHook;
+        public string lpTemplateName;
+        public IntPtr pvReserved;
+        public int dwReserved;
+        public int FlagsEx;
+    }
+
+    [DllImport("comdlg32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool GetOpenFileName([In, Out] OpenFileName openFileName);
+
+    [DllImport("comdlg32.dll")]
+    private static extern int CommDlgExtendedError();
 
     private readonly Stack<UndoHistoryEntry> _undo = new();
     private readonly Stack<UndoHistoryEntry> _redo = new();
@@ -2604,7 +2645,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         _decalListContent = CreateAnchoredScrollList(dialog.transform, "DecalList", new Rect(18f, 104f, 484f, 276f));
 
         _deleteSelectedDecalButton = CreateAnchoredButton(dialog.transform, "Delete Selected", new Rect(18f, 394f, 124f, 34f), DeleteSelectedDecal);
-        CreateAnchoredButton(dialog.transform, "Refresh", new Rect(150f, 394f, 94f, 34f), RefreshDecalsPanel);
+        CreateAnchoredButton(dialog.transform, "Add Decal", new Rect(150f, 394f, 102f, 34f), ImportDecalFromDialog);
+        CreateAnchoredButton(dialog.transform, "Refresh", new Rect(260f, 394f, 94f, 34f), RefreshDecalsPanel);
         CreateAnchoredButton(dialog.transform, "Close", new Rect(404f, 394f, 98f, 34f), CloseDecalsPanel);
         _decalsStatusLabel = CreateAnchoredText(dialog.transform, "DecalsStatus", string.Empty, 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(18f, 442f, 484f, 48f), TerminalStatusColor);
 
@@ -11656,9 +11698,226 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void ImportDecalFromDialog()
     {
+        CancelPendingDecalDelete("add decal");
+        DrawableSuitsDiagnostics.Info($"DecalImportDialogOpened: decalsPath={DrawableSuitsPaths.Decals}; selectedDecalIndex={_selectedDecalIndex}; decalCount={_decalFiles.Count}; maxTextureSize={DrawableSuitsPlugin.ModConfig.MaxTextureSize.Value}");
+        if (!TryOpenImageFilePicker(out var selectedPath, out var pickerFailure))
+        {
+            SetDecalsStatus(pickerFailure);
+            SetStatus(pickerFailure, false);
+            DrawableSuitsDiagnostics.Info($"DecalImportFailed: stage=picker; reason={pickerFailure}; decalsPath={DrawableSuitsPaths.Decals}");
+            return;
+        }
+
+        if (!TryImportDecalImage(selectedPath, out var importedPath, out var copied, out var importFailure))
+        {
+            SetDecalsStatus(importFailure);
+            SetStatus(importFailure, false);
+            DrawableSuitsDiagnostics.Warn($"DecalImportFailed: stage=import; source={selectedPath}; reason={importFailure}; decalsPath={DrawableSuitsPaths.Decals}");
+            return;
+        }
+
         RefreshFileLists();
-        SetStatus("Decals refreshed. Add PNG/JPG files to the Decals folder.", false);
-        DrawableSuitsDiagnostics.Warn($"OS file dialog import is disabled for stability in {PluginInfo.Version}. EnableOsFileDialog config value is ignored. DecalsPath={DrawableSuitsPaths.Decals}");
+        var importedIndex = FindFileIndex(_decalFiles, importedPath);
+        if (importedIndex < 0)
+        {
+            SetDecalsStatus("Imported decal, but it was not found after refresh.");
+            SetStatus("Imported decal, but it was not found after refresh.", false);
+            DrawableSuitsDiagnostics.Warn($"DecalImportFailed: stage=refresh-select; source={selectedPath}; target={importedPath}; copied={copied}; decalCount={_decalFiles.Count}");
+            return;
+        }
+
+        DrawableSuitsDiagnostics.Info($"DecalImported: source={selectedPath}; target={importedPath}; copied={copied}; selectedIndex={importedIndex}; decalCount={_decalFiles.Count}");
+        SelectDecal(importedIndex);
+        SetStatus($"Imported decal: {Path.GetFileName(importedPath)}.", false);
+    }
+
+    private static bool TryOpenImageFilePicker(out string selectedPath, out string failureReason)
+    {
+        selectedPath = null;
+        failureReason = string.Empty;
+        if (Application.platform != RuntimePlatform.WindowsPlayer && Application.platform != RuntimePlatform.WindowsEditor)
+        {
+            failureReason = "File picker is only available on Windows. Add PNG/JPG files to the Decals folder and press Refresh.";
+            return false;
+        }
+
+        try
+        {
+            var fileBuffer = new StringBuilder(4096);
+            var titleBuffer = new StringBuilder(512);
+            var initialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
+            var openFileName = new OpenFileName
+            {
+                lStructSize = Marshal.SizeOf(typeof(OpenFileName)),
+                lpstrFilter = "Image Files (*.png;*.jpg;*.jpeg)\0*.png;*.jpg;*.jpeg\0PNG Files (*.png)\0*.png\0JPEG Files (*.jpg;*.jpeg)\0*.jpg;*.jpeg\0All Files (*.*)\0*.*\0\0",
+                lpstrFile = fileBuffer,
+                nMaxFile = fileBuffer.Capacity,
+                lpstrFileTitle = titleBuffer,
+                nMaxFileTitle = titleBuffer.Capacity,
+                lpstrInitialDir = Directory.Exists(initialDirectory) ? initialDirectory : null,
+                lpstrTitle = "Add DrawableSuits Decal",
+                Flags = OpenFileNameExplorer
+                    | OpenFileNameFileMustExist
+                    | OpenFileNamePathMustExist
+                    | OpenFileNameNoChangeDir
+                    | OpenFileNameHideReadOnly,
+                lpstrDefExt = "png"
+            };
+
+            if (GetOpenFileName(openFileName))
+            {
+                selectedPath = openFileName.lpstrFile?.ToString();
+                if (!string.IsNullOrWhiteSpace(selectedPath))
+                {
+                    return true;
+                }
+
+                failureReason = "No image file was selected.";
+                return false;
+            }
+
+            var error = CommDlgExtendedError();
+            failureReason = error == 0
+                ? "File selection canceled."
+                : "File picker failed. Add PNG/JPG files to the Decals folder and press Refresh.";
+            if (error != 0)
+            {
+                DrawableSuitsDiagnostics.Warn($"DecalImportFilePickerError: error={error}");
+            }
+            return false;
+        }
+        catch (Exception ex)
+        {
+            failureReason = "File picker failed. Add PNG/JPG files to the Decals folder and press Refresh.";
+            DrawableSuitsDiagnostics.Exception("Decal import file picker threw an exception.", ex);
+            return false;
+        }
+    }
+
+    private bool TryImportDecalImage(string sourcePath, out string importedPath, out bool copied, out string failureReason)
+    {
+        importedPath = null;
+        copied = false;
+        failureReason = string.Empty;
+        if (string.IsNullOrWhiteSpace(sourcePath))
+        {
+            failureReason = "No image file was selected.";
+            return false;
+        }
+
+        string sourceFullPath;
+        try
+        {
+            sourceFullPath = Path.GetFullPath(sourcePath);
+        }
+        catch (Exception ex)
+        {
+            failureReason = "Selected decal path is invalid.";
+            DrawableSuitsDiagnostics.Exception($"DecalImportFailed path validation exception. source={sourcePath}", ex);
+            return false;
+        }
+
+        if (!File.Exists(sourceFullPath) || Directory.Exists(sourceFullPath))
+        {
+            failureReason = "Selected decal file does not exist.";
+            return false;
+        }
+
+        if (!TextureTools.IsImagePath(sourceFullPath))
+        {
+            failureReason = "Selected file must be PNG, JPG, or JPEG.";
+            return false;
+        }
+
+        Texture2D validationTexture = null;
+        try
+        {
+            validationTexture = TextureTools.LoadImageFile(sourceFullPath, DrawableSuitsPlugin.ModConfig.MaxTextureSize.Value);
+            if (validationTexture == null)
+            {
+                failureReason = "Selected image could not be decoded.";
+                return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            failureReason = "Selected image could not be decoded.";
+            DrawableSuitsDiagnostics.Exception($"DecalImportFailed image decode exception. source={sourceFullPath}", ex);
+            return false;
+        }
+        finally
+        {
+            if (validationTexture != null)
+            {
+                Destroy(validationTexture);
+            }
+        }
+
+        try
+        {
+            DrawableSuitsPaths.EnsureCreated();
+            importedPath = CreateUniqueDecalImportPath(sourceFullPath);
+            if (!string.Equals(sourceFullPath, importedPath, StringComparison.OrdinalIgnoreCase))
+            {
+                File.Copy(sourceFullPath, importedPath, false);
+                copied = true;
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            failureReason = "Selected image could not be copied into the Decals folder.";
+            DrawableSuitsDiagnostics.Exception($"DecalImportFailed copy exception. source={sourceFullPath}; target={importedPath ?? "null"}; decalsPath={DrawableSuitsPaths.Decals}", ex);
+            return false;
+        }
+    }
+
+    private static string CreateUniqueDecalImportPath(string sourceFullPath)
+    {
+        var decalsRoot = Path.GetFullPath(DrawableSuitsPaths.Decals);
+        var extension = Path.GetExtension(sourceFullPath).ToLowerInvariant();
+        var baseName = TextureTools.SanitizeFileName(Path.GetFileNameWithoutExtension(sourceFullPath));
+        if (string.IsNullOrWhiteSpace(baseName))
+        {
+            baseName = "Decal";
+        }
+
+        var sameFolderTarget = Path.GetFullPath(Path.Combine(decalsRoot, baseName + extension));
+        if (IsPathUnderRoot(sourceFullPath, decalsRoot)
+            && string.Equals(sourceFullPath, sameFolderTarget, StringComparison.OrdinalIgnoreCase))
+        {
+            return sourceFullPath;
+        }
+
+        var candidate = sameFolderTarget;
+        var suffix = 1;
+        while (File.Exists(candidate))
+        {
+            candidate = Path.GetFullPath(Path.Combine(decalsRoot, $"{baseName}_{suffix}{extension}"));
+            suffix++;
+        }
+
+        return candidate;
+    }
+
+    private static bool IsPathUnderRoot(string path, string rootDirectory)
+    {
+        try
+        {
+            var fullPath = Path.GetFullPath(path);
+            var rootPath = Path.GetFullPath(rootDirectory);
+            if (!rootPath.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal))
+            {
+                rootPath += Path.DirectorySeparatorChar;
+            }
+
+            return fullPath.StartsWith(rootPath, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private void SelectDecal(int index)

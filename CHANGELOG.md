@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.47
+
+- Added `Add Decal` in the Decals menu, using a guarded Windows file picker to copy PNG/JPG/JPEG files into the DrawableSuits Decals folder.
+- Imported decals are validated, copied under a safe unique filename, refreshed, and selected automatically.
+- Added decal import diagnostics and kept manual folder placement plus `Refresh` as the fallback path.
+
 ## 0.5.46
 
 - Added a `Clear History` button that clears undo/redo history without changing the current suit texture.
