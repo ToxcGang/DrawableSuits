@@ -19,7 +19,7 @@ DrawableSuits is a Lethal Company v81 BepInEx mod that lets players draw on suit
 - Controller support: left stick moves the editor cursor, `A` clicks exactly the UI control under the cursor, right trigger paints only, right stick/bumpers orbit the camera, D-pad up/down zooms, `Y` cycles tools, `X` undoes, and Start saves.
 - Direct surface painting: the editor bakes a hidden mesh collider from the local player model and paints by raycasting from the third-person camera to suit UV coordinates.
 - Always-visible UV texture panel: while third-person editing is active, the right-column texture panel stays visible and editable without toggling views. Texture-only fallback is still available for diagnostics or third-person setup failures.
-- PNG/JPG decals from `BepInEx/config/DrawableSuits/Decals`. The Decals menu `Add Decal` button opens a guarded Windows image picker, copies the selected PNG/JPG/JPEG into the Decals folder, refreshes the rows, and loads the imported decal.
+- PNG/JPG decals from `BepInEx/config/DrawableSuits/Decals`. The Decals menu `Add Decal` button launches an external Windows image picker process, copies the selected PNG/JPG/JPEG into the Decals folder, refreshes the rows, and loads the imported decal.
 - Reusable saved designs stored as JSON metadata plus PNG texture files.
 - Compact lossless `DSUIT2:` design codes for copy/paste import and export between profiles or players, with legacy `DSUIT1:` import compatibility.
 - Apply/save multiplayer sync for other players who also have DrawableSuits installed, keyed per player so two players wearing the same suit can have different edits.
@@ -90,7 +90,7 @@ DrawableSuits creates these folders after launch:
 - `BepInEx/config/DrawableSuits/Decals` stores user decal images.
 - `BepInEx/config/DrawableSuits/Logs` stores the diagnostics log.
 
-Use the in-game `Decals` menu `Add Decal` button to copy a `.png`, `.jpg`, or `.jpeg` into `Decals`. Manual folder placement still works: put image files in `Decals`, open the `Decals` menu, and press `Refresh`.
+Use the in-game `Decals` menu `Add Decal` button to copy a `.png`, `.jpg`, or `.jpeg` into `Decals`. The picker runs in a separate PowerShell process so the game never calls the Windows common dialog in-process. Manual folder placement still works: put image files in `Decals`, open the `Decals` menu, and press `Refresh`.
 
 ## Multiplayer
 
@@ -129,7 +129,7 @@ The BepInEx config file controls:
 - `ApplyLocalFirstPersonArms`, disabled by default, is experimental and allows edited materials on local first-person arms/body outside the editor.
 - `AutoDisableBrokenJetpackWarningLateUpdatePatch`, enabled by default, disables only the broken JetpackWarning `PlayerControllerB.LateUpdate` postfix after repeated null-reference errors are detected.
 - `EnableExperimentalModelPreview`, disabled by default, keeps the old RenderTexture model preview as diagnostics only.
-- `EnableOsFileDialog` is a legacy ignored setting. The Decals menu `Add Decal` button uses the guarded Windows file picker instead.
+- `EnableOsFileDialog` is a legacy ignored setting. The Decals menu `Add Decal` button uses an external Windows picker process instead.
 
 ## Debugging
 
@@ -137,7 +137,7 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.47 behavior:
+Expected 0.5.48 behavior:
 
 - Opening the editor shows an Imperium-inspired red/dark terminal overlay and a third-person camera view of the local player.
 - Paint, Erase, Fill, Decal, Text, Sticker, Eyedropper, and Mirror use embedded generated PNG icon masks instead of large text tool buttons or procedural mesh glyphs. The active tool label names the current icon, and Mirror remains a UI-only modifier.
@@ -162,7 +162,7 @@ Expected 0.5.47 behavior:
 - Third-person camera yaw, pitch, and distance are preserved when loading a design or importing a design code while the editor is open.
 - Controller `A` does not activate UI immediately after opening; move the left stick once to arm the virtual cursor, then `A` clicks the control under the cursor.
 - Normal buttons should not stay highlighted after unrelated clicks; only selected tools, decals, and saved designs keep orange selection styling.
-- The decal section has a `Decals` menu button. Its modal `Add Decal` button opens a Windows picker, validates and copies PNG/JPG/JPEG files into the Decals folder, refreshes decal rows, selects the imported image, and shows only a short status line. `Refresh` still reloads decal rows after manual folder changes.
+- The decal section has a `Decals` menu button. Its modal `Add Decal` button starts an external Windows picker process, waits asynchronously for a selected PNG/JPG/JPEG, validates and copies it into the Decals folder, refreshes decal rows, selects the imported image, and shows only a short status line. `Refresh` still reloads decal rows after manual folder changes.
 - In Decal or Sticker mode over the third-person suit, the projected preview hides while the cursor is moving and appears after the cursor has been still briefly. Click/RT still stamps immediately even before the preview appears.
 - Decal placement is single-shot: holding left mouse or RT places one decal until the input is released and pressed again.
 - Third-person Decal preview and stamping project onto the visible suit surface and fill between valid projected samples, so decals avoid both UV-island wrapping and small suit-background cracks on curved geometry. The UV panel keeps direct flat UV decal stamping.
@@ -234,7 +234,7 @@ Troubleshooting:
 - If scan, inventory scroll, or item use still happen while the editor is open, check for `Global gameplay actions locked` and `Blocked PlayerControllerB` entries.
 - If keyboard or controller shortcuts do not open the editor, use the pause-menu `DrawableSuits` button.
 - If the mouse cannot move after opening from pause, check cursor unlock and `pointerSource=Mouse` diagnostics.
-- If `Add Decal` is canceled or unavailable, manually place image files in `BepInEx/config/DrawableSuits/Decals`, then open `Decals` and press `Refresh`. Check `DecalImportDialogOpened`, `DecalImported`, or `DecalImportFailed` diagnostics for picker/import details.
+- If `Add Decal` is canceled or unavailable, manually place image files in `BepInEx/config/DrawableSuits/Decals`, then open `Decals` and press `Refresh`. Check `DecalImportPickerStarted`, `DecalImportPickerCompleted`, `DecalImportPickerCanceled`, `DecalImportPickerFailed`, `DecalImported`, or `DecalImportFailed` diagnostics for picker/import details.
 - If you quit to the main menu while the editor is open, DrawableSuits closes the editor during the scene change so main-menu navigation is restored.
 - Lethal Company v81 uses Unity's Input System path; repeated `UnityEngine.Input` exceptions should not appear from DrawableSuits.
 

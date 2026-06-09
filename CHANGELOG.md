@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.48
+
+- Replaced the in-process Windows common dialog used by `Add Decal` with an isolated external PowerShell picker process to prevent game crashes.
+- `Add Decal` now waits asynchronously for image selection, handles cancel/failure/timeout without changing the decal list, and keeps manual Decals-folder placement plus `Refresh` as the fallback.
+- Added picker start/completion/cancel/failure diagnostics while keeping decal validation, safe filename copying, row refresh, and auto-selection behavior.
+
 ## 0.5.47
 
 - Added `Add Decal` in the Decals menu, using a guarded Windows file picker to copy PNG/JPG/JPEG files into the DrawableSuits Decals folder.

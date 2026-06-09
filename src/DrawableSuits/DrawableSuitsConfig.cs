@@ -38,7 +38,7 @@ internal sealed class DrawableSuitsConfig
         EnableNetworkSync = config.Bind("Multiplayer", "EnableNetworkSync", true, "Sync applied and saved suit designs to other DrawableSuits users.");
         MaxSyncBytes = config.Bind("Multiplayer", "MaxSyncBytes", 1048576, "Maximum PNG payload size allowed for multiplayer sync.");
         SyncChunkBytes = config.Bind("Multiplayer", "SyncChunkBytes", 48000, "Byte size for each Netcode custom-message texture chunk.");
-        EnableOsFileDialog = config.Bind("Decals", "EnableOsFileDialog", false, "Legacy setting. The Decals menu Add Decal button now uses a guarded Windows file picker and this value is ignored.");
+        EnableOsFileDialog = config.Bind("Decals", "EnableOsFileDialog", false, "Legacy setting. The Decals menu Add Decal button now uses an external Windows picker process and this value is ignored.");
         EnableExperimentalModelPreview = config.Bind("Editor", "EnableExperimentalModelPreview", false, "Disabled by default. Uses the old camera/RenderTexture 3D model preview only for diagnostics; third-person world painting is the default.");
         StartInUvFallbackMode = config.Bind("Editor", "StartInUvFallbackMode", false, "Open directly into the old UV texture fallback instead of third-person world painting. Useful for diagnostics.");
         ThirdPersonCameraDistance = config.Bind("Editor", "ThirdPersonCameraDistance", 3.4f, "Default third-person editor camera orbit distance.");
