@@ -137,7 +137,7 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.45 behavior:
+Expected 0.5.46 behavior:
 
 - Opening the editor shows an Imperium-inspired red/dark terminal overlay and a third-person camera view of the local player.
 - Paint, Erase, Fill, Decal, Text, Sticker, Eyedropper, and Mirror use embedded generated PNG icon masks instead of large text tool buttons or procedural mesh glyphs. The active tool label names the current icon, and Mirror remains a UI-only modifier.
@@ -155,6 +155,8 @@ Expected 0.5.45 behavior:
 - The color changer is a compact side-by-side hue ring and saturation/value square with a swatch and editable `#RRGGBB` hex field.
 - Recent Colors swatches appear below the color picker. Dragging the picker, typing hex, or using Eyedropper does not add a swatch until that color is placed by Paint, Fill, Text, or Sticker.
 - Undo History shows the newest undoable action labels first, including Brush stroke, Erase, Decal placed, Text placed, Sticker placed, Color fill, Reset, Load design, and Import code. Clicking a row only selects it; `Undo Selected` removes only that selected action where the snapshot diff can be isolated, preserves newer overlapping pixels, and keeps redo history available.
+- `Clear History` clears undo and redo history without changing the current suit texture.
+- The Saved Designs and Decals menus include two-step `Delete Selected` buttons. Deletes are permanent and only remove the selected save `.json` or selected decal image file from the DrawableSuits folder.
 - Color picker handles are tied to the same coordinate conversion used for mouse/controller input, so the visible handle positions should match the selected hue, saturation, value, and typed hex color.
 - Reset and Save no longer rebuild list hitboxes during the click; decal rows only change selection when their rows are clicked directly, and saved-design rows live in the separate Designs menu.
 - Third-person camera yaw, pitch, and distance are preserved when loading a design or importing a design code while the editor is open.
@@ -192,6 +194,7 @@ Expected 0.5.45 behavior:
 Troubleshooting:
 
 - If no decal preview appears, confirm a decal row is selected and Decal tool is active, then check `DecalPreviewUpdated` or `DecalPreviewHidden` diagnostics.
+- If a design or decal delete button does nothing on the first click, that is the confirmation step. Press `Confirm Delete` to permanently remove the selected file, or change selection/refresh/close the modal to cancel.
 - If Decal or Sticker preview movement feels laggy, confirm the installed package is 0.5.45 or newer and check `PlacementPreviewWaitingForIdle`, `PlacementPreviewHiddenWhileMoving`, `PlacementPreviewIdleRebuilt`, `DecalPreviewUpdated`, or `StickerPreviewUpdated` diagnostics. Third-person placement previews now wait until the cursor stops moving before rebuilding, while final stamps still use the full-quality projection path.
 - If decals stamp repeatedly while holding input, confirm the installed package is 0.4.8 or newer and check for `DecalStampCommitted` entries; there should be one per press/release cycle.
 - If Mirror does not appear to find the opposite side, check `MirrorSurfaceMap built` and `MirrorSurfaceTarget` diagnostics. Asymmetric or unusual modded meshes may not have a reliable opposite surface for every hit.

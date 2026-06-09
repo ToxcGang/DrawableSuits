@@ -411,7 +411,9 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Button _saveButton;
     private Button _savedDesignsButton;
     private Button _loadSelectedDesignButton;
+    private Button _deleteSelectedDesignButton;
     private Button _undoToSelectedButton;
+    private Button _clearUndoHistoryButton;
     private Button _resetButton;
     private Button _exportCodeButton;
     private Button _importCodeButton;
@@ -421,6 +423,9 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Text _designCodeStatusLabel;
     private GameObject _savedDesignsPanelObject;
     private Text _savedDesignsStatusLabel;
+    private Button _deleteSelectedDecalButton;
+    private string _pendingDeleteDesignPath = string.Empty;
+    private string _pendingDeleteDecalPath = string.Empty;
     private GameObject _editorEventSystemObject;
     private EventSystem _editorEventSystem;
     private InputSystemUIInputModule _editorInputModule;
@@ -2560,8 +2565,9 @@ internal sealed class SuitEditorController : MonoBehaviour
         CreateAnchoredText(dialog.transform, "SavedDesignsHelp", "Select a saved design, then load it into the current suit. Save and Apply stay explicit.", 14, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(18f, 54f, 484f, 42f), TerminalTextColor);
         _designListContent = CreateAnchoredScrollList(dialog.transform, "DesignList", new Rect(18f, 104f, 484f, 276f));
 
-        _loadSelectedDesignButton = CreateAnchoredButton(dialog.transform, "Load Selected", new Rect(18f, 394f, 132f, 34f), LoadSelectedDesign);
-        CreateAnchoredButton(dialog.transform, "Refresh", new Rect(160f, 394f, 94f, 34f), RefreshSavedDesignsPanel);
+        _loadSelectedDesignButton = CreateAnchoredButton(dialog.transform, "Load Selected", new Rect(18f, 394f, 124f, 34f), LoadSelectedDesign);
+        _deleteSelectedDesignButton = CreateAnchoredButton(dialog.transform, "Delete Selected", new Rect(150f, 394f, 124f, 34f), DeleteSelectedDesign);
+        CreateAnchoredButton(dialog.transform, "Refresh", new Rect(282f, 394f, 82f, 34f), RefreshSavedDesignsPanel);
         CreateAnchoredButton(dialog.transform, "Close", new Rect(404f, 394f, 98f, 34f), CloseSavedDesignsPanel);
         _savedDesignsStatusLabel = CreateAnchoredText(dialog.transform, "SavedDesignsStatus", string.Empty, 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(18f, 442f, 484f, 48f), TerminalStatusColor);
 
@@ -2597,7 +2603,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         CreateAnchoredText(dialog.transform, "DecalsHelp", "Select a decal to load it into the current tool. PNG and JPG files are read from the DrawableSuits Decals folder.", 14, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(18f, 54f, 484f, 42f), TerminalTextColor);
         _decalListContent = CreateAnchoredScrollList(dialog.transform, "DecalList", new Rect(18f, 104f, 484f, 276f));
 
-        CreateAnchoredButton(dialog.transform, "Refresh", new Rect(18f, 394f, 94f, 34f), RefreshDecalsPanel);
+        _deleteSelectedDecalButton = CreateAnchoredButton(dialog.transform, "Delete Selected", new Rect(18f, 394f, 124f, 34f), DeleteSelectedDecal);
+        CreateAnchoredButton(dialog.transform, "Refresh", new Rect(150f, 394f, 94f, 34f), RefreshDecalsPanel);
         CreateAnchoredButton(dialog.transform, "Close", new Rect(404f, 394f, 98f, 34f), CloseDecalsPanel);
         _decalsStatusLabel = CreateAnchoredText(dialog.transform, "DecalsStatus", string.Empty, 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(18f, 442f, 484f, 48f), TerminalStatusColor);
 
@@ -3111,8 +3118,9 @@ internal sealed class SuitEditorController : MonoBehaviour
             });
         }
 
-        _undoToSelectedButton = CreateAnchoredButton(panel.transform, "Undo Selected", new Rect(6f, 82f, 132f, 26f), UndoToSelectedHistory);
-        _undoHistorySelectionLabel = CreateAnchoredText(panel.transform, "UndoHistorySelection", "Select a row first.", 11, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(146f, 78f, rect.width - 152f, 34f), TerminalMutedTextColor);
+        _undoHistorySelectionLabel = CreateAnchoredText(panel.transform, "UndoHistorySelection", "Select a row first.", 10, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(8f, 76f, rect.width - 16f, 12f), TerminalMutedTextColor);
+        _undoToSelectedButton = CreateAnchoredButton(panel.transform, "Undo Selected", new Rect(6f, 92f, 132f, 22f), UndoToSelectedHistory);
+        _clearUndoHistoryButton = CreateAnchoredButton(panel.transform, "Clear History", new Rect(146f, 92f, rect.width - 152f, 22f), ClearUndoHistoryByUser);
 
         UpdateUndoHistoryUi();
     }
@@ -3934,6 +3942,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         SetInteractable(_resetButton, hasEditableTexture);
         SetInteractable(_savedDesignsButton, hasEditableTexture);
         SetInteractable(_loadSelectedDesignButton, hasEditableTexture && _selectedDesignIndex >= 0);
+        UpdateSavedDesignDeleteButton();
+        UpdateDecalDeleteButton();
         if (_uvFallbackButton != null)
         {
             var showFallbackButton = _uvFallbackMode || !IsWorldThirdPersonMode;
@@ -4702,6 +4712,7 @@ internal sealed class SuitEditorController : MonoBehaviour
                 ref _designPageLabel,
                 index =>
             {
+                CancelPendingDesignDelete("design selection changed");
                 _selectedDesignIndex = index;
                 RefreshListButtons();
                 UpdateUiState();
@@ -4819,6 +4830,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             prevPageButton.onClick.RemoveAllListeners();
             prevPageButton.onClick.AddListener(() =>
             {
+                CancelPendingListDelete(listName, "list page changed");
                 SetListPage(listName, Mathf.Max(0, currentPage - 1));
                 RefreshListButtons();
                 ClearSelectedNormalButton();
@@ -4837,6 +4849,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             nextPageButton.onClick.RemoveAllListeners();
             nextPageButton.onClick.AddListener(() =>
             {
+                CancelPendingListDelete(listName, "list page changed");
                 SetListPage(listName, Mathf.Min(currentMaxPage, currentPage + 1));
                 RefreshListButtons();
                 ClearSelectedNormalButton();
@@ -10830,6 +10843,21 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawableSuitsDiagnostics.Info($"UndoHistoryCleared: reason={reason}; undoCount=0; redoCount=0; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
     }
 
+    private void ClearUndoHistoryByUser()
+    {
+        if (_undo.Count == 0 && _redo.Count == 0)
+        {
+            SetStatus("No undo history to clear.", false);
+            return;
+        }
+
+        var previousUndoCount = _undo.Count;
+        var previousRedoCount = _redo.Count;
+        ClearUndoHistory("user clear history");
+        SetStatus("Undo history cleared.", false);
+        DrawableSuitsDiagnostics.Info($"UndoHistoryClearedByUser: previousUndoCount={previousUndoCount}; previousRedoCount={previousRedoCount}; undoCount={_undo.Count}; redoCount={_redo.Count}; max={DrawableSuitsPlugin.ModConfig.MaxUndoStates.Value}");
+    }
+
     private void ClearRedoHistory(string reason)
     {
         if (_redo.Count == 0)
@@ -10937,6 +10965,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             _undoHistoryEmptyLabel.gameObject.SetActive(entries.Length == 0);
         }
         SetInteractable(_undoToSelectedButton, hasSelection);
+        SetInteractable(_clearUndoHistoryButton, _undo.Count > 0 || _redo.Count > 0);
         if (_undoHistorySelectionLabel != null)
         {
             if (hasSelection)
@@ -11119,6 +11148,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
+        CancelPendingFileDeletes("open design code panel");
         _designCodePanelObject.SetActive(true);
         if (_designCodeStatusLabel != null)
         {
@@ -11159,6 +11189,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
+        CancelPendingFileDeletes("open saved designs panel");
         RefreshFileLists();
         _savedDesignsPanelObject.SetActive(true);
         SetSavedDesignsStatus(_designFiles.Count == 0
@@ -11172,6 +11203,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private void CloseSavedDesignsPanel()
     {
         var wasOpen = IsSavedDesignsPanelOpen();
+        CancelPendingDesignDelete("close saved designs panel");
         if (_savedDesignsPanelObject != null)
         {
             _savedDesignsPanelObject.SetActive(false);
@@ -11187,6 +11219,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void RefreshSavedDesignsPanel()
     {
+        CancelPendingDesignDelete("refresh saved designs panel");
         RefreshFileLists();
         SetSavedDesignsStatus(_designFiles.Count == 0
             ? "No saved designs found."
@@ -11202,6 +11235,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
+        CancelPendingFileDeletes("open decals panel");
         RefreshFileLists();
         _decalsPanelObject.SetActive(true);
         SetDecalsStatus(_decalFiles.Count == 0
@@ -11215,6 +11249,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private void CloseDecalsPanel()
     {
         var wasOpen = IsDecalsPanelOpen();
+        CancelPendingDecalDelete("close decals panel");
         if (_decalsPanelObject != null)
         {
             _decalsPanelObject.SetActive(false);
@@ -11230,6 +11265,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void RefreshDecalsPanel()
     {
+        CancelPendingDecalDelete("refresh decals panel");
         RefreshFileLists();
         SetDecalsStatus(_decalFiles.Count == 0
             ? "No decals found."
@@ -11253,6 +11289,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
+        CancelPendingFileDeletes("open stickers panel");
         _stickersPanelObject.SetActive(true);
         UpdateStickerShapeButton();
         SetStickersStatus($"Selected: {StickerShapeDisplayName(_stickerShape)}.");
@@ -11289,6 +11326,237 @@ internal sealed class SuitEditorController : MonoBehaviour
         if (_savedDesignsStatusLabel != null)
         {
             _savedDesignsStatusLabel.text = message ?? string.Empty;
+        }
+    }
+
+    private void DeleteSelectedDesign()
+    {
+        var selectedPath = GetSelectedFilePath(_designFiles, _selectedDesignIndex);
+        if (!TryResolveSelectedManagedFile(_designFiles, _selectedDesignIndex, DrawableSuitsPaths.Saves, ".json", out var safePath, out var failureReason))
+        {
+            CancelPendingDesignDelete("invalid design delete target");
+            SetSavedDesignsStatus(string.IsNullOrWhiteSpace(failureReason) ? "Select a saved design first." : failureReason);
+            DrawableSuitsDiagnostics.Warn($"SavedDesignDeleteRejected: selectedIndex={_selectedDesignIndex}; selectedPath={selectedPath ?? "none"}; reason={failureReason}");
+            return;
+        }
+
+        if (!string.Equals(_pendingDeleteDesignPath, safePath, StringComparison.OrdinalIgnoreCase))
+        {
+            _pendingDeleteDesignPath = safePath;
+            SetSavedDesignsStatus($"Press Confirm Delete to permanently delete {Path.GetFileNameWithoutExtension(safePath)}.");
+            UpdateSavedDesignDeleteButton();
+            DrawableSuitsDiagnostics.Warn($"SavedDesignDeleteArmed: file={safePath}; selectedIndex={_selectedDesignIndex}; designCount={_designFiles.Count}");
+            return;
+        }
+
+        var deletedName = Path.GetFileNameWithoutExtension(safePath);
+        try
+        {
+            File.Delete(safePath);
+        }
+        catch (Exception ex)
+        {
+            CancelPendingDesignDelete("design delete failed");
+            SetSavedDesignsStatus("Delete failed. Check diagnostics.");
+            DrawableSuitsDiagnostics.Exception($"SavedDesignDeleted failed. file={safePath}; selectedIndex={_selectedDesignIndex}", ex);
+            return;
+        }
+
+        _pendingDeleteDesignPath = string.Empty;
+        RefreshFileLists();
+        SetSavedDesignsStatus($"Deleted {deletedName}.");
+        UpdateUiState();
+        RebuildSelectableNavigation();
+        DrawableSuitsDiagnostics.Info($"SavedDesignDeleted: file={safePath}; designName={deletedName}; designCount={_designFiles.Count}; selectedDesignIndex={_selectedDesignIndex}");
+    }
+
+    private void DeleteSelectedDecal()
+    {
+        var selectedPath = GetSelectedFilePath(_decalFiles, _selectedDecalIndex);
+        if (!TryResolveSelectedManagedFile(_decalFiles, _selectedDecalIndex, DrawableSuitsPaths.Decals, null, out var safePath, out var failureReason)
+            || !TextureTools.IsImagePath(safePath))
+        {
+            CancelPendingDecalDelete("invalid decal delete target");
+            SetDecalsStatus(string.IsNullOrWhiteSpace(failureReason) ? "Select a decal first." : failureReason);
+            DrawableSuitsDiagnostics.Warn($"DecalDeleteRejected: selectedIndex={_selectedDecalIndex}; selectedPath={selectedPath ?? "none"}; reason={failureReason}");
+            return;
+        }
+
+        if (!string.Equals(_pendingDeleteDecalPath, safePath, StringComparison.OrdinalIgnoreCase))
+        {
+            _pendingDeleteDecalPath = safePath;
+            SetDecalsStatus($"Press Confirm Delete to permanently delete {Path.GetFileName(safePath)}.");
+            UpdateDecalDeleteButton();
+            DrawableSuitsDiagnostics.Warn($"DecalDeleteArmed: file={safePath}; selectedIndex={_selectedDecalIndex}; decalCount={_decalFiles.Count}");
+            return;
+        }
+
+        var deletedName = Path.GetFileName(safePath);
+        try
+        {
+            File.Delete(safePath);
+        }
+        catch (Exception ex)
+        {
+            CancelPendingDecalDelete("decal delete failed");
+            SetDecalsStatus("Delete failed. Check diagnostics.");
+            DrawableSuitsDiagnostics.Exception($"DecalDeleted failed. file={safePath}; selectedIndex={_selectedDecalIndex}", ex);
+            return;
+        }
+
+        _pendingDeleteDecalPath = string.Empty;
+        if (_loadedDecal != null)
+        {
+            Destroy(_loadedDecal);
+            _loadedDecal = null;
+        }
+
+        InvalidateDecalPreview("decal deleted");
+        RefreshFileLists();
+        EnsureValidToolForCurrentState("decal deleted");
+        SetDecalsStatus($"Deleted {deletedName}.");
+        SetStatus($"Deleted decal {deletedName}.", false);
+        UpdateUiState();
+        RebuildSelectableNavigation();
+        DrawableSuitsDiagnostics.Info($"DecalDeleted: file={safePath}; decalName={deletedName}; decalCount={_decalFiles.Count}; selectedDecalIndex={_selectedDecalIndex}; loadedDecal=false; tool={_tool}");
+    }
+
+    private void UpdateSavedDesignDeleteButton()
+    {
+        if (_deleteSelectedDesignButton == null)
+        {
+            return;
+        }
+
+        var selectedPath = GetSelectedFilePath(_designFiles, _selectedDesignIndex);
+        var pending = !string.IsNullOrWhiteSpace(selectedPath)
+            && string.Equals(_pendingDeleteDesignPath, SafeFullPathOrEmpty(selectedPath), StringComparison.OrdinalIgnoreCase);
+        SetButtonLabel(_deleteSelectedDesignButton, pending ? "Confirm Delete" : "Delete Selected");
+        SetInteractable(_deleteSelectedDesignButton, _selectedDesignIndex >= 0 && _selectedDesignIndex < _designFiles.Count);
+    }
+
+    private void UpdateDecalDeleteButton()
+    {
+        if (_deleteSelectedDecalButton == null)
+        {
+            return;
+        }
+
+        var selectedPath = GetSelectedFilePath(_decalFiles, _selectedDecalIndex);
+        var pending = !string.IsNullOrWhiteSpace(selectedPath)
+            && string.Equals(_pendingDeleteDecalPath, SafeFullPathOrEmpty(selectedPath), StringComparison.OrdinalIgnoreCase);
+        SetButtonLabel(_deleteSelectedDecalButton, pending ? "Confirm Delete" : "Delete Selected");
+        SetInteractable(_deleteSelectedDecalButton, _selectedDecalIndex >= 0 && _selectedDecalIndex < _decalFiles.Count);
+    }
+
+    private void CancelPendingFileDeletes(string reason)
+    {
+        CancelPendingDesignDelete(reason);
+        CancelPendingDecalDelete(reason);
+    }
+
+    private void CancelPendingListDelete(string listName, string reason)
+    {
+        if (string.Equals(listName, "Design", StringComparison.OrdinalIgnoreCase))
+        {
+            CancelPendingDesignDelete(reason);
+        }
+        else if (string.Equals(listName, "Decal", StringComparison.OrdinalIgnoreCase))
+        {
+            CancelPendingDecalDelete(reason);
+        }
+    }
+
+    private void CancelPendingDesignDelete(string reason)
+    {
+        if (string.IsNullOrWhiteSpace(_pendingDeleteDesignPath))
+        {
+            return;
+        }
+
+        var oldPath = _pendingDeleteDesignPath;
+        _pendingDeleteDesignPath = string.Empty;
+        UpdateSavedDesignDeleteButton();
+        DrawableSuitsDiagnostics.Info($"SavedDesignDeleteCanceled: reason={reason}; file={oldPath}");
+    }
+
+    private void CancelPendingDecalDelete(string reason)
+    {
+        if (string.IsNullOrWhiteSpace(_pendingDeleteDecalPath))
+        {
+            return;
+        }
+
+        var oldPath = _pendingDeleteDecalPath;
+        _pendingDeleteDecalPath = string.Empty;
+        UpdateDecalDeleteButton();
+        DrawableSuitsDiagnostics.Info($"DecalDeleteCanceled: reason={reason}; file={oldPath}");
+    }
+
+    private static bool TryResolveSelectedManagedFile(List<string> files, int index, string rootDirectory, string requiredExtension, out string safePath, out string failureReason)
+    {
+        safePath = null;
+        failureReason = string.Empty;
+        var selectedPath = GetSelectedFilePath(files, index);
+        if (string.IsNullOrWhiteSpace(selectedPath))
+        {
+            failureReason = "Select a file first.";
+            return false;
+        }
+
+        try
+        {
+            var fullPath = Path.GetFullPath(selectedPath);
+            var rootPath = Path.GetFullPath(rootDirectory);
+            if (!rootPath.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal))
+            {
+                rootPath += Path.DirectorySeparatorChar;
+            }
+
+            if (!fullPath.StartsWith(rootPath, StringComparison.OrdinalIgnoreCase))
+            {
+                failureReason = "Delete target is outside the DrawableSuits folder.";
+                return false;
+            }
+
+            if (!string.IsNullOrWhiteSpace(requiredExtension)
+                && !string.Equals(Path.GetExtension(fullPath), requiredExtension, StringComparison.OrdinalIgnoreCase))
+            {
+                failureReason = $"Delete target must be a {requiredExtension} file.";
+                return false;
+            }
+
+            if (!File.Exists(fullPath))
+            {
+                failureReason = "Selected file no longer exists.";
+                return false;
+            }
+
+            safePath = fullPath;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            failureReason = "Delete target could not be validated.";
+            DrawableSuitsDiagnostics.Exception($"File delete target validation failed. selectedPath={selectedPath}; root={rootDirectory}; requiredExtension={requiredExtension ?? "any"}", ex);
+            return false;
+        }
+    }
+
+    private static string SafeFullPathOrEmpty(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            return Path.GetFullPath(path);
+        }
+        catch
+        {
+            return string.Empty;
         }
     }
 
@@ -11400,6 +11668,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
+        CancelPendingDecalDelete("decal selection changed");
         _selectedDecalIndex = index;
         InvalidateDecalPreview("select decal");
         if (_loadedDecal != null)

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.46
+
+- Added a `Clear History` button that clears undo/redo history without changing the current suit texture.
+- Added two-step `Delete Selected` controls to the Saved Designs and Decals menus, limited to files inside the DrawableSuits save/decal folders.
+- Clearing or deleting now logs explicit diagnostics and cancels stale delete confirmations when selections, refreshes, or modals change.
+
 ## 0.5.45
 
 - Changed third-person Decal and Sticker previews to hide while the cursor is moving, then rebuild only after the cursor has been still briefly.
