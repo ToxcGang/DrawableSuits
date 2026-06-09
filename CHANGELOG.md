@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.45
+
+- Changed third-person Decal and Sticker previews to hide while the cursor is moving, then rebuild only after the cursor has been still briefly.
+- Kept final Decal and Sticker stamping immediate and full quality, while leaving UV-panel previews immediate.
+- Added settled-preview diagnostics for waiting, hidden-while-moving, and idle rebuilds.
+
 ## 0.5.44
 
 - Replaced inline decal and sticker selectors with separate modal menus so they no longer cover the UV editor or each other.

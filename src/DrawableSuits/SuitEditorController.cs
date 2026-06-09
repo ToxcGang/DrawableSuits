@@ -87,6 +87,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private const float DotCursorBackSize = 15f;
     private const float DotCursorFrontSize = 9f;
     private const float WorldPlacementPreviewMinInterval = 0.05f;
+    private const float WorldPlacementPreviewIdleDelay = 0.15f;
+    private const float WorldPlacementPreviewMoveThresholdPixels = 2f;
 
     private static readonly Color TerminalPanelColor = new(0.018f, 0.022f, 0.024f, 0.88f);
     private static readonly Color TerminalDialogColor = new(0.022f, 0.024f, 0.026f, 0.98f);
@@ -272,6 +274,12 @@ internal sealed class SuitEditorController : MonoBehaviour
     private string _lastPlacementPreviewRebuildLogKey = string.Empty;
     private float _lastPlacementPreviewRebuildLogTime;
     private float _lastWorldPlacementPreviewRebuildTime;
+    private Vector2 _lastPlacementPreviewCursor;
+    private bool _lastPlacementPreviewCursorValid;
+    private float _lastPlacementPreviewCursorMoveTime;
+    private string _lastPlacementPreviewIdleTargetKey = string.Empty;
+    private string _lastPlacementPreviewIdleLogKey = string.Empty;
+    private float _lastPlacementPreviewIdleLogTime;
     private Color32[] _placementPreviewBasePixels;
     private Texture2D _placementPreviewBaseSource;
     private int _placementPreviewBaseSerial = -1;
@@ -6134,6 +6142,11 @@ internal sealed class SuitEditorController : MonoBehaviour
                 return;
             }
 
+            if (ShouldDelayWorldPlacementPreviewUntilIdle(texture, hit, mirrorTarget, stampTexture))
+            {
+                return;
+            }
+
             ShowWorldPlacementPreview(texture, hit, mirrorTarget, stampTexture);
             return;
         }
@@ -6181,6 +6194,67 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         failureReason = "not a placement tool";
         return false;
+    }
+
+    private bool ShouldDelayWorldPlacementPreviewUntilIdle(Texture2D sourceTexture, RaycastHit hit, MirrorPaintTarget mirrorTarget, Texture2D stampTexture)
+    {
+        if (_tool != EditorTool.Decal && _tool != EditorTool.Sticker)
+        {
+            return false;
+        }
+
+        var now = Time.unscaledTime;
+        var cursorDelta = _lastPlacementPreviewCursorValid
+            ? Vector2.Distance(_cursor, _lastPlacementPreviewCursor)
+            : 0f;
+        var cursorMoved = _lastPlacementPreviewCursorValid
+            && cursorDelta > WorldPlacementPreviewMoveThresholdPixels;
+        var targetKey = BuildWorldPlacementPreviewIdleTargetKey(sourceTexture, hit, mirrorTarget, stampTexture);
+        var targetChanged = !string.Equals(targetKey, _lastPlacementPreviewIdleTargetKey, StringComparison.Ordinal);
+
+        if (!_lastPlacementPreviewCursorValid || cursorMoved || targetChanged)
+        {
+            _lastPlacementPreviewCursor = _cursor;
+            _lastPlacementPreviewCursorValid = true;
+            _lastPlacementPreviewCursorMoveTime = now;
+            _lastPlacementPreviewIdleTargetKey = targetKey;
+            HideDecalPlacementPreview(cursorMoved ? "preview cursor moving" : "preview target changed", false);
+            var eventName = cursorMoved ? "PlacementPreviewHiddenWhileMoving" : "PlacementPreviewWaitingForIdle";
+            var reason = cursorMoved ? "cursor moved" : targetChanged ? "target changed" : "cursor initialized";
+            LogPlacementPreviewIdleWait(eventName, reason, sourceTexture, hit, mirrorTarget, stampTexture, cursorDelta, 0f);
+            SetPlacementPreviewIdleStatus();
+            return true;
+        }
+
+        var idleTime = now - _lastPlacementPreviewCursorMoveTime;
+        if (idleTime < WorldPlacementPreviewIdleDelay)
+        {
+            HideDecalPlacementPreview("preview waiting for idle", false);
+            LogPlacementPreviewIdleWait("PlacementPreviewWaitingForIdle", "idle delay", sourceTexture, hit, mirrorTarget, stampTexture, cursorDelta, idleTime);
+            SetPlacementPreviewIdleStatus();
+            return true;
+        }
+
+        return false;
+    }
+
+    private string BuildWorldPlacementPreviewIdleTargetKey(Texture2D sourceTexture, RaycastHit hit, MirrorPaintTarget mirrorTarget, Texture2D stampTexture)
+    {
+        var pixel = sourceTexture != null ? TexturePixel(sourceTexture, hit.textureCoord) : new Vector2Int(-1, -1);
+        var pixelBucketX = pixel.x >= 0 ? pixel.x / 8 : -1;
+        var pixelBucketY = pixel.y >= 0 ? pixel.y / 8 : -1;
+        var mirrorTriangle = mirrorTarget.Enabled && mirrorTarget.Available ? mirrorTarget.TriangleIndex : -1;
+        return $"{_tool}|suit={_selectedSuitId}|pixelBucket={pixelBucketX},{pixelBucketY}|triangle={hit.triangleIndex}|mirror={mirrorTarget.Enabled}:{mirrorTarget.Available}:{mirrorTriangle}|size={Mathf.RoundToInt(CurrentPlacementSize())}|rot={Mathf.RoundToInt(CurrentPlacementRotation() * 10f)}|opacity={Mathf.RoundToInt(_brushOpacity * 1000f)}|stamp={CurrentPlacementName()}|stampSize={stampTexture?.width ?? 0}x{stampTexture?.height ?? 0}|color={ColorToHex(_brushColor)}|serial={_decalPreviewSerial}";
+    }
+
+    private void SetPlacementPreviewIdleStatus()
+    {
+        var noun = _tool == EditorTool.Sticker ? "sticker" : "decal";
+        var message = $"Hold still to preview {noun}. Click/RT still stamps.";
+        if (!_statusMessage.StartsWith(message, StringComparison.OrdinalIgnoreCase))
+        {
+            SetStatus(message, false);
+        }
     }
 
     private void ShowWorldPlacementPreview(Texture2D sourceTexture, RaycastHit hit, MirrorPaintTarget mirrorTarget, Texture2D stampTexture)
@@ -6500,6 +6574,21 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
     }
 
+    private void LogPlacementPreviewIdleWait(string eventName, string reason, Texture2D sourceTexture, RaycastHit hit, MirrorPaintTarget mirrorTarget, Texture2D stampTexture, float cursorDelta, float idleTime)
+    {
+        var pixel = sourceTexture != null ? TexturePixel(sourceTexture, hit.textureCoord) : new Vector2Int(-1, -1);
+        var logKey = $"{eventName}|{_tool}|{reason}|{pixel.x / 8},{pixel.y / 8}|{hit.triangleIndex}|{CurrentPlacementName()}|{Mathf.RoundToInt(CurrentPlacementSize())}|{Mathf.RoundToInt(CurrentPlacementRotation() * 10f)}";
+        if (string.Equals(logKey, _lastPlacementPreviewIdleLogKey, StringComparison.Ordinal)
+            && Time.unscaledTime - _lastPlacementPreviewIdleLogTime < 0.75f)
+        {
+            return;
+        }
+
+        _lastPlacementPreviewIdleLogKey = logKey;
+        _lastPlacementPreviewIdleLogTime = Time.unscaledTime;
+        DrawableSuitsDiagnostics.Info($"{eventName}: tool={_tool}; pointerSource={_pointerSource}; cursor={_cursor}; cursorDelta={cursorDelta:0.##}; idleTime={idleTime:0.###}; idleDelay={WorldPlacementPreviewIdleDelay:0.###}; moveThresholdPx={WorldPlacementPreviewMoveThresholdPixels:0.##}; target=WorldThirdPerson; uv={hit.textureCoord}; pixel={pixel.x},{pixel.y}; triangle={hit.triangleIndex}; mirror={DescribeMirrorTarget(sourceTexture, mirrorTarget)}; stamp={stampTexture?.name ?? "null"}; stampSize={stampTexture?.width ?? 0}x{stampTexture?.height ?? 0}; reason={reason}");
+    }
+
     private void LogPlacementPreviewReused(string key, Texture2D sourceTexture, RaycastHit hit, Texture2D stampTexture)
     {
         if (string.Equals(key, _lastPlacementPreviewReuseLogKey, StringComparison.Ordinal)
@@ -6544,7 +6633,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         _lastPlacementPreviewRebuildLogKey = logKey;
         _lastPlacementPreviewRebuildLogTime = Time.unscaledTime;
-        DrawableSuitsDiagnostics.Info($"PlacementPreviewRebuilt: tool={_tool}; source={sourceTexture?.name ?? "null"}; sourceSize={sourceTexture?.width ?? 0}x{sourceTexture?.height ?? 0}; stamp={stampTexture?.name ?? "null"}; stampSize={stampTexture?.width ?? 0}x{stampTexture?.height ?? 0}; elapsedMs={elapsedMs:0.##}; key={key.GetHashCode()}");
+        DrawableSuitsDiagnostics.Info($"PlacementPreviewIdleRebuilt: tool={_tool}; pointerSource={_pointerSource}; source={sourceTexture?.name ?? "null"}; sourceSize={sourceTexture?.width ?? 0}x{sourceTexture?.height ?? 0}; stamp={stampTexture?.name ?? "null"}; stampSize={stampTexture?.width ?? 0}x{stampTexture?.height ?? 0}; elapsedMs={elapsedMs:0.##}; idleTime={(Time.unscaledTime - _lastPlacementPreviewCursorMoveTime):0.###}; idleDelay={WorldPlacementPreviewIdleDelay:0.###}; key={key.GetHashCode()}");
     }
 
     private Material EnsureWorldDecalPreviewMaterial(Texture2D sourceTexture)
@@ -6654,10 +6743,20 @@ internal sealed class SuitEditorController : MonoBehaviour
         _lastDecalPreviewKey = string.Empty;
         _placementPreviewBaseSource = null;
         _placementPreviewBaseSerial = -1;
+        ResetSettledPlacementPreviewState();
         if (_decalPreviewVisible)
         {
             LogDecalPreviewHidden($"invalidated: {reason}", false);
         }
+    }
+
+    private void ResetSettledPlacementPreviewState()
+    {
+        _lastPlacementPreviewCursorValid = false;
+        _lastPlacementPreviewCursor = Vector2.zero;
+        _lastPlacementPreviewCursorMoveTime = 0f;
+        _lastPlacementPreviewIdleTargetKey = string.Empty;
+        _lastPlacementPreviewIdleLogKey = string.Empty;
     }
 
     private string BuildDecalPreviewKey(string mode, Texture2D sourceTexture, Vector2 uv, MirrorPaintTarget mirrorTarget)

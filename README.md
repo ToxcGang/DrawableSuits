@@ -137,7 +137,7 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.44 behavior:
+Expected 0.5.45 behavior:
 
 - Opening the editor shows an Imperium-inspired red/dark terminal overlay and a third-person camera view of the local player.
 - Paint, Erase, Fill, Decal, Text, Sticker, Eyedropper, and Mirror use embedded generated PNG icon masks instead of large text tool buttons or procedural mesh glyphs. The active tool label names the current icon, and Mirror remains a UI-only modifier.
@@ -161,7 +161,7 @@ Expected 0.5.44 behavior:
 - Controller `A` does not activate UI immediately after opening; move the left stick once to arm the virtual cursor, then `A` clicks the control under the cursor.
 - Normal buttons should not stay highlighted after unrelated clicks; only selected tools, decals, and saved designs keep orange selection styling.
 - The decal section has a `Decals` menu button. Its modal `Refresh` button refreshes decal rows and shows only a short status line.
-- In Decal mode with a selected decal, hovering over the suit shows a translucent preview and status `Previewing decal. Click/RT to stamp.`
+- In Decal or Sticker mode over the third-person suit, the projected preview hides while the cursor is moving and appears after the cursor has been still briefly. Click/RT still stamps immediately even before the preview appears.
 - Decal placement is single-shot: holding left mouse or RT places one decal until the input is released and pressed again.
 - Third-person Decal preview and stamping project onto the visible suit surface and fill between valid projected samples, so decals avoid both UV-island wrapping and small suit-background cracks on curved geometry. The UV panel keeps direct flat UV decal stamping.
 - The editor cursor is dynamic and rendered as a top-level non-raycastable graphic inside the visible editor canvas: Paint and Erase show a hollow brush ring sized to the current editable target, while UI hover, invalid targets, Decal, Text, Sticker, Eyedropper, and normal navigation show a small white dot.
@@ -192,7 +192,7 @@ Expected 0.5.44 behavior:
 Troubleshooting:
 
 - If no decal preview appears, confirm a decal row is selected and Decal tool is active, then check `DecalPreviewUpdated` or `DecalPreviewHidden` diagnostics.
-- If Decal or Sticker preview movement feels laggy, check `PlacementPreviewReused`, `PlacementPreviewThrottled`, `DecalPreviewUpdated`, or `StickerPreviewUpdated` diagnostics. Third-person placement previews are throttled to reduce expensive projection rebuilds, while final stamps still use the full-quality projection path.
+- If Decal or Sticker preview movement feels laggy, confirm the installed package is 0.5.45 or newer and check `PlacementPreviewWaitingForIdle`, `PlacementPreviewHiddenWhileMoving`, `PlacementPreviewIdleRebuilt`, `DecalPreviewUpdated`, or `StickerPreviewUpdated` diagnostics. Third-person placement previews now wait until the cursor stops moving before rebuilding, while final stamps still use the full-quality projection path.
 - If decals stamp repeatedly while holding input, confirm the installed package is 0.4.8 or newer and check for `DecalStampCommitted` entries; there should be one per press/release cycle.
 - If Mirror does not appear to find the opposite side, check `MirrorSurfaceMap built` and `MirrorSurfaceTarget` diagnostics. Asymmetric or unusual modded meshes may not have a reliable opposite surface for every hit.
 - If entering a session starts on a black screen before opening DrawableSuits, check `SessionSafetyCheck` lines. They list `Camera.main`, active cameras, camera target textures, local player flags, prompt context such as grab/hover fields, local renderer materials, and any repaired DrawableSuits objects. DrawableSuits should report no active DrawableSuits cameras while `EditorOpen=False`.
