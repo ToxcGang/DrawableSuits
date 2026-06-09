@@ -137,7 +137,7 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.48 behavior:
+Expected 0.5.49 behavior:
 
 - Opening the editor shows an Imperium-inspired red/dark terminal overlay and a third-person camera view of the local player.
 - Paint, Erase, Fill, Decal, Text, Sticker, Eyedropper, and Mirror use embedded generated PNG icon masks instead of large text tool buttons or procedural mesh glyphs. The active tool label names the current icon, and Mirror remains a UI-only modifier.
@@ -180,6 +180,8 @@ Expected 0.5.48 behavior:
 - The Fill Tolerance slider appears when Fill is active. Lower tolerance fills tighter matching regions; higher tolerance accepts more color variation.
 - `Export Code` copies a compact lossless `DSUIT2:` code to the clipboard and fills the design code field. `Import Code` validates a pasted `DSUIT2:` or legacy `DSUIT1:` code and loads it into the current suit without auto-saving, broadcasting, or resetting the third-person camera.
 - The UV panel shows a non-interactive rotated decal preview over the texture panel.
+- The UV panel can zoom from `1x` to `8x` while the cursor is over it. Mouse wheel or controller D-pad up/down zooms around the cursor, and right-mouse drag pans the zoomed view.
+- UV-panel Paint, Erase, Fill, Decal, Text, Sticker, Eyedropper, Mirror previews, and the brush cursor all use the currently visible zoomed texture view.
 - The `Mirror` button is a UI-only modifier. When it is orange, paint, erase, fill, decal stamps, text stamps, and sticker stamps use a surface-map mirror target on the opposite side of the baked suit mesh in one undo action.
 - Mirrored decal previews show both the primary and mirrored decal. The mirrored decal is horizontally flipped and uses inverse rotation.
 - The UV panel also uses the mesh mirror map when the clicked UV maps back to a suit triangle. If no mirror target is available, DrawableSuits applies the primary edit only and shows a short status.
@@ -224,6 +226,7 @@ Troubleshooting:
 - If Paint or Erase strokes cut off on third-person suit seams, confirm the installed package is 0.5.22 or newer and check `BrushSurfaceStrokeApplied`, `BrushSurfaceStrokeSkipped`, and `BrushSurfaceProjectionWarning` diagnostics for sample, hit, rasterized-cell, seam-skip, off-suit, and written-pixel counts. High seam-skip counts mean DrawableSuits is intentionally avoiding UV island bleeding.
 - If Fill affects too much or too little of the suit, adjust Fill Tolerance and check `FillBucketApplied` diagnostics for seed color, tolerance, checked pixel count, matched pixels, written pixels, and mirror target. Fill is texture-contiguous, so separated UV islands may require separate fills.
 - If the UV panel covers the color picker or other controls, confirm the installed package is 0.5.25 or newer and check `TexturePanel[...]` diagnostics for the preview viewport rect, sibling index, and anchored position.
+- If UV-panel edits land in the wrong place while zoomed, confirm the installed package is 0.5.49 or newer and check `UvPanelViewChanged`, `TexturePanel[...]`, and `UiInputDiagnostics` for `uvPanelZoom`, `uvRect`, and `previewUv`.
 - If the cursor is missing, confirm the installed package is 0.5.21 or newer and check `CanvasCursorBuilt`, `CanvasCursorUpdated`, or `CanvasCursorHidden` diagnostics. The editor now draws the cursor directly inside the same UGUI canvas as the visible editor controls.
 - If the cursor is still a filled square or colored world blob, confirm the installed package is 0.5.21 or newer and check `CanvasCursorUpdated` diagnostics. Paint and Erase should use `mode=BrushRing`; Decal, Text, Eyedropper, UI hover, and invalid targets should use `mode=Dot`.
 - If the Paint or Erase ring size looks wrong, check `CanvasCursorUpdated` for `target=WorldThirdPerson`, `target=TexturePanel`, or `target=TextureFallback`, the computed diameter, hit triangle, UV, canvas-local position, and any fallback reason.

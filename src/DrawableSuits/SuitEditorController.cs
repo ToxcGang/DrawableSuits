@@ -93,6 +93,10 @@ internal sealed class SuitEditorController : MonoBehaviour
     private const float WorldPlacementPreviewIdleDelay = 0.15f;
     private const float WorldPlacementPreviewMoveThresholdPixels = 2f;
     private const float DecalImportPickerTimeoutSeconds = 300f;
+    private const float UvPanelMinZoom = 1f;
+    private const float UvPanelMaxZoom = 8f;
+    private const float UvPanelWheelZoomFactor = 1.18f;
+    private const float UvPanelDpadZoomFactorPerSecond = 1.9f;
 
     private static readonly Color TerminalPanelColor = new(0.018f, 0.022f, 0.024f, 0.88f);
     private static readonly Color TerminalDialogColor = new(0.022f, 0.024f, 0.026f, 0.98f);
@@ -232,6 +236,12 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Vector2 _lastPreviewUv;
     private bool _lastPreviewUvAvailable;
     private bool _uvFallbackMode;
+    private float _uvPanelZoom = 1f;
+    private Vector2 _uvPanelCenter = new(0.5f, 0.5f);
+    private int _uvPanelTextureWidth;
+    private int _uvPanelTextureHeight;
+    private string _lastUvPanelViewLogKey = string.Empty;
+    private float _lastUvPanelViewLogTime;
     private GameObject _worldEditorCameraObject;
     private Camera _worldEditorCamera;
     private GameObject _worldPaintProxyObject;
@@ -1981,6 +1991,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         UpdateCanvasCursor(true, $"open from {source}");
         RefreshFileLists();
         _uvFallbackMode = DrawableSuitsPlugin.ModConfig.StartInUvFallbackMode.Value;
+        ResetUvPanelView($"open from {source}", false);
         EnsureValidToolForCurrentState($"open from {source}");
         TryRebuildPreviewForCurrentReadiness(source);
         RefreshEditorReadiness($"after preview ({source})");
@@ -2356,7 +2367,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         BuildRecentColorSwatches(panel.transform, new Rect(leftX, 730f, leftW, 64f));
 
         _uvFallbackButton = CreateAnchoredButton(panel.transform, "Use UV Fallback", new Rect(rightX, 54f, 150f, 34f), ToggleUvFallback);
-        CreateAnchoredText(panel.transform, "WorldHelp", "Aim at suit or UV panel. Hold paint/erase; RT stamps or samples. Orbit: right mouse/stick. Zoom: wheel/D-pad.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(rightX, 96f, rightW, 76f), TerminalMutedTextColor);
+        CreateAnchoredText(panel.transform, "WorldHelp", "Aim at suit or UV panel. Hold paint/erase; RT stamps or samples. Wheel/D-pad zooms target. Right-drag pans UV or orbits world.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(rightX, 96f, rightW, 76f), TerminalMutedTextColor);
 
         CreateSectionDivider(panel.transform, new Rect(rightX, 180f, rightW, 1f));
         _placementHeaderLabel = CreateAnchoredText(panel.transform, "PlacementHeader", "Decal", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 188f, rightW, 24f), TerminalTextColor);
@@ -3998,6 +4009,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             $"Mirror map: {(_mirrorSurfaceMap != null ? $"{_mirrorSurfaceMap.TriangleCount} tris" : "none")}",
             $"Texture-only mode: {_uvFallbackMode}",
             $"UV panel visible: {_previewViewportRect != null && _previewViewportRect.gameObject.activeSelf}",
+            $"UV panel zoom: {_uvPanelZoom:0.##} ({GetUvPanelViewRect()})",
             $"World camera found: {_worldEditorCamera != null}",
             $"World avatar proxy found: {_worldAvatarRenderer != null}",
             $"World source renderer: {_worldSourceRendererSummary}",
@@ -5676,8 +5688,9 @@ internal sealed class SuitEditorController : MonoBehaviour
             return 18f;
         }
 
-        var scaleX = screenSize.x / Mathf.Max(1f, texture.width);
-        var scaleY = screenSize.y / Mathf.Max(1f, texture.height);
+        var view = GetUvPanelViewRect();
+        var scaleX = screenSize.x / Mathf.Max(1f, texture.width * view.width);
+        var scaleY = screenSize.y / Mathf.Max(1f, texture.height * view.height);
         return ScreenPixelsToCanvasUnits(EffectiveBrushRadiusPixels() * 2f * Mathf.Max(scaleX, scaleY));
     }
 
@@ -6482,7 +6495,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         RestoreWorldDecalPreviewMaterial();
 
-        ConfigureUvPlacementPreview(_uvDecalPreviewRect, _uvDecalPreviewImage, sourceTexture, stampTexture, uv, false);
+        var primaryVisible = ConfigureUvPlacementPreview(_uvDecalPreviewRect, _uvDecalPreviewImage, sourceTexture, stampTexture, uv, false);
 
         if (ShouldApplyMirror(sourceTexture, uv, mirrorTarget))
         {
@@ -6493,6 +6506,12 @@ internal sealed class SuitEditorController : MonoBehaviour
             _uvMirrorDecalPreviewRect.gameObject.SetActive(false);
         }
 
+        if (!primaryVisible)
+        {
+            HideDecalPlacementPreview("uv preview target outside visible panel", false);
+            return;
+        }
+
         _decalPreviewVisible = true;
         _placementPreviewTool = _tool;
         _lastDecalPreviewKey = BuildDecalPreviewKey(mode, sourceTexture, uv, mirrorTarget);
@@ -6500,19 +6519,24 @@ internal sealed class SuitEditorController : MonoBehaviour
         LogPlacementPreviewUpdated(mode, sourceTexture, uv, mirrorTarget, stampTexture, false);
     }
 
-    private void ConfigureUvPlacementPreview(RectTransform previewRect, RawImage previewImage, Texture2D sourceTexture, Texture2D stampTexture, Vector2 uv, bool mirrored)
+    private bool ConfigureUvPlacementPreview(RectTransform previewRect, RawImage previewImage, Texture2D sourceTexture, Texture2D stampTexture, Vector2 uv, bool mirrored)
     {
         if (previewRect == null || previewImage == null || _previewViewportRect == null || sourceTexture == null || stampTexture == null)
         {
-            return;
+            return false;
         }
 
         var rect = _previewViewportRect.rect;
-        var localX = Mathf.Lerp(rect.xMin, rect.xMax, uv.x);
-        var localY = Mathf.Lerp(rect.yMin, rect.yMax, uv.y);
+        if (!TryTextureUvToPreviewLocal(uv, out var localPoint))
+        {
+            previewRect.gameObject.SetActive(false);
+            return false;
+        }
+
+        var view = GetUvPanelViewRect();
         var stampSize = GetPlacementStampPixelSize(stampTexture);
-        var displayWidth = Mathf.Clamp(stampSize.x / Mathf.Max(1f, sourceTexture.width) * rect.width, 4f, rect.width * 1.5f);
-        var displayHeight = Mathf.Clamp(stampSize.y / Mathf.Max(1f, sourceTexture.height) * rect.height, 4f, rect.height * 1.5f);
+        var displayWidth = Mathf.Clamp(stampSize.x / Mathf.Max(1f, sourceTexture.width * view.width) * rect.width, 4f, rect.width * 1.5f);
+        var displayHeight = Mathf.Clamp(stampSize.y / Mathf.Max(1f, sourceTexture.height * view.height) * rect.height, 4f, rect.height * 1.5f);
 
         previewImage.texture = stampTexture;
         previewImage.color = _tool == EditorTool.Text || _tool == EditorTool.Sticker
@@ -6520,10 +6544,11 @@ internal sealed class SuitEditorController : MonoBehaviour
             : mirrored ? new Color(1f, 1f, 1f, 0.5f) : new Color(1f, 1f, 1f, 0.62f);
         previewImage.raycastTarget = false;
         previewImage.uvRect = mirrored ? new Rect(1f, 0f, -1f, 1f) : new Rect(0f, 0f, 1f, 1f);
-        previewRect.anchoredPosition = new Vector2(localX, localY);
+        previewRect.anchoredPosition = localPoint;
         previewRect.sizeDelta = new Vector2(displayWidth, displayHeight);
         previewRect.localRotation = Quaternion.Euler(0f, 0f, mirrored ? -CurrentPlacementRotation() : CurrentPlacementRotation());
         previewRect.gameObject.SetActive(true);
+        return true;
     }
 
     private bool EnsureDecalPreviewTexture(Texture2D sourceTexture)
@@ -7998,6 +8023,13 @@ internal sealed class SuitEditorController : MonoBehaviour
         if (IsWorldThirdPersonMode)
         {
             var cursorOverTexturePanel = IsCursorOverPreviewViewport();
+            var worldScroll = DrawableSuitsInput.MouseScrollY();
+            if (cursorOverTexturePanel)
+            {
+                HandleUvPanelViewInput(worldScroll, gamepad, "TexturePanel");
+                return;
+            }
+
             if (gamepad != null)
             {
                 if (gamepad.leftShoulder.isPressed)
@@ -8021,17 +8053,6 @@ internal sealed class SuitEditorController : MonoBehaviour
                 {
                     _worldCameraDistance = Mathf.Clamp(_worldCameraDistance - dpad.y * Time.unscaledDeltaTime * 2f, 1.5f, 8f);
                 }
-            }
-
-            var worldScroll = DrawableSuitsInput.MouseScrollY();
-            if (cursorOverTexturePanel && Mathf.Abs(worldScroll) > 0.01f)
-            {
-                _brushSize = Mathf.Clamp(_brushSize + worldScroll * 2f, 1f, 96f);
-                if (_brushSizeSlider != null)
-                {
-                    _brushSizeSlider.SetValue(_brushSize, false);
-                }
-                return;
             }
 
             if (!IsCursorOverEditorPanel() && DrawableSuitsInput.IsRightMousePressed())
@@ -8072,26 +8093,10 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         var cursorOverPreview = IsCursorOverPreviewViewport();
-        if (cursorOverPreview && DrawableSuitsInput.IsRightMousePressed())
+        if (cursorOverPreview)
         {
-            _previewYaw += DrawableSuitsInput.MouseDeltaX() * 3f;
-        }
-
-        var scroll = DrawableSuitsInput.MouseScrollY();
-        if (cursorOverPreview && Mathf.Abs(scroll) > 0.01f)
-        {
-            if (DrawableSuitsInput.IsKeyPressed(Key.LeftCtrl) || DrawableSuitsInput.IsKeyPressed(Key.RightCtrl))
-            {
-                _previewScale = Mathf.Clamp(_previewScale + scroll * 0.05f, 0.35f, 1.8f);
-            }
-            else
-            {
-                _brushSize = Mathf.Clamp(_brushSize + scroll * 2f, 1f, 96f);
-                if (_brushSizeSlider != null)
-                {
-                    _brushSizeSlider.SetValue(_brushSize, false);
-                }
-            }
+            HandleUvPanelViewInput(DrawableSuitsInput.MouseScrollY(), gamepad, "TextureFallback");
+            return;
         }
     }
     private void HandlePaintingInput()
@@ -8948,10 +8953,183 @@ internal sealed class SuitEditorController : MonoBehaviour
         return _previewViewportRect != null && RectTransformUtility.RectangleContainsScreenPoint(_previewViewportRect, _cursor, null);
     }
 
-    private bool TryGetTexturePreviewUv(Vector2 screenPosition, out Vector2 uv)
+    private Rect GetUvPanelViewRect()
     {
-        uv = default;
-        _lastPreviewUvAvailable = false;
+        var zoom = Mathf.Clamp(_uvPanelZoom, UvPanelMinZoom, UvPanelMaxZoom);
+        var size = 1f / zoom;
+        var x = Mathf.Clamp(_uvPanelCenter.x - size * 0.5f, 0f, Mathf.Max(0f, 1f - size));
+        var y = Mathf.Clamp(_uvPanelCenter.y - size * 0.5f, 0f, Mathf.Max(0f, 1f - size));
+        return new Rect(x, y, size, size);
+    }
+
+    private void ResetUvPanelView(string reason, bool forceLog)
+    {
+        _uvPanelZoom = UvPanelMinZoom;
+        _uvPanelCenter = new Vector2(0.5f, 0.5f);
+        var texture = _selectedSuitId >= 0 ? DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId) : null;
+        ApplyUvPanelViewToPreviewImage(texture);
+        LogUvPanelViewChanged("Reset", default, reason, forceLog);
+        InvalidateDecalPreview("uv panel view reset");
+    }
+
+    private void EnsureUvPanelViewForTexture(Texture2D texture, string reason)
+    {
+        if (texture == null)
+        {
+            _uvPanelTextureWidth = 0;
+            _uvPanelTextureHeight = 0;
+            return;
+        }
+
+        if (_uvPanelTextureWidth != texture.width || _uvPanelTextureHeight != texture.height)
+        {
+            _uvPanelTextureWidth = texture.width;
+            _uvPanelTextureHeight = texture.height;
+            ResetUvPanelView($"texture size changed ({reason})", true);
+            return;
+        }
+
+        SetUvPanelView(_uvPanelZoom, _uvPanelCenter, "Clamp", default, reason, false);
+    }
+
+    private void ApplyUvPanelViewToPreviewImage(Texture2D texture)
+    {
+        if (_previewImage == null)
+        {
+            return;
+        }
+
+        _previewImage.uvRect = texture != null ? GetUvPanelViewRect() : new Rect(0f, 0f, 10f, 10f);
+    }
+
+    private void SetUvPanelView(float zoom, Vector2 center, string source, Vector2 anchorUv, string reason, bool forceLog)
+    {
+        var previousZoom = _uvPanelZoom;
+        var previousCenter = _uvPanelCenter;
+        _uvPanelZoom = Mathf.Clamp(zoom, UvPanelMinZoom, UvPanelMaxZoom);
+        var viewSize = 1f / _uvPanelZoom;
+        var minCenter = viewSize * 0.5f;
+        var maxCenter = 1f - viewSize * 0.5f;
+        _uvPanelCenter = new Vector2(
+            Mathf.Clamp(center.x, minCenter, maxCenter),
+            Mathf.Clamp(center.y, minCenter, maxCenter));
+
+        var texture = _selectedSuitId >= 0 ? DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId) : null;
+        ApplyUvPanelViewToPreviewImage(texture);
+
+        var changed = !Mathf.Approximately(previousZoom, _uvPanelZoom)
+            || (previousCenter - _uvPanelCenter).sqrMagnitude > 0.0000001f;
+        if (changed)
+        {
+            InvalidateDecalPreview("uv panel view changed");
+        }
+
+        if (changed || forceLog)
+        {
+            LogUvPanelViewChanged(source, anchorUv, reason, forceLog);
+        }
+    }
+
+    private bool ZoomUvPanelAtCursor(float factor, string source, string reason)
+    {
+        if (!TryGetTexturePreviewNormalized(_cursor, out var panelPoint))
+        {
+            return false;
+        }
+
+        if (!TryGetTexturePreviewUv(_cursor, out var anchorUv))
+        {
+            return false;
+        }
+
+        var newZoom = Mathf.Clamp(_uvPanelZoom * factor, UvPanelMinZoom, UvPanelMaxZoom);
+        if (Mathf.Approximately(newZoom, _uvPanelZoom))
+        {
+            return true;
+        }
+
+        var newViewSize = 1f / newZoom;
+        var newViewX = anchorUv.x - panelPoint.x * newViewSize;
+        var newViewY = anchorUv.y - panelPoint.y * newViewSize;
+        var newCenter = new Vector2(newViewX + newViewSize * 0.5f, newViewY + newViewSize * 0.5f);
+        SetUvPanelView(newZoom, newCenter, source, anchorUv, reason, false);
+        return true;
+    }
+
+    private bool PanUvPanelFromMouseDelta(string source)
+    {
+        if (_previewViewportRect == null)
+        {
+            return false;
+        }
+
+        var screenSize = GetRectTransformScreenSize(_previewViewportRect);
+        if (screenSize.x <= 0f || screenSize.y <= 0f)
+        {
+            return false;
+        }
+
+        var delta = new Vector2(DrawableSuitsInput.MouseDeltaX(), DrawableSuitsInput.MouseDeltaY());
+        if (delta.sqrMagnitude <= 0.001f)
+        {
+            return true;
+        }
+
+        var view = GetUvPanelViewRect();
+        var deltaUv = new Vector2(delta.x / screenSize.x * view.width, delta.y / screenSize.y * view.height);
+        SetUvPanelView(_uvPanelZoom, _uvPanelCenter - deltaUv, source, _lastPreviewUvAvailable ? _lastPreviewUv : default, "right mouse pan", false);
+        return true;
+    }
+
+    private bool HandleUvPanelViewInput(float mouseScroll, Gamepad gamepad, string targetMode)
+    {
+        if (!IsCursorOverPreviewViewport())
+        {
+            return false;
+        }
+
+        var consumed = false;
+        if (Mathf.Abs(mouseScroll) > 0.01f)
+        {
+            var factor = Mathf.Pow(UvPanelWheelZoomFactor, mouseScroll);
+            consumed |= ZoomUvPanelAtCursor(factor, "MouseWheel", targetMode);
+        }
+
+        if (gamepad != null)
+        {
+            var dpad = gamepad.dpad.ReadValue();
+            if (Mathf.Abs(dpad.y) > 0.35f)
+            {
+                var factor = Mathf.Pow(UvPanelDpadZoomFactorPerSecond, dpad.y * Time.unscaledDeltaTime);
+                consumed |= ZoomUvPanelAtCursor(factor, "GamepadDpad", targetMode);
+            }
+        }
+
+        if (DrawableSuitsInput.IsRightMousePressed())
+        {
+            consumed |= PanUvPanelFromMouseDelta("MouseRightDrag");
+        }
+
+        return consumed;
+    }
+
+    private void LogUvPanelViewChanged(string source, Vector2 anchorUv, string reason, bool forceLog)
+    {
+        var view = GetUvPanelViewRect();
+        var key = $"{source}|zoom={_uvPanelZoom:0.###}|center={_uvPanelCenter.x:0.####},{_uvPanelCenter.y:0.####}|view={view.x:0.####},{view.y:0.####},{view.width:0.####},{view.height:0.####}|reason={reason}";
+        if (!forceLog && Time.unscaledTime - _lastUvPanelViewLogTime < 0.5f && string.Equals(key, _lastUvPanelViewLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastUvPanelViewLogTime = Time.unscaledTime;
+        _lastUvPanelViewLogKey = key;
+        DrawableSuitsDiagnostics.Info($"UvPanelViewChanged: source={source}; reason={reason}; zoom={_uvPanelZoom:0.###}; center={_uvPanelCenter}; uvRect={view}; anchorUv={(anchorUv == default ? "none" : anchorUv.ToString())}; pointerSource={_pointerSource}; cursor={_cursor}; previewImageUvRect={(_previewImage != null ? _previewImage.uvRect.ToString() : "null")}");
+    }
+
+    private bool TryGetTexturePreviewNormalized(Vector2 screenPosition, out Vector2 normalized)
+    {
+        normalized = default;
         if (_previewViewportRect == null)
         {
             return false;
@@ -8975,7 +9153,47 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
-        uv = new Vector2(Mathf.Clamp01(x), Mathf.Clamp01(y));
+        normalized = new Vector2(Mathf.Clamp01(x), Mathf.Clamp01(y));
+        return true;
+    }
+
+    private bool TryTextureUvToPreviewLocal(Vector2 uv, out Vector2 localPoint)
+    {
+        localPoint = default;
+        if (_previewViewportRect == null)
+        {
+            return false;
+        }
+
+        var view = GetUvPanelViewRect();
+        const float epsilon = 0.0001f;
+        if (uv.x < view.xMin - epsilon || uv.x > view.xMax + epsilon || uv.y < view.yMin - epsilon || uv.y > view.yMax + epsilon)
+        {
+            return false;
+        }
+
+        var normalizedX = Mathf.InverseLerp(view.xMin, view.xMax, uv.x);
+        var normalizedY = Mathf.InverseLerp(view.yMin, view.yMax, uv.y);
+        var rect = _previewViewportRect.rect;
+        localPoint = new Vector2(
+            Mathf.Lerp(rect.xMin, rect.xMax, normalizedX),
+            Mathf.Lerp(rect.yMin, rect.yMax, normalizedY));
+        return true;
+    }
+
+    private bool TryGetTexturePreviewUv(Vector2 screenPosition, out Vector2 uv)
+    {
+        uv = default;
+        _lastPreviewUvAvailable = false;
+        if (!TryGetTexturePreviewNormalized(screenPosition, out var normalized))
+        {
+            return false;
+        }
+
+        var view = GetUvPanelViewRect();
+        uv = new Vector2(
+            Mathf.Clamp01(view.xMin + normalized.x * view.width),
+            Mathf.Clamp01(view.yMin + normalized.y * view.height));
         _lastPreviewUv = uv;
         _lastPreviewUvAvailable = true;
         return true;
@@ -13271,13 +13489,18 @@ internal sealed class SuitEditorController : MonoBehaviour
         if (_previewImage != null)
         {
             _previewImage.texture = assignedTexture;
-            _previewImage.uvRect = texture != null ? new Rect(0f, 0f, 1f, 1f) : new Rect(0f, 0f, 10f, 10f);
+            if (texture != null)
+            {
+                EnsureUvPanelViewForTexture(texture, context);
+            }
+            ApplyUvPanelViewToPreviewImage(texture);
             _previewImage.color = Color.white;
             _previewImage.raycastTarget = true;
         }
 
         var panelMode = IsWorldThirdPersonMode ? "TexturePanel" : _previewMode;
-        var assignment = $"{panelMode}; visible={visible}; assigned={assignedTexture?.name ?? "null"}; editable={DescribeEditableTexture()}; rawImage={DescribePreviewImageTexture()}";
+        var uvView = GetUvPanelViewRect();
+        var assignment = $"{panelMode}; visible={visible}; assigned={assignedTexture?.name ?? "null"}; editable={DescribeEditableTexture()}; rawImage={DescribePreviewImageTexture()}; uvZoom={_uvPanelZoom:0.###}; uvCenter={_uvPanelCenter}; uvRect={uvView}";
         if (forceLog || !string.Equals(_lastPreviewAssignmentLog, assignment, StringComparison.Ordinal))
         {
             DrawableSuitsDiagnostics.Info($"TexturePanel[{context}]: {assignment}; viewport={(_previewViewportRect != null ? _previewViewportRect.rect.ToString() : "null")}; siblingIndex={(_previewViewportRect != null ? _previewViewportRect.GetSiblingIndex().ToString() : "null")}; anchoredPosition={(_previewViewportRect != null ? _previewViewportRect.anchoredPosition.ToString() : "null")}");
@@ -13563,7 +13786,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         var activeModule = EventSystem.current?.currentInputModule;
         var previewUvSummary = TryGetTexturePreviewUv(pointer, out var previewUv) ? previewUv.ToString() : "none";
-        DrawableSuitsDiagnostics.Info($"UiInputDiagnostics: currentEventSystem={EventSystem.current?.name ?? "null"}; activeModule={activeModule?.GetType().Name ?? "null"}; selected={EventSystem.current?.currentSelectedGameObject?.name ?? "null"}; pointerSource={_pointerSource}; pointer={pointer}; usingMousePointer={usingMousePointer}; mouseAvailable={_mousePositionAvailable}; mousePosition={_lastMousePosition}; gamepadStick={_lastGamepadStick}; virtualCursor={_cursor}; cursorVisible={Cursor.visible}; cursorLock={Cursor.lockState}; canvasScale={_editorCanvasObject?.GetComponent<Canvas>()?.scaleFactor.ToString("0.###") ?? "null"}; raycastHits=[{hitNames}]; overPanel={IsCursorOverEditorPanel()}; overPreview={IsCursorOverPreviewViewport()}; previewUv={previewUvSummary}; lastPreviewUv={(_lastPreviewUvAvailable ? _lastPreviewUv.ToString() : "none")}; previewMode={_previewMode}; editableTexture={DescribeEditableTexture()}; previewImageTexture={DescribePreviewImageTexture()}; previewRect={(_previewViewportRect != null ? _previewViewportRect.rect.ToString() : "null")}; previewCamera={DrawableSuitsPlugin.DescribeUnityObject(_previewCamera)}; previewCameraEnabled={_previewCamera?.enabled.ToString() ?? "null"}; previewLayer={_previewLayer}; renderTexture={_previewTexture?.width.ToString() ?? "null"}x{_previewTexture?.height.ToString() ?? "null"}");
+        DrawableSuitsDiagnostics.Info($"UiInputDiagnostics: currentEventSystem={EventSystem.current?.name ?? "null"}; activeModule={activeModule?.GetType().Name ?? "null"}; selected={EventSystem.current?.currentSelectedGameObject?.name ?? "null"}; pointerSource={_pointerSource}; pointer={pointer}; usingMousePointer={usingMousePointer}; mouseAvailable={_mousePositionAvailable}; mousePosition={_lastMousePosition}; gamepadStick={_lastGamepadStick}; virtualCursor={_cursor}; cursorVisible={Cursor.visible}; cursorLock={Cursor.lockState}; canvasScale={_editorCanvasObject?.GetComponent<Canvas>()?.scaleFactor.ToString("0.###") ?? "null"}; raycastHits=[{hitNames}]; overPanel={IsCursorOverEditorPanel()}; overPreview={IsCursorOverPreviewViewport()}; previewUv={previewUvSummary}; lastPreviewUv={(_lastPreviewUvAvailable ? _lastPreviewUv.ToString() : "none")}; previewMode={_previewMode}; uvPanelZoom={_uvPanelZoom:0.###}; uvPanelRect={GetUvPanelViewRect()}; editableTexture={DescribeEditableTexture()}; previewImageTexture={DescribePreviewImageTexture()}; previewRect={(_previewViewportRect != null ? _previewViewportRect.rect.ToString() : "null")}; previewCamera={DrawableSuitsPlugin.DescribeUnityObject(_previewCamera)}; previewCameraEnabled={_previewCamera?.enabled.ToString() ?? "null"}; previewLayer={_previewLayer}; renderTexture={_previewTexture?.width.ToString() ?? "null"}x{_previewTexture?.height.ToString() ?? "null"}");
     }
 
     private static void LogEditorControlTree(Transform root)

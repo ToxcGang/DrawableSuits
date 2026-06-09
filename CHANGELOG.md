@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.49
+
+- Added UV panel zoom and pan: wheel or controller D-pad zooms the UV panel while the cursor is over it, and right-mouse drag pans the zoomed texture view.
+- UV panel painting, erasing, fill, decals, text, stickers, eyedropper, Mirror previews, and brush cursor sizing now respect the zoomed texture viewport.
+- Added `UvPanelViewChanged` diagnostics and included UV panel zoom/`uvRect` in texture-panel and UI input diagnostics.
+
 ## 0.5.48
 
 - Replaced the in-process Windows common dialog used by `Add Decal` with an isolated external PowerShell picker process to prevent game crashes.
