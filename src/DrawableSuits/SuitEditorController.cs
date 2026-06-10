@@ -97,6 +97,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private const float UvPanelMaxZoom = 8f;
     private const float UvPanelWheelZoomFactor = 1.18f;
     private const float UvPanelDpadZoomFactorPerSecond = 1.9f;
+    private const float UvPanelGamepadPanDeadzone = 0.2f;
+    private const float UvPanelGamepadPanSpeed = 1.8f;
 
     private static readonly Color TerminalPanelColor = new(0.018f, 0.022f, 0.024f, 0.88f);
     private static readonly Color TerminalDialogColor = new(0.022f, 0.024f, 0.026f, 0.98f);
@@ -2367,7 +2369,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         BuildRecentColorSwatches(panel.transform, new Rect(leftX, 730f, leftW, 64f));
 
         _uvFallbackButton = CreateAnchoredButton(panel.transform, "Use UV Fallback", new Rect(rightX, 54f, 150f, 34f), ToggleUvFallback);
-        CreateAnchoredText(panel.transform, "WorldHelp", "Aim at suit or UV panel. Hold paint/erase; RT stamps or samples. Wheel/D-pad zooms target. Right-drag pans UV or orbits world.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(rightX, 96f, rightW, 76f), TerminalMutedTextColor);
+        CreateAnchoredText(panel.transform, "WorldHelp", "Aim at suit or UV panel. Hold paint/erase; RT stamps or samples. Wheel/D-pad zooms target. Right-drag or right stick pans UV; off panel, orbit world.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(rightX, 96f, rightW, 76f), TerminalMutedTextColor);
 
         CreateSectionDivider(panel.transform, new Rect(rightX, 180f, rightW, 1f));
         _placementHeaderLabel = CreateAnchoredText(panel.transform, "PlacementHeader", "Decal", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 188f, rightW, 24f), TerminalTextColor);
@@ -9081,6 +9083,26 @@ internal sealed class SuitEditorController : MonoBehaviour
         return true;
     }
 
+    private bool PanUvPanelFromGamepadStick(Vector2 stick, string source)
+    {
+        if (stick.sqrMagnitude <= UvPanelGamepadPanDeadzone * UvPanelGamepadPanDeadzone)
+        {
+            return false;
+        }
+
+        var view = GetUvPanelViewRect();
+        var deltaUv = new Vector2(
+            stick.x * view.width * UvPanelGamepadPanSpeed * Time.unscaledDeltaTime,
+            stick.y * view.height * UvPanelGamepadPanSpeed * Time.unscaledDeltaTime);
+        if (deltaUv.sqrMagnitude <= 0.0000001f)
+        {
+            return false;
+        }
+
+        SetUvPanelView(_uvPanelZoom, _uvPanelCenter + deltaUv, source, _lastPreviewUvAvailable ? _lastPreviewUv : default, "right stick pan", false);
+        return true;
+    }
+
     private bool HandleUvPanelViewInput(float mouseScroll, Gamepad gamepad, string targetMode)
     {
         if (!IsCursorOverPreviewViewport())
@@ -9103,6 +9125,8 @@ internal sealed class SuitEditorController : MonoBehaviour
                 var factor = Mathf.Pow(UvPanelDpadZoomFactorPerSecond, dpad.y * Time.unscaledDeltaTime);
                 consumed |= ZoomUvPanelAtCursor(factor, "GamepadDpad", targetMode);
             }
+
+            consumed |= PanUvPanelFromGamepadStick(gamepad.rightStick.ReadValue(), "GamepadRightStickPan");
         }
 
         if (DrawableSuitsInput.IsRightMousePressed())

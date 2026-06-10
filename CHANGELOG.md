@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.50
+
+- Added controller right-stick panning for the zoomed UV panel while the cursor is over the panel.
+- Kept right-stick third-person camera orbit unchanged when the cursor is outside the UV panel.
+- Updated UV panel diagnostics/help text to reflect contextual controller pan behavior.
+
 ## 0.5.49
 
 - Added UV panel zoom and pan: wheel or controller D-pad zooms the UV panel while the cursor is over it, and right-mouse drag pans the zoomed texture view.
