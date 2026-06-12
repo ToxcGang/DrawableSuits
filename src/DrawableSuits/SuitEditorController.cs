@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
-using System.Threading.Tasks;
 using GameNetcodeStuff;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -518,12 +517,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private float _lastPlacementEditPreviewLogTime;
     private string _lastPlacementSourcePixelsLogKey = string.Empty;
     private float _lastPlacementSourcePixelsLogTime;
-    private DecalEditPreviewJobRequest _pendingDecalEditPreviewJob;
-    private DecalEditPreviewJobRequest _runningDecalEditPreviewJob;
-    private Task<DecalEditPreviewJobResult> _runningDecalEditPreviewTask;
-    private int _decalEditPreviewJobSerial;
-    private string _lastDecalEditPreviewJobLogKey = string.Empty;
-    private float _lastDecalEditPreviewJobLogTime;
+    private Color32[] _editedDecalPreviewPixelBuffer;
     private DiagnosticsProcess _pendingDecalImportProcess;
     private float _pendingDecalImportStartedAt;
     private int _pendingDecalImportId;
@@ -754,34 +748,6 @@ internal sealed class SuitEditorController : MonoBehaviour
                 Key = state?.Key() ?? string.Empty
             };
         }
-    }
-
-    private sealed class DecalEditPreviewJobRequest
-    {
-        internal int Serial;
-        internal string Key = string.Empty;
-        internal string SourceName = string.Empty;
-        internal int SourceWidth;
-        internal int SourceHeight;
-        internal int MaxTextureSize;
-        internal Color32[] SourcePixels;
-        internal PlacementEditSnapshot State;
-    }
-
-    private sealed class DecalEditPreviewJobResult
-    {
-        internal int Serial;
-        internal string Key = string.Empty;
-        internal string SourceName = string.Empty;
-        internal int SourceWidth;
-        internal int SourceHeight;
-        internal int OutputWidth;
-        internal int OutputHeight;
-        internal Color32[] Pixels;
-        internal string FailureReason = string.Empty;
-        internal float WorkerMs;
-
-        internal bool Success => Pixels != null && Pixels.Length == OutputWidth * OutputHeight && OutputWidth > 0 && OutputHeight > 0 && string.IsNullOrWhiteSpace(FailureReason);
     }
 
     private sealed class RendererRestoreState
@@ -2239,7 +2205,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         ReapplyPlayerInputLock();
         EnsureCursorUnlockedWhileOpen();
         PollPendingDecalImport();
-        PollDecalEditPreviewJob();
         HandleControllerCursor();
         UpdateCanvasCursor(false, "update");
         if (IsWorldThirdPersonMode)
@@ -7559,7 +7524,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         return true;
     }
 
-    private bool TryUpdateAsyncDecalEditPreview(Texture2D source, PlacementEditState state, string reason, float startedAt, out string failureReason)
+    private bool TryUpdateFastDecalEditPreview(Texture2D source, PlacementEditState state, string reason, float startedAt, out string failureReason)
     {
         failureReason = string.Empty;
         if (source == null)
@@ -7580,32 +7545,69 @@ internal sealed class SuitEditorController : MonoBehaviour
             _placementEditPreviewImage.color = Color.white;
             FitPlacementEditPreview(source);
             SetPlacementEditStatus("No temporary edits applied.");
-            LogPlacementEditPreviewUpdated(PlacementEditTarget.Decal, source, state, source, reason, true, false, (Time.realtimeSinceStartup - startedAt) * 1000f);
+            LogDecalEditPreviewFastCacheHit(source, state, source, reason, false, false, (Time.realtimeSinceStartup - startedAt) * 1000f);
             return true;
         }
 
-        var key = BuildPlacementStampKey(PlacementEditTarget.Decal, source, false, state, "full", 0);
-        if (_editedDecalStampTexture != null && string.Equals(_editedDecalStampKey, key, StringComparison.Ordinal))
+        var previewMaxDimension = GetPlacementEditPreviewMaxDimension();
+        var key = BuildPlacementStampKey(PlacementEditTarget.Decal, source, false, state, "modalPreview", previewMaxDimension);
+        if (_editedDecalPreviewStampTexture != null && string.Equals(_editedDecalPreviewStampKey, key, StringComparison.Ordinal))
         {
-            _placementEditPreviewImage.texture = _editedDecalStampTexture;
+            _placementEditPreviewImage.texture = _editedDecalPreviewStampTexture;
             _placementEditPreviewImage.color = Color.white;
-            FitPlacementEditPreview(_editedDecalStampTexture);
+            FitPlacementEditPreview(_editedDecalPreviewStampTexture);
             SetPlacementEditStatus("Temporary edit preview ready.");
-            LogPlacementEditPreviewUpdated(PlacementEditTarget.Decal, source, state, _editedDecalStampTexture, reason, true, true, (Time.realtimeSinceStartup - startedAt) * 1000f);
+            LogDecalEditPreviewFastCacheHit(source, state, _editedDecalPreviewStampTexture, reason, true, true, (Time.realtimeSinceStartup - startedAt) * 1000f);
             return true;
         }
 
-        if (!QueueDecalEditPreviewJob(source, state, key, reason, out failureReason))
+        if (!TryGenerateFastDecalEditPreview(source, state, previewMaxDimension, out var previewTexture, out var sourceCacheHit, out var textureReused, out var elapsedMs, out failureReason))
         {
             return false;
         }
 
-        SetPlacementEditStatus("Rendering decal preview...");
+        _editedDecalPreviewStampKey = key;
+        _placementEditPreviewImage.texture = previewTexture;
+        _placementEditPreviewImage.color = Color.white;
+        FitPlacementEditPreview(previewTexture);
+        SetPlacementEditStatus("Temporary edit preview ready.");
+        LogDecalEditPreviewFastUpdated(source, state, previewTexture, reason, sourceCacheHit, textureReused, elapsedMs);
         return true;
     }
 
-    private bool QueueDecalEditPreviewJob(Texture2D source, PlacementEditState state, string key, string reason, out string failureReason)
+    private int GetPlacementEditPreviewMaxDimension()
     {
+        var frameSize = Vector2.zero;
+        if (_placementEditPreviewFrameRect != null)
+        {
+            frameSize = _placementEditPreviewFrameRect.rect.size;
+            if (frameSize.x <= 1f || frameSize.y <= 1f)
+            {
+                frameSize = _placementEditPreviewFrameRect.sizeDelta;
+            }
+        }
+
+        var available = frameSize.x > 1f && frameSize.y > 1f
+            ? Mathf.Min(frameSize.x - 16f, frameSize.y - 16f)
+            : PlacementEditPreviewMaxTextureSize;
+        return Mathf.Clamp(Mathf.RoundToInt(Mathf.Max(48f, available)), 64, PlacementEditPreviewMaxTextureSize);
+    }
+
+    private bool TryGenerateFastDecalEditPreview(
+        Texture2D source,
+        PlacementEditState state,
+        int maxOutputDimension,
+        out Texture2D texture,
+        out bool sourceCacheHit,
+        out bool textureReused,
+        out float elapsedMs,
+        out string failureReason)
+    {
+        var startedAt = Time.realtimeSinceStartup;
+        texture = null;
+        sourceCacheHit = false;
+        textureReused = false;
+        elapsedMs = 0f;
         failureReason = string.Empty;
         if (source == null || state == null)
         {
@@ -7613,195 +7615,58 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
-        if (_runningDecalEditPreviewTask != null
-            && !_runningDecalEditPreviewTask.IsCompleted
-            && _runningDecalEditPreviewJob != null
-            && string.Equals(_runningDecalEditPreviewJob.Key, key, StringComparison.Ordinal))
-        {
-            return true;
-        }
-
-        if (_pendingDecalEditPreviewJob != null && string.Equals(_pendingDecalEditPreviewJob.Key, key, StringComparison.Ordinal))
-        {
-            return true;
-        }
-
         if (!TryGetPlacementSourcePixels(PlacementEditTarget.Decal, source, out var pixels, out var width, out var height, out var cacheHit, out failureReason))
         {
             return false;
         }
 
-        var request = new DecalEditPreviewJobRequest
+        sourceCacheHit = cacheHit;
+        if (!TryGenerateEditedDecalPixels(
+                pixels,
+                width,
+                height,
+                PlacementEditSnapshot.From(state),
+                Mathf.Clamp(SystemInfo.maxTextureSize > 0 ? SystemInfo.maxTextureSize : 2048, 256, 8192),
+                maxOutputDimension,
+                _editedDecalPreviewPixelBuffer,
+                out var outputPixels,
+                out var outputWidth,
+                out var outputHeight,
+                out failureReason))
         {
-            Serial = ++_decalEditPreviewJobSerial,
-            Key = key,
-            SourceName = GetPlacementEditSourceName(PlacementEditTarget.Decal),
-            SourceWidth = width,
-            SourceHeight = height,
-            MaxTextureSize = Mathf.Clamp(SystemInfo.maxTextureSize > 0 ? SystemInfo.maxTextureSize : 2048, 256, 8192),
-            SourcePixels = pixels,
-            State = PlacementEditSnapshot.From(state)
-        };
-
-        _pendingDecalEditPreviewJob = request;
-        LogDecalEditPreviewJobQueued(request, reason, cacheHit, _runningDecalEditPreviewTask != null && !_runningDecalEditPreviewTask.IsCompleted);
-        if (_runningDecalEditPreviewTask == null || _runningDecalEditPreviewTask.IsCompleted)
-        {
-            StartPendingDecalEditPreviewJob();
+            elapsedMs = (Time.realtimeSinceStartup - startedAt) * 1000f;
+            return false;
         }
 
-        return true;
-    }
-
-    private void StartPendingDecalEditPreviewJob()
-    {
-        if (_pendingDecalEditPreviewJob == null)
+        _editedDecalPreviewPixelBuffer = outputPixels;
+        if (_editedDecalPreviewStampTexture != null
+            && _editedDecalPreviewStampTexture.width == outputWidth
+            && _editedDecalPreviewStampTexture.height == outputHeight)
         {
-            return;
-        }
-
-        _runningDecalEditPreviewJob = _pendingDecalEditPreviewJob;
-        _pendingDecalEditPreviewJob = null;
-        try
-        {
-            var request = _runningDecalEditPreviewJob;
-            _runningDecalEditPreviewTask = Task.Run(() => RunDecalEditPreviewJob(request));
-        }
-        catch (Exception ex)
-        {
-            DrawableSuitsDiagnostics.Exception($"DecalEditPreviewJobQueued failed to start. source={_runningDecalEditPreviewJob.SourceName}; serial={_runningDecalEditPreviewJob.Serial}; suit={_selectedSuitId}", ex);
-            _runningDecalEditPreviewTask = null;
-            _runningDecalEditPreviewJob = null;
-        }
-    }
-
-    private void PollDecalEditPreviewJob()
-    {
-        if (_runningDecalEditPreviewTask == null)
-        {
-            return;
-        }
-
-        if (!_runningDecalEditPreviewTask.IsCompleted)
-        {
-            return;
-        }
-
-        var request = _runningDecalEditPreviewJob;
-        DecalEditPreviewJobResult result;
-        try
-        {
-            result = _runningDecalEditPreviewTask.Result;
-        }
-        catch (Exception ex)
-        {
-            result = new DecalEditPreviewJobResult
-            {
-                Serial = request?.Serial ?? 0,
-                Key = request?.Key ?? string.Empty,
-                SourceName = request?.SourceName ?? "unknown",
-                SourceWidth = request?.SourceWidth ?? 0,
-                SourceHeight = request?.SourceHeight ?? 0,
-                FailureReason = ex.GetBaseException().Message
-            };
-        }
-
-        LogDecalEditPreviewJobCompleted(result);
-        var discardReason = GetDecalEditPreviewDiscardReason(result);
-        if (!string.IsNullOrWhiteSpace(discardReason))
-        {
-            LogDecalEditPreviewJobDiscarded(result, discardReason);
-        }
-        else if (!result.Success)
-        {
-            SetPlacementEditStatus(string.IsNullOrWhiteSpace(result.FailureReason) ? "Decal preview render failed." : result.FailureReason);
-            LogPlacementEditPreviewSkipped(PlacementEditTarget.Decal, "async preview completed", result.FailureReason);
+            texture = _editedDecalPreviewStampTexture;
+            textureReused = true;
         }
         else
         {
-            ApplyDecalEditPreviewJobResult(result);
+            if (_editedDecalPreviewStampTexture != null)
+            {
+                Destroy(_editedDecalPreviewStampTexture);
+            }
+
+            texture = new Texture2D(outputWidth, outputHeight, TextureFormat.RGBA32, false)
+            {
+                name = "DrawableSuitsEditedDecalPreview",
+                filterMode = FilterMode.Bilinear,
+                wrapMode = TextureWrapMode.Clamp,
+                hideFlags = HideFlags.HideAndDontSave
+            };
+            _editedDecalPreviewStampTexture = texture;
         }
 
-        _runningDecalEditPreviewTask = null;
-        _runningDecalEditPreviewJob = null;
-        StartPendingDecalEditPreviewJob();
-    }
-
-    private string GetDecalEditPreviewDiscardReason(DecalEditPreviewJobResult result)
-    {
-        if (result == null)
-        {
-            return "missing result";
-        }
-
-        if (result.Serial != _decalEditPreviewJobSerial)
-        {
-            return "newer decal edit job exists";
-        }
-
-        if (!IsPlacementEditPanelOpen() || _activePlacementEditTarget != PlacementEditTarget.Decal)
-        {
-            return "decal edit panel closed";
-        }
-
-        if (!TryGetPlacementEditSourceTexture(PlacementEditTarget.Decal, out var source, out _))
-        {
-            return "decal source unavailable";
-        }
-
-        var state = GetPlacementEditState(PlacementEditTarget.Decal);
-        var expectedKey = BuildPlacementStampKey(PlacementEditTarget.Decal, source, false, state, "full", 0);
-        return string.Equals(result.Key, expectedKey, StringComparison.Ordinal)
-            ? string.Empty
-            : "decal edit key changed";
-    }
-
-    private void ApplyDecalEditPreviewJobResult(DecalEditPreviewJobResult result)
-    {
-        var startedAt = Time.realtimeSinceStartup;
-        var texture = new Texture2D(result.OutputWidth, result.OutputHeight, TextureFormat.RGBA32, false)
-        {
-            name = "DrawableSuitsEditedDecalStamp",
-            filterMode = FilterMode.Bilinear,
-            wrapMode = TextureWrapMode.Clamp,
-            hideFlags = HideFlags.HideAndDontSave
-        };
-        texture.SetPixels32(result.Pixels);
+        texture.SetPixels32(outputPixels);
         texture.Apply(false, false);
-
-        if (_editedDecalStampTexture != null)
-        {
-            Destroy(_editedDecalStampTexture);
-        }
-        if (_editedDecalPreviewStampTexture != null)
-        {
-            Destroy(_editedDecalPreviewStampTexture);
-            _editedDecalPreviewStampTexture = null;
-            _editedDecalPreviewStampKey = string.Empty;
-        }
-
-        _editedDecalStampTexture = texture;
-        _editedDecalStampKey = result.Key;
-        if (_placementEditPreviewImage != null && IsPlacementEditPanelOpen() && _activePlacementEditTarget == PlacementEditTarget.Decal)
-        {
-            _placementEditPreviewImage.texture = texture;
-            _placementEditPreviewImage.color = Color.white;
-            FitPlacementEditPreview(texture);
-            SetPlacementEditStatus("Temporary edit preview ready.");
-        }
-
-        InvalidateDecalPreview("decal edit preview job applied");
-        LogDecalEditPreviewJobApplied(result, (Time.realtimeSinceStartup - startedAt) * 1000f);
-    }
-
-    private void CancelDecalEditPreviewJobs(string reason)
-    {
-        _decalEditPreviewJobSerial++;
-        _pendingDecalEditPreviewJob = null;
-        if (_runningDecalEditPreviewJob != null)
-        {
-            DrawableSuitsDiagnostics.Info($"DecalEditPreviewJobDiscarded: source={_runningDecalEditPreviewJob.SourceName}; serial={_runningDecalEditPreviewJob.Serial}; reason={reason}; suit={_selectedSuitId}");
-        }
+        elapsedMs = (Time.realtimeSinceStartup - startedAt) * 1000f;
+        return true;
     }
 
     private string BuildPlacementStampKey(PlacementEditTarget target, Texture2D source, bool tintSticker, PlacementEditState state, string quality, int maxDimension)
@@ -7902,64 +7767,14 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
     }
 
-    private static DecalEditPreviewJobResult RunDecalEditPreviewJob(DecalEditPreviewJobRequest request)
-    {
-        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        var result = new DecalEditPreviewJobResult
-        {
-            Serial = request?.Serial ?? 0,
-            Key = request?.Key ?? string.Empty,
-            SourceName = request?.SourceName ?? "unknown",
-            SourceWidth = request?.SourceWidth ?? 0,
-            SourceHeight = request?.SourceHeight ?? 0
-        };
-
-        try
-        {
-            if (request == null)
-            {
-                result.FailureReason = "missing decal preview request";
-                return result;
-            }
-
-            if (!TryGenerateEditedDecalPixels(
-                    request.SourcePixels,
-                    request.SourceWidth,
-                    request.SourceHeight,
-                    request.State,
-                    request.MaxTextureSize,
-                    out var pixels,
-                    out var outputWidth,
-                    out var outputHeight,
-                    out var failureReason))
-            {
-                result.FailureReason = failureReason;
-                return result;
-            }
-
-            result.Pixels = pixels;
-            result.OutputWidth = outputWidth;
-            result.OutputHeight = outputHeight;
-            return result;
-        }
-        catch (Exception ex)
-        {
-            result.FailureReason = ex.Message;
-            return result;
-        }
-        finally
-        {
-            stopwatch.Stop();
-            result.WorkerMs = (float)stopwatch.Elapsed.TotalMilliseconds;
-        }
-    }
-
     private static bool TryGenerateEditedDecalPixels(
         Color32[] sourcePixels,
         int sourceWidth,
         int sourceHeight,
         PlacementEditSnapshot state,
         int maxTextureSize,
+        int maxOutputDimension,
+        Color32[] reusableOutputPixels,
         out Color32[] outputPixels,
         out int outputWidth,
         out int outputHeight,
@@ -8001,9 +7816,18 @@ internal sealed class SuitEditorController : MonoBehaviour
         maxTextureSize = ClampInt(maxTextureSize > 0 ? maxTextureSize : 2048, 256, 8192);
         var targetWidth = Math.Max(1.0, cropPixelsW * Math.Max(0.01, state.StretchX));
         var targetHeight = Math.Max(1.0, cropPixelsH * Math.Max(0.01, state.StretchY));
-        outputWidth = ClampInt(RoundPositiveToInt(targetWidth), 1, maxTextureSize);
-        outputHeight = ClampInt(RoundPositiveToInt(targetHeight), 1, maxTextureSize);
-        outputPixels = new Color32[outputWidth * outputHeight];
+        var outputScale = 1.0;
+        if (maxOutputDimension > 0)
+        {
+            outputScale = Math.Min(1.0, maxOutputDimension / Math.Max(targetWidth, targetHeight));
+        }
+
+        outputWidth = ClampInt(RoundPositiveToInt(targetWidth * outputScale), 1, maxTextureSize);
+        outputHeight = ClampInt(RoundPositiveToInt(targetHeight * outputScale), 1, maxTextureSize);
+        var pixelCount = outputWidth * outputHeight;
+        outputPixels = reusableOutputPixels != null && reusableOutputPixels.Length == pixelCount
+            ? reusableOutputPixels
+            : new Color32[pixelCount];
 
         for (var y = 0; y < outputHeight; y++)
         {
@@ -13230,11 +13054,6 @@ internal sealed class SuitEditorController : MonoBehaviour
             _placementEditPreviewImage.texture = null;
         }
 
-        if (target == PlacementEditTarget.Decal)
-        {
-            CancelDecalEditPreviewJobs("placement edit panel closed");
-        }
-
         RebuildSelectableNavigation();
         if (wasOpen)
         {
@@ -13313,7 +13132,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         if (target == PlacementEditTarget.Decal)
         {
             if (TryGetPlacementEditSourceTexture(target, out var decalSource, out sourceFailure)
-                && TryUpdateAsyncDecalEditPreview(decalSource, state, reason, startedAt, out previewFailure))
+                && TryUpdateFastDecalEditPreview(decalSource, state, reason, startedAt, out previewFailure))
             {
                 return;
             }
@@ -13324,6 +13143,7 @@ internal sealed class SuitEditorController : MonoBehaviour
                 _placementEditPreviewImage.texture = null;
             }
             SetPlacementEditStatus(decalFailure);
+            LogDecalEditPreviewFastSkipped(decalSource, state, reason, decalFailure);
             LogPlacementEditPreviewSkipped(target, reason, decalFailure);
             return;
         }
@@ -13487,11 +13307,6 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         if (target == PlacementEditTarget.Decal)
         {
-            if (destroyTexture)
-            {
-                CancelDecalEditPreviewJobs("edited decal stamp invalidated");
-            }
-
             if (destroyTexture && _editedDecalStampTexture != null)
             {
                 Destroy(_editedDecalStampTexture);
@@ -13508,6 +13323,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             _editedDecalPreviewStampKey = string.Empty;
             if (destroyTexture)
             {
+                _editedDecalPreviewPixelBuffer = null;
                 ClearPlacementSourcePixelCache(target, "edited placement stamp invalidated");
             }
             return;
@@ -13709,7 +13525,8 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void LogPlacementEditedStampGenerated(PlacementEditTarget target, Texture2D source, PlacementEditState state, Texture2D generated, bool cacheHit)
     {
-        DrawableSuitsDiagnostics.Info($"PlacementEditedStampGenerated: target={target}; source={GetPlacementEditSourceName(target)}; quality=full; sourceSize={source?.width ?? 0}x{source?.height ?? 0}; crop={DescribePlacementCrop(state)}; stretch={DescribePlacementStretch(state)}; flip={DescribePlacementFlip(state)}; filters={DescribePlacementFilters(state)}; cacheHit={cacheHit}; generatedSize={generated?.width ?? 0}x{generated?.height ?? 0}; suit={_selectedSuitId}");
+        var eventName = target == PlacementEditTarget.Decal ? "EditedDecalFullQualityGenerated" : "PlacementEditedStampGenerated";
+        DrawableSuitsDiagnostics.Info($"{eventName}: target={target}; source={GetPlacementEditSourceName(target)}; quality=full; sourceSize={source?.width ?? 0}x{source?.height ?? 0}; crop={DescribePlacementCrop(state)}; stretch={DescribePlacementStretch(state)}; flip={DescribePlacementFlip(state)}; filters={DescribePlacementFilters(state)}; cacheHit={cacheHit}; generatedSize={generated?.width ?? 0}x{generated?.height ?? 0}; suit={_selectedSuitId}");
     }
 
     private void LogPlacementEditPreviewSkipped(PlacementEditTarget target, string reason, string failureReason)
@@ -13739,35 +13556,43 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawableSuitsDiagnostics.Info($"{eventName}: target={target}; source={GetPlacementEditSourceName(target)}; reason={reason}; quality=preview; sourceSize={source?.width ?? 0}x{source?.height ?? 0}; generatedSize={preview?.width ?? 0}x{preview?.height ?? 0}; crop={DescribePlacementCrop(state)}; stretch={DescribePlacementStretch(state)}; flip={DescribePlacementFlip(state)}; filters={DescribePlacementFilters(state)}; cacheHit={cacheHit}; cpuPixels={cpuPixelSamplingUsed}; elapsedMs={elapsedMs:0.##}; suit={_selectedSuitId}");
     }
 
-    private void LogDecalEditPreviewJobQueued(DecalEditPreviewJobRequest request, string reason, bool sourceCacheHit, bool workerBusy)
+    private void LogDecalEditPreviewFastUpdated(Texture2D source, PlacementEditState state, Texture2D preview, string reason, bool sourceCacheHit, bool textureReused, float elapsedMs)
     {
-        var key = $"queued|serial={request?.Serial ?? 0}|source={request?.SourceName}|size={request?.SourceWidth ?? 0}x{request?.SourceHeight ?? 0}|state={request?.State?.Revision ?? -1}";
-        _lastDecalEditPreviewJobLogTime = Time.unscaledTime;
-        _lastDecalEditPreviewJobLogKey = key;
-        DrawableSuitsDiagnostics.Info($"DecalEditPreviewJobQueued: source={request?.SourceName}; sourceSize={request?.SourceWidth ?? 0}x{request?.SourceHeight ?? 0}; outputSize=pending; crop={DescribePlacementCrop(request?.State)}; stretch={DescribePlacementStretch(request?.State)}; flip={DescribePlacementFlip(request?.State)}; filters={DescribePlacementFilters(request?.State)}; reason={reason}; serial={request?.Serial ?? 0}; workerBusy={workerBusy}; sourceCacheHit={sourceCacheHit}; suit={_selectedSuitId}");
-    }
-
-    private void LogDecalEditPreviewJobCompleted(DecalEditPreviewJobResult result)
-    {
-        DrawableSuitsDiagnostics.Info($"DecalEditPreviewJobCompleted: source={result?.SourceName}; sourceSize={result?.SourceWidth ?? 0}x{result?.SourceHeight ?? 0}; outputSize={result?.OutputWidth ?? 0}x{result?.OutputHeight ?? 0}; serial={result?.Serial ?? 0}; workerMs={result?.WorkerMs ?? 0f:0.##}; success={result?.Success ?? false}; failure={result?.FailureReason ?? string.Empty}; suit={_selectedSuitId}");
-    }
-
-    private void LogDecalEditPreviewJobDiscarded(DecalEditPreviewJobResult result, string reason)
-    {
-        var key = $"discard|serial={result?.Serial ?? 0}|reason={reason}";
-        if (Time.unscaledTime - _lastDecalEditPreviewJobLogTime < 0.25f && string.Equals(key, _lastDecalEditPreviewJobLogKey, StringComparison.Ordinal))
+        var key = $"DecalEditPreviewFastUpdated|reason={reason}|source={GetPlacementEditSourceName(PlacementEditTarget.Decal)}|preview={preview?.width ?? 0}x{preview?.height ?? 0}|state={state?.Revision ?? -1}";
+        if (Time.unscaledTime - _lastPlacementEditPreviewLogTime < 0.25f && string.Equals(key, _lastPlacementEditPreviewLogKey, StringComparison.Ordinal))
         {
             return;
         }
 
-        _lastDecalEditPreviewJobLogTime = Time.unscaledTime;
-        _lastDecalEditPreviewJobLogKey = key;
-        DrawableSuitsDiagnostics.Info($"DecalEditPreviewJobDiscarded: source={result?.SourceName}; sourceSize={result?.SourceWidth ?? 0}x{result?.SourceHeight ?? 0}; outputSize={result?.OutputWidth ?? 0}x{result?.OutputHeight ?? 0}; serial={result?.Serial ?? 0}; reason={reason}; workerMs={result?.WorkerMs ?? 0f:0.##}; suit={_selectedSuitId}");
+        _lastPlacementEditPreviewLogTime = Time.unscaledTime;
+        _lastPlacementEditPreviewLogKey = key;
+        DrawableSuitsDiagnostics.Info($"DecalEditPreviewFastUpdated: source={GetPlacementEditSourceName(PlacementEditTarget.Decal)}; reason={reason}; quality=modalPreview; sourceSize={source?.width ?? 0}x{source?.height ?? 0}; previewSize={preview?.width ?? 0}x{preview?.height ?? 0}; crop={DescribePlacementCrop(state)}; stretch={DescribePlacementStretch(state)}; flip={DescribePlacementFlip(state)}; filters={DescribePlacementFilters(state)}; sourceCacheHit={sourceCacheHit}; textureReused={textureReused}; cpuPixels=True; elapsedMs={elapsedMs:0.##}; suit={_selectedSuitId}");
     }
 
-    private void LogDecalEditPreviewJobApplied(DecalEditPreviewJobResult result, float uploadMs)
+    private void LogDecalEditPreviewFastCacheHit(Texture2D source, PlacementEditState state, Texture2D preview, string reason, bool generatedPreviewCache, bool cpuPixelSamplingUsed, float elapsedMs)
     {
-        DrawableSuitsDiagnostics.Info($"DecalEditPreviewJobApplied: source={result?.SourceName}; sourceSize={result?.SourceWidth ?? 0}x{result?.SourceHeight ?? 0}; outputSize={result?.OutputWidth ?? 0}x{result?.OutputHeight ?? 0}; serial={result?.Serial ?? 0}; workerMs={result?.WorkerMs ?? 0f:0.##}; uploadMs={uploadMs:0.##}; cacheKeySet={_editedDecalStampKey.Length > 0}; suit={_selectedSuitId}");
+        var key = $"DecalEditPreviewFastCacheHit|reason={reason}|source={GetPlacementEditSourceName(PlacementEditTarget.Decal)}|preview={preview?.width ?? 0}x{preview?.height ?? 0}|state={state?.Revision ?? -1}";
+        if (Time.unscaledTime - _lastPlacementEditPreviewLogTime < 0.5f && string.Equals(key, _lastPlacementEditPreviewLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastPlacementEditPreviewLogTime = Time.unscaledTime;
+        _lastPlacementEditPreviewLogKey = key;
+        DrawableSuitsDiagnostics.Info($"DecalEditPreviewFastCacheHit: source={GetPlacementEditSourceName(PlacementEditTarget.Decal)}; reason={reason}; quality=modalPreview; sourceSize={source?.width ?? 0}x{source?.height ?? 0}; previewSize={preview?.width ?? 0}x{preview?.height ?? 0}; crop={DescribePlacementCrop(state)}; stretch={DescribePlacementStretch(state)}; flip={DescribePlacementFlip(state)}; filters={DescribePlacementFilters(state)}; generatedPreviewCache={generatedPreviewCache}; cpuPixels={cpuPixelSamplingUsed}; elapsedMs={elapsedMs:0.##}; suit={_selectedSuitId}");
+    }
+
+    private void LogDecalEditPreviewFastSkipped(Texture2D source, PlacementEditState state, string reason, string failureReason)
+    {
+        var key = $"DecalEditPreviewFastSkipped|reason={reason}|failure={failureReason}|state={state?.Revision ?? -1}";
+        if (Time.unscaledTime - _lastPlacementEditPreviewLogTime < 0.5f && string.Equals(key, _lastPlacementEditPreviewLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastPlacementEditPreviewLogTime = Time.unscaledTime;
+        _lastPlacementEditPreviewLogKey = key;
+        DrawableSuitsDiagnostics.Warn($"DecalEditPreviewFastSkipped: source={GetPlacementEditSourceName(PlacementEditTarget.Decal)}; reason={reason}; failure={failureReason}; sourceSize={source?.width ?? 0}x{source?.height ?? 0}; crop={DescribePlacementCrop(state)}; stretch={DescribePlacementStretch(state)}; flip={DescribePlacementFlip(state)}; filters={DescribePlacementFilters(state)}; suit={_selectedSuitId}");
     }
 
     private void SetSavedDesignsStatus(string message)

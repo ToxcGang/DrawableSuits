@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.57
+
+- Replaced Decal edit-panel full-quality preview jobs with a small preview-resolution CPU render path so crop, stretch, flip, and filter sliders stay responsive.
+- Kept final Decal placement previews and stamped pixels full quality while separating modal-preview cache keys from placement/stamp cache keys.
+- Added `DecalEditPreviewFastUpdated`, `DecalEditPreviewFastCacheHit`, `DecalEditPreviewFastSkipped`, and `EditedDecalFullQualityGenerated` diagnostics.
+
 ## 0.5.56
 
 - Moved full-quality Decal temporary edit preview rendering into a latest-only async CPU job so slider changes no longer block Unity's main thread.
