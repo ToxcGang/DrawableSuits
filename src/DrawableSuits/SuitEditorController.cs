@@ -356,6 +356,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private string _editedStickerStampKey = string.Empty;
     private string _editedDecalPreviewStampKey = string.Empty;
     private string _editedStickerPreviewStampKey = string.Empty;
+    private PlacementSourcePixelCache _placementSourcePixelCache;
     private TextStampRenderer _textStampRenderer;
     private Texture2D _textStampTexture;
     private string _textStampTextureKey = string.Empty;
@@ -514,6 +515,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Texture2D _placementEditCheckerTexture;
     private string _lastPlacementEditPreviewLogKey = string.Empty;
     private float _lastPlacementEditPreviewLogTime;
+    private string _lastPlacementSourcePixelsLogKey = string.Empty;
+    private float _lastPlacementSourcePixelsLogTime;
     private DiagnosticsProcess _pendingDecalImportProcess;
     private float _pendingDecalImportStartedAt;
     private int _pendingDecalImportId;
@@ -680,6 +683,16 @@ internal sealed class SuitEditorController : MonoBehaviour
                     break;
             }
         }
+    }
+
+    private sealed class PlacementSourcePixelCache
+    {
+        internal PlacementEditTarget Target = PlacementEditTarget.None;
+        internal Texture2D Source;
+        internal string SourceName = string.Empty;
+        internal int Width;
+        internal int Height;
+        internal Color32[] Pixels;
     }
 
     private sealed class RendererRestoreState
@@ -2067,6 +2080,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         if (_loadedDecal != null)
         {
+            ClearPlacementSourcePixelCache(PlacementEditTarget.Decal, "controller destroyed loaded decal");
             Destroy(_loadedDecal);
             _loadedDecal = null;
         }
@@ -7347,7 +7361,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return true;
         }
 
-        if (!TryGenerateEditedPlacementStamp(target, source, tintSticker, state, 0, out var generated, out failureReason))
+        if (!TryGenerateEditedPlacementStamp(target, source, tintSticker, state, 0, false, out var generated, out failureReason, out _))
         {
             return false;
         }
@@ -7378,11 +7392,12 @@ internal sealed class SuitEditorController : MonoBehaviour
         return true;
     }
 
-    private bool TryGetEditedPlacementPreviewStamp(PlacementEditTarget target, Texture2D source, bool tintSticker, out Texture2D texture, out string failureReason, out bool cacheHit)
+    private bool TryGetEditedPlacementPreviewStamp(PlacementEditTarget target, Texture2D source, bool tintSticker, out Texture2D texture, out string failureReason, out bool cacheHit, out bool cpuPixelSamplingUsed)
     {
         texture = null;
         failureReason = string.Empty;
         cacheHit = false;
+        cpuPixelSamplingUsed = false;
         if (source == null)
         {
             failureReason = "missing placement source";
@@ -7410,6 +7425,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             texture = _editedDecalPreviewStampTexture;
             cacheHit = true;
+            cpuPixelSamplingUsed = true;
             return true;
         }
 
@@ -7419,10 +7435,11 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             texture = _editedStickerPreviewStampTexture;
             cacheHit = true;
+            cpuPixelSamplingUsed = true;
             return true;
         }
 
-        if (!TryGenerateEditedPlacementStamp(target, source, tintSticker, state, PlacementEditPreviewMaxTextureSize, out var generated, out failureReason))
+        if (!TryGenerateEditedPlacementStamp(target, source, tintSticker, state, PlacementEditPreviewMaxTextureSize, true, out var generated, out failureReason, out cpuPixelSamplingUsed))
         {
             return false;
         }
@@ -7458,10 +7475,11 @@ internal sealed class SuitEditorController : MonoBehaviour
         return $"{target}|quality={quality}|max={maxDimension}|source={source.name}|size={source.width}x{source.height}|state={state.Key()}|tint={tintSticker}:{colorKey}";
     }
 
-    private bool TryGenerateEditedPlacementStamp(PlacementEditTarget target, Texture2D source, bool tintSticker, PlacementEditState state, int maxOutputDimension, out Texture2D texture, out string failureReason)
+    private bool TryGenerateEditedPlacementStamp(PlacementEditTarget target, Texture2D source, bool tintSticker, PlacementEditState state, int maxOutputDimension, bool preferCpuSourcePixels, out Texture2D texture, out string failureReason, out bool cpuPixelSamplingUsed)
     {
         texture = null;
         failureReason = string.Empty;
+        cpuPixelSamplingUsed = false;
         if (source == null)
         {
             failureReason = "missing source texture";
@@ -7485,6 +7503,19 @@ internal sealed class SuitEditorController : MonoBehaviour
 
             var outputWidth = Mathf.Clamp(Mathf.RoundToInt(targetWidth * outputScale), 1, maxTextureSize);
             var outputHeight = Mathf.Clamp(Mathf.RoundToInt(targetHeight * outputScale), 1, maxTextureSize);
+            var sourcePixels = default(Color32[]);
+            var sourcePixelsWidth = 0;
+            var sourcePixelsHeight = 0;
+            if (preferCpuSourcePixels)
+            {
+                if (!TryGetPlacementSourcePixels(target, source, out sourcePixels, out sourcePixelsWidth, out sourcePixelsHeight, out _, out failureReason))
+                {
+                    return false;
+                }
+
+                cpuPixelSamplingUsed = true;
+            }
+
             var pixels = new Color32[outputWidth * outputHeight];
             for (var y = 0; y < outputHeight; y++)
             {
@@ -7504,7 +7535,9 @@ internal sealed class SuitEditorController : MonoBehaviour
                     }
 
                     var sourceU = crop.xMin + u * crop.width;
-                    var color = source.GetPixelBilinear(Mathf.Clamp01(sourceU), Mathf.Clamp01(sourceV));
+                    var color = cpuPixelSamplingUsed
+                        ? SamplePlacementSourceBilinear(sourcePixels, sourcePixelsWidth, sourcePixelsHeight, sourceU, sourceV)
+                        : source.GetPixelBilinear(Mathf.Clamp01(sourceU), Mathf.Clamp01(sourceV));
                     if (tintSticker)
                     {
                         color = new Color(_brushColor.r, _brushColor.g, _brushColor.b, color.a);
@@ -7532,6 +7565,136 @@ internal sealed class SuitEditorController : MonoBehaviour
             DrawableSuitsDiagnostics.Exception($"PlacementEditedStampGenerated failed. target={target}; source={source.name}; size={source.width}x{source.height}", ex);
             return false;
         }
+    }
+
+    private bool TryGetPlacementSourcePixels(PlacementEditTarget target, Texture2D source, out Color32[] pixels, out int width, out int height, out bool cacheHit, out string failureReason)
+    {
+        pixels = null;
+        width = 0;
+        height = 0;
+        cacheHit = false;
+        failureReason = string.Empty;
+        if (source == null)
+        {
+            failureReason = "missing source texture";
+            return false;
+        }
+
+        if (_placementSourcePixelCache != null
+            && _placementSourcePixelCache.Target == target
+            && ReferenceEquals(_placementSourcePixelCache.Source, source)
+            && _placementSourcePixelCache.Width == source.width
+            && _placementSourcePixelCache.Height == source.height
+            && _placementSourcePixelCache.Pixels != null
+            && _placementSourcePixelCache.Pixels.Length == source.width * source.height)
+        {
+            pixels = _placementSourcePixelCache.Pixels;
+            width = _placementSourcePixelCache.Width;
+            height = _placementSourcePixelCache.Height;
+            cacheHit = true;
+            LogPlacementSourcePixels(target, source, true, 0f);
+            return true;
+        }
+
+        var startedAt = Time.realtimeSinceStartup;
+        Color32[] loadedPixels;
+        try
+        {
+            loadedPixels = source.GetPixels32();
+        }
+        catch (Exception ex)
+        {
+            failureReason = "Source texture pixels could not be read.";
+            DrawableSuitsDiagnostics.Exception($"PlacementSourcePixelsCached failed. target={target}; source={source.name}; size={source.width}x{source.height}", ex);
+            return false;
+        }
+
+        if (loadedPixels == null || loadedPixels.Length != source.width * source.height)
+        {
+            failureReason = "Source texture pixel data was invalid.";
+            DrawableSuitsDiagnostics.Warn($"PlacementSourcePixelsCached failed. target={target}; source={source.name}; size={source.width}x{source.height}; pixels={loadedPixels?.Length ?? 0}");
+            return false;
+        }
+
+        _placementSourcePixelCache = new PlacementSourcePixelCache
+        {
+            Target = target,
+            Source = source,
+            SourceName = source.name ?? string.Empty,
+            Width = source.width,
+            Height = source.height,
+            Pixels = loadedPixels
+        };
+
+        pixels = loadedPixels;
+        width = source.width;
+        height = source.height;
+        LogPlacementSourcePixels(target, source, false, (Time.realtimeSinceStartup - startedAt) * 1000f);
+        return true;
+    }
+
+    private void ClearPlacementSourcePixelCache(PlacementEditTarget target, string reason)
+    {
+        if (_placementSourcePixelCache == null)
+        {
+            return;
+        }
+
+        if (target != PlacementEditTarget.None && _placementSourcePixelCache.Target != target)
+        {
+            return;
+        }
+
+        DrawableSuitsDiagnostics.Info($"PlacementSourcePixelsCacheCleared: target={_placementSourcePixelCache.Target}; source={_placementSourcePixelCache.SourceName}; size={_placementSourcePixelCache.Width}x{_placementSourcePixelCache.Height}; reason={reason}; suit={_selectedSuitId}");
+        _placementSourcePixelCache = null;
+    }
+
+    private void LogPlacementSourcePixels(PlacementEditTarget target, Texture2D source, bool cacheHit, float elapsedMs)
+    {
+        var eventName = cacheHit ? "PlacementSourcePixelsCacheHit" : "PlacementSourcePixelsCached";
+        var key = $"{eventName}|target={target}|source={source?.name}|size={source?.width ?? 0}x{source?.height ?? 0}";
+        if (cacheHit && Time.unscaledTime - _lastPlacementSourcePixelsLogTime < 0.75f && string.Equals(key, _lastPlacementSourcePixelsLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastPlacementSourcePixelsLogTime = Time.unscaledTime;
+        _lastPlacementSourcePixelsLogKey = key;
+        DrawableSuitsDiagnostics.Info($"{eventName}: target={target}; source={GetPlacementEditSourceName(target)}; texture={source?.name}; size={source?.width ?? 0}x{source?.height ?? 0}; pixelCount={(source != null ? source.width * source.height : 0)}; elapsedMs={elapsedMs:0.##}; suit={_selectedSuitId}");
+    }
+
+    private static Color SamplePlacementSourceBilinear(Color32[] pixels, int width, int height, float u, float v)
+    {
+        if (pixels == null || width <= 0 || height <= 0 || pixels.Length < width * height)
+        {
+            return Color.clear;
+        }
+
+        var x = Mathf.Clamp01(u) * Mathf.Max(0, width - 1);
+        var y = Mathf.Clamp01(v) * Mathf.Max(0, height - 1);
+        var x0 = Mathf.Clamp(Mathf.FloorToInt(x), 0, width - 1);
+        var y0 = Mathf.Clamp(Mathf.FloorToInt(y), 0, height - 1);
+        var x1 = Mathf.Min(width - 1, x0 + 1);
+        var y1 = Mathf.Min(height - 1, y0 + 1);
+        var tx = x - x0;
+        var ty = y - y0;
+        var c00 = pixels[(y0 * width) + x0];
+        var c10 = pixels[(y0 * width) + x1];
+        var c01 = pixels[(y1 * width) + x0];
+        var c11 = pixels[(y1 * width) + x1];
+        var r0 = Mathf.Lerp(c00.r, c10.r, tx);
+        var r1 = Mathf.Lerp(c01.r, c11.r, tx);
+        var g0 = Mathf.Lerp(c00.g, c10.g, tx);
+        var g1 = Mathf.Lerp(c01.g, c11.g, tx);
+        var b0 = Mathf.Lerp(c00.b, c10.b, tx);
+        var b1 = Mathf.Lerp(c01.b, c11.b, tx);
+        var a0 = Mathf.Lerp(c00.a, c10.a, tx);
+        var a1 = Mathf.Lerp(c01.a, c11.a, tx);
+        return new Color(
+            Mathf.Lerp(r0, r1, ty) / 255f,
+            Mathf.Lerp(g0, g1, ty) / 255f,
+            Mathf.Lerp(b0, b1, ty) / 255f,
+            Mathf.Lerp(a0, a1, ty) / 255f);
     }
 
     private static Color ApplyPlacementFilter(Color color, PlacementEditState state)
@@ -12402,6 +12565,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         RebuildSelectableNavigation();
         if (wasOpen)
         {
+            ClearPlacementSourcePixelCache(target, "placement edit panel closed");
             DrawableSuitsDiagnostics.Info($"PlacementEditPanelClosed: target={target}; source={GetPlacementEditSourceName(target)}; suit={_selectedSuitId}");
         }
     }
@@ -12474,13 +12638,13 @@ internal sealed class SuitEditorController : MonoBehaviour
         var sourceFailure = string.Empty;
         var previewFailure = string.Empty;
         if (TryGetPlacementEditSourceTexture(target, out var source, out sourceFailure)
-            && TryGetEditedPlacementPreviewStamp(target, source, target == PlacementEditTarget.Sticker, out var preview, out previewFailure, out var cacheHit))
+            && TryGetEditedPlacementPreviewStamp(target, source, target == PlacementEditTarget.Sticker, out var preview, out previewFailure, out var cacheHit, out var cpuPixelSamplingUsed))
         {
             _placementEditPreviewImage.texture = preview;
             _placementEditPreviewImage.color = Color.white;
             FitPlacementEditPreview(preview);
             SetPlacementEditStatus(state.IsDefault ? "No temporary edits applied." : "Temporary edit preview ready.");
-            LogPlacementEditPreviewUpdated(target, source, state, preview, reason, cacheHit, (Time.realtimeSinceStartup - startedAt) * 1000f);
+            LogPlacementEditPreviewUpdated(target, source, state, preview, reason, cacheHit, cpuPixelSamplingUsed, (Time.realtimeSinceStartup - startedAt) * 1000f);
             return;
         }
 
@@ -12646,6 +12810,10 @@ internal sealed class SuitEditorController : MonoBehaviour
 
             _editedDecalStampKey = string.Empty;
             _editedDecalPreviewStampKey = string.Empty;
+            if (destroyTexture)
+            {
+                ClearPlacementSourcePixelCache(target, "edited placement stamp invalidated");
+            }
             return;
         }
 
@@ -12665,6 +12833,10 @@ internal sealed class SuitEditorController : MonoBehaviour
 
             _editedStickerStampKey = string.Empty;
             _editedStickerPreviewStampKey = string.Empty;
+            if (destroyTexture)
+            {
+                ClearPlacementSourcePixelCache(target, "edited placement stamp invalidated");
+            }
         }
     }
 
@@ -12830,7 +13002,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         DrawableSuitsDiagnostics.Warn($"PlacementEditPreviewSkipped: target={target}; source={GetPlacementEditSourceName(target)}; reason={reason}; failure={failureReason}; suit={_selectedSuitId}");
     }
 
-    private void LogPlacementEditPreviewUpdated(PlacementEditTarget target, Texture2D source, PlacementEditState state, Texture2D preview, string reason, bool cacheHit, float elapsedMs)
+    private void LogPlacementEditPreviewUpdated(PlacementEditTarget target, Texture2D source, PlacementEditState state, Texture2D preview, string reason, bool cacheHit, bool cpuPixelSamplingUsed, float elapsedMs)
     {
         var eventName = cacheHit ? "PlacementEditPreviewCacheHit" : "PlacementEditPreviewUpdated";
         var key = $"{eventName}|target={target}|reason={reason}|source={GetPlacementEditSourceName(target)}|preview={preview?.width ?? 0}x{preview?.height ?? 0}|state={state?.Revision ?? -1}";
@@ -12841,7 +13013,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         _lastPlacementEditPreviewLogTime = Time.unscaledTime;
         _lastPlacementEditPreviewLogKey = key;
-        DrawableSuitsDiagnostics.Info($"{eventName}: target={target}; source={GetPlacementEditSourceName(target)}; reason={reason}; quality=preview; sourceSize={source?.width ?? 0}x{source?.height ?? 0}; generatedSize={preview?.width ?? 0}x{preview?.height ?? 0}; crop={DescribePlacementCrop(state)}; stretch={DescribePlacementStretch(state)}; flip={DescribePlacementFlip(state)}; filters={DescribePlacementFilters(state)}; cacheHit={cacheHit}; elapsedMs={elapsedMs:0.##}; suit={_selectedSuitId}");
+        DrawableSuitsDiagnostics.Info($"{eventName}: target={target}; source={GetPlacementEditSourceName(target)}; reason={reason}; quality=preview; sourceSize={source?.width ?? 0}x{source?.height ?? 0}; generatedSize={preview?.width ?? 0}x{preview?.height ?? 0}; crop={DescribePlacementCrop(state)}; stretch={DescribePlacementStretch(state)}; flip={DescribePlacementFlip(state)}; filters={DescribePlacementFilters(state)}; cacheHit={cacheHit}; cpuPixels={cpuPixelSamplingUsed}; elapsedMs={elapsedMs:0.##}; suit={_selectedSuitId}");
     }
 
     private void SetSavedDesignsStatus(string message)
@@ -12930,6 +13102,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         _pendingDeleteDecalPath = string.Empty;
         if (_loadedDecal != null)
         {
+            ClearPlacementSourcePixelCache(PlacementEditTarget.Decal, "decal deleted");
             Destroy(_loadedDecal);
             _loadedDecal = null;
         }
@@ -13606,6 +13779,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         InvalidateDecalPreview("select decal");
         if (_loadedDecal != null)
         {
+            ClearPlacementSourcePixelCache(PlacementEditTarget.Decal, "select decal");
             Destroy(_loadedDecal);
         }
 

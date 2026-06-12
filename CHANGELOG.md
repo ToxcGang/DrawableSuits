@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.55
+
+- Cached Decal edit-panel source pixels and switched preview-quality rendering to manual CPU bilinear sampling so large decal previews no longer call Unity texture APIs per pixel.
+- Kept final Decal and Sticker placement/stamping full quality while the edit-panel preview remains lightweight and responsive.
+- Added placement source pixel cache diagnostics for cached, reused, and cleared preview source buffers.
+
 ## 0.5.54
 
 - Restored real-time Decal/Sticker edit-panel previews by rendering a lightweight preview-quality stamp while keeping final placement and stamping full quality.
