@@ -111,8 +111,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private const float WorldPlacementPreviewMinInterval = 0.05f;
     private const float WorldPlacementPreviewIdleDelay = 0.15f;
     private const float WorldPlacementPreviewMoveThresholdPixels = 2f;
-    private const float PlacementEditPreviewDebounceSeconds = 0.12f;
-    private const float SliderHandleVisualSize = 12f;
+    private const int PlacementEditPreviewMaxTextureSize = 160;
+    private const float SliderHandleVisualSize = 14f;
     private const float DecalImportPickerTimeoutSeconds = 300f;
     private const float UvPanelMinZoom = 1f;
     private const float UvPanelMaxZoom = 8f;
@@ -350,8 +350,12 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Texture2D _loadedDecal;
     private Texture2D _editedDecalStampTexture;
     private Texture2D _editedStickerStampTexture;
+    private Texture2D _editedDecalPreviewStampTexture;
+    private Texture2D _editedStickerPreviewStampTexture;
     private string _editedDecalStampKey = string.Empty;
     private string _editedStickerStampKey = string.Empty;
+    private string _editedDecalPreviewStampKey = string.Empty;
+    private string _editedStickerPreviewStampKey = string.Empty;
     private TextStampRenderer _textStampRenderer;
     private Texture2D _textStampTexture;
     private string _textStampTextureKey = string.Empty;
@@ -508,9 +512,6 @@ internal sealed class SuitEditorController : MonoBehaviour
     private readonly Dictionary<PlacementFilter, Text> _placementEditFilterValueLabels = new();
     private readonly Dictionary<PlacementFilter, DrawableSliderControl> _placementEditFilterSliders = new();
     private Texture2D _placementEditCheckerTexture;
-    private bool _placementEditPreviewPending;
-    private float _placementEditPreviewDueAt;
-    private PlacementEditTarget _placementEditPreviewPendingTarget;
     private string _lastPlacementEditPreviewLogKey = string.Empty;
     private float _lastPlacementEditPreviewLogTime;
     private DiagnosticsProcess _pendingDecalImportProcess;
@@ -2135,7 +2136,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         ReapplyPlayerInputLock();
         EnsureCursorUnlockedWhileOpen();
         PollPendingDecalImport();
-        UpdatePlacementEditPreviewDebounce();
         HandleControllerCursor();
         UpdateCanvasCursor(false, "update");
         if (IsWorldThirdPersonMode)
@@ -3592,8 +3592,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         const int size = 24;
-        const float radius = 7.5f;
-        const float feather = 1.25f;
+        const float radius = 9.5f;
+        const float feather = 1.5f;
         var center = new Vector2((size - 1) * 0.5f, (size - 1) * 0.5f);
         var pixels = new Color32[size * size];
         for (var y = 0; y < size; y++)
@@ -7330,8 +7330,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return true;
         }
 
-        var colorKey = tintSticker ? ColorToHex(_brushColor) : "source";
-        var key = $"{target}|source={source.name}|size={source.width}x{source.height}|state={state.Key()}|tint={tintSticker}:{colorKey}";
+        var key = BuildPlacementStampKey(target, source, tintSticker, state, "full", 0);
         if (target == PlacementEditTarget.Decal
             && _editedDecalStampTexture != null
             && string.Equals(_editedDecalStampKey, key, StringComparison.Ordinal))
@@ -7348,7 +7347,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return true;
         }
 
-        if (!TryGenerateEditedPlacementStamp(target, source, tintSticker, state, out var generated, out failureReason))
+        if (!TryGenerateEditedPlacementStamp(target, source, tintSticker, state, 0, out var generated, out failureReason))
         {
             return false;
         }
@@ -7379,7 +7378,87 @@ internal sealed class SuitEditorController : MonoBehaviour
         return true;
     }
 
-    private bool TryGenerateEditedPlacementStamp(PlacementEditTarget target, Texture2D source, bool tintSticker, PlacementEditState state, out Texture2D texture, out string failureReason)
+    private bool TryGetEditedPlacementPreviewStamp(PlacementEditTarget target, Texture2D source, bool tintSticker, out Texture2D texture, out string failureReason, out bool cacheHit)
+    {
+        texture = null;
+        failureReason = string.Empty;
+        cacheHit = false;
+        if (source == null)
+        {
+            failureReason = "missing placement source";
+            return false;
+        }
+
+        var state = GetPlacementEditState(target);
+        if (state == null)
+        {
+            failureReason = "invalid placement edit target";
+            return false;
+        }
+
+        if (target == PlacementEditTarget.Decal && state.IsDefault)
+        {
+            texture = source;
+            cacheHit = true;
+            return true;
+        }
+
+        var key = BuildPlacementStampKey(target, source, tintSticker, state, "preview", PlacementEditPreviewMaxTextureSize);
+        if (target == PlacementEditTarget.Decal
+            && _editedDecalPreviewStampTexture != null
+            && string.Equals(_editedDecalPreviewStampKey, key, StringComparison.Ordinal))
+        {
+            texture = _editedDecalPreviewStampTexture;
+            cacheHit = true;
+            return true;
+        }
+
+        if (target == PlacementEditTarget.Sticker
+            && _editedStickerPreviewStampTexture != null
+            && string.Equals(_editedStickerPreviewStampKey, key, StringComparison.Ordinal))
+        {
+            texture = _editedStickerPreviewStampTexture;
+            cacheHit = true;
+            return true;
+        }
+
+        if (!TryGenerateEditedPlacementStamp(target, source, tintSticker, state, PlacementEditPreviewMaxTextureSize, out var generated, out failureReason))
+        {
+            return false;
+        }
+
+        if (target == PlacementEditTarget.Decal)
+        {
+            if (_editedDecalPreviewStampTexture != null)
+            {
+                Destroy(_editedDecalPreviewStampTexture);
+            }
+
+            _editedDecalPreviewStampTexture = generated;
+            _editedDecalPreviewStampKey = key;
+        }
+        else
+        {
+            if (_editedStickerPreviewStampTexture != null)
+            {
+                Destroy(_editedStickerPreviewStampTexture);
+            }
+
+            _editedStickerPreviewStampTexture = generated;
+            _editedStickerPreviewStampKey = key;
+        }
+
+        texture = generated;
+        return true;
+    }
+
+    private string BuildPlacementStampKey(PlacementEditTarget target, Texture2D source, bool tintSticker, PlacementEditState state, string quality, int maxDimension)
+    {
+        var colorKey = tintSticker ? ColorToHex(_brushColor) : "source";
+        return $"{target}|quality={quality}|max={maxDimension}|source={source.name}|size={source.width}x{source.height}|state={state.Key()}|tint={tintSticker}:{colorKey}";
+    }
+
+    private bool TryGenerateEditedPlacementStamp(PlacementEditTarget target, Texture2D source, bool tintSticker, PlacementEditState state, int maxOutputDimension, out Texture2D texture, out string failureReason)
     {
         texture = null;
         failureReason = string.Empty;
@@ -7396,8 +7475,16 @@ internal sealed class SuitEditorController : MonoBehaviour
             var cropPixelsW = Mathf.Max(1, Mathf.RoundToInt(crop.width * source.width));
             var cropPixelsH = Mathf.Max(1, Mathf.RoundToInt(crop.height * source.height));
             var maxTextureSize = Mathf.Clamp(SystemInfo.maxTextureSize > 0 ? SystemInfo.maxTextureSize : 2048, 256, 8192);
-            var outputWidth = Mathf.Clamp(Mathf.RoundToInt(cropPixelsW * Mathf.Max(0.01f, state.StretchX)), 1, maxTextureSize);
-            var outputHeight = Mathf.Clamp(Mathf.RoundToInt(cropPixelsH * Mathf.Max(0.01f, state.StretchY)), 1, maxTextureSize);
+            var targetWidth = Mathf.Max(1f, cropPixelsW * Mathf.Max(0.01f, state.StretchX));
+            var targetHeight = Mathf.Max(1f, cropPixelsH * Mathf.Max(0.01f, state.StretchY));
+            var outputScale = 1f;
+            if (maxOutputDimension > 0)
+            {
+                outputScale = Mathf.Min(1f, maxOutputDimension / Mathf.Max(targetWidth, targetHeight));
+            }
+
+            var outputWidth = Mathf.Clamp(Mathf.RoundToInt(targetWidth * outputScale), 1, maxTextureSize);
+            var outputHeight = Mathf.Clamp(Mathf.RoundToInt(targetHeight * outputScale), 1, maxTextureSize);
             var pixels = new Color32[outputWidth * outputHeight];
             for (var y = 0; y < outputHeight; y++)
             {
@@ -12307,8 +12394,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         _activePlacementEditTarget = PlacementEditTarget.None;
-        _placementEditPreviewPending = false;
-        _placementEditPreviewPendingTarget = PlacementEditTarget.None;
         if (_placementEditPreviewImage != null)
         {
             _placementEditPreviewImage.texture = null;
@@ -12355,67 +12440,19 @@ internal sealed class SuitEditorController : MonoBehaviour
             SetToolButtonColor(_placementEditFlipYButton, state.FlipY);
         }
 
-        if (_placementEditPreviewImage != null && (rebuildPreview || _placementEditPreviewImage.texture == null))
+        if (_placementEditPreviewImage != null)
         {
-            SchedulePlacementEditPreviewRebuild(rebuildPreview ? "panel refresh" : "missing preview", rebuildPreview);
+            UpdatePlacementEditPreview(rebuildPreview ? "panel refresh" : "ui refresh");
         }
     }
 
-    private void SchedulePlacementEditPreviewRebuild(string reason, bool immediate)
-    {
-        if (!IsPlacementEditPanelOpen())
-        {
-            return;
-        }
-
-        _placementEditPreviewPending = true;
-        _placementEditPreviewPendingTarget = _activePlacementEditTarget;
-        _placementEditPreviewDueAt = Time.unscaledTime + (immediate ? 0f : PlacementEditPreviewDebounceSeconds);
-        if (!immediate)
-        {
-            SetPlacementEditStatus("Updating preview...");
-        }
-
-        LogPlacementEditPreviewDeferred(_placementEditPreviewPendingTarget, reason, immediate);
-        if (immediate)
-        {
-            UpdatePlacementEditPreviewDebounce();
-        }
-    }
-
-    private void UpdatePlacementEditPreviewDebounce()
-    {
-        if (!_placementEditPreviewPending)
-        {
-            return;
-        }
-
-        if (!IsPlacementEditPanelOpen())
-        {
-            _placementEditPreviewPending = false;
-            _placementEditPreviewPendingTarget = PlacementEditTarget.None;
-            return;
-        }
-
-        if (Time.unscaledTime < _placementEditPreviewDueAt)
-        {
-            return;
-        }
-
-        var target = _placementEditPreviewPendingTarget == PlacementEditTarget.None
-            ? _activePlacementEditTarget
-            : _placementEditPreviewPendingTarget;
-        _placementEditPreviewPending = false;
-        _placementEditPreviewPendingTarget = PlacementEditTarget.None;
-        RebuildPlacementEditPreview(target, "debounced");
-    }
-
-    private void RebuildPlacementEditPreview(PlacementEditTarget target, string reason)
+    private void UpdatePlacementEditPreview(string reason)
     {
         var startedAt = Time.realtimeSinceStartup;
-        if (!IsPlacementEditPanelOpen() || target == PlacementEditTarget.None || target != _activePlacementEditTarget)
+        var target = _activePlacementEditTarget;
+        if (!IsPlacementEditPanelOpen() || target == PlacementEditTarget.None)
         {
-            LogPlacementEditPreviewSkipped(target, reason, "panel closed or target changed");
+            LogPlacementEditPreviewSkipped(target, reason, "panel closed or target missing");
             return;
         }
 
@@ -12437,13 +12474,13 @@ internal sealed class SuitEditorController : MonoBehaviour
         var sourceFailure = string.Empty;
         var previewFailure = string.Empty;
         if (TryGetPlacementEditSourceTexture(target, out var source, out sourceFailure)
-            && TryGetEditedPlacementStamp(target, source, target == PlacementEditTarget.Sticker, out var preview, out previewFailure))
+            && TryGetEditedPlacementPreviewStamp(target, source, target == PlacementEditTarget.Sticker, out var preview, out previewFailure, out var cacheHit))
         {
             _placementEditPreviewImage.texture = preview;
             _placementEditPreviewImage.color = Color.white;
             FitPlacementEditPreview(preview);
             SetPlacementEditStatus(state.IsDefault ? "No temporary edits applied." : "Temporary edit preview ready.");
-            LogPlacementEditPreviewRebuilt(target, source, state, preview, reason, (Time.realtimeSinceStartup - startedAt) * 1000f);
+            LogPlacementEditPreviewUpdated(target, source, state, preview, reason, cacheHit, (Time.realtimeSinceStartup - startedAt) * 1000f);
             return;
         }
 
@@ -12499,7 +12536,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         InvalidateEditedPlacementStamp(_activePlacementEditTarget, destroyTexture: false);
         InvalidateDecalPreview($"placement edit changed: {reason}");
         RefreshPlacementEditPanelUi();
-        SchedulePlacementEditPreviewRebuild(reason, immediate: false);
         DrawableSuitsDiagnostics.Info($"PlacementEditChanged: target={_activePlacementEditTarget}; source={GetPlacementEditSourceName(_activePlacementEditTarget)}; reason={reason}; crop={DescribePlacementCrop(state)}; stretch={DescribePlacementStretch(state)}; flip={DescribePlacementFlip(state)}; filters={DescribePlacementFilters(state)}; revision={state.Revision}; suit={_selectedSuitId}");
     }
 
@@ -12602,7 +12638,14 @@ internal sealed class SuitEditorController : MonoBehaviour
                 _editedDecalStampTexture = null;
             }
 
+            if (destroyTexture && _editedDecalPreviewStampTexture != null)
+            {
+                Destroy(_editedDecalPreviewStampTexture);
+                _editedDecalPreviewStampTexture = null;
+            }
+
             _editedDecalStampKey = string.Empty;
+            _editedDecalPreviewStampKey = string.Empty;
             return;
         }
 
@@ -12614,7 +12657,14 @@ internal sealed class SuitEditorController : MonoBehaviour
                 _editedStickerStampTexture = null;
             }
 
+            if (destroyTexture && _editedStickerPreviewStampTexture != null)
+            {
+                Destroy(_editedStickerPreviewStampTexture);
+                _editedStickerPreviewStampTexture = null;
+            }
+
             _editedStickerStampKey = string.Empty;
+            _editedStickerPreviewStampKey = string.Empty;
         }
     }
 
@@ -12764,26 +12814,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void LogPlacementEditedStampGenerated(PlacementEditTarget target, Texture2D source, PlacementEditState state, Texture2D generated, bool cacheHit)
     {
-        DrawableSuitsDiagnostics.Info($"PlacementEditedStampGenerated: target={target}; source={GetPlacementEditSourceName(target)}; sourceSize={source?.width ?? 0}x{source?.height ?? 0}; crop={DescribePlacementCrop(state)}; stretch={DescribePlacementStretch(state)}; flip={DescribePlacementFlip(state)}; filters={DescribePlacementFilters(state)}; cacheHit={cacheHit}; generatedSize={generated?.width ?? 0}x{generated?.height ?? 0}; suit={_selectedSuitId}");
-    }
-
-    private void LogPlacementEditPreviewDeferred(PlacementEditTarget target, string reason, bool immediate)
-    {
-        var key = $"deferred|target={target}|reason={reason}|immediate={immediate}|due={_placementEditPreviewDueAt:0.###}";
-        if (Time.unscaledTime - _lastPlacementEditPreviewLogTime < 0.25f && string.Equals(key, _lastPlacementEditPreviewLogKey, StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        _lastPlacementEditPreviewLogTime = Time.unscaledTime;
-        _lastPlacementEditPreviewLogKey = key;
-        var state = GetPlacementEditState(target);
-        DrawableSuitsDiagnostics.Info($"PlacementEditPreviewDeferred: target={target}; source={GetPlacementEditSourceName(target)}; reason={reason}; immediate={immediate}; dueInMs={Mathf.Max(0f, _placementEditPreviewDueAt - Time.unscaledTime) * 1000f:0.#}; crop={DescribePlacementCrop(state)}; stretch={DescribePlacementStretch(state)}; flip={DescribePlacementFlip(state)}; filters={DescribePlacementFilters(state)}; suit={_selectedSuitId}");
-    }
-
-    private void LogPlacementEditPreviewRebuilt(PlacementEditTarget target, Texture2D source, PlacementEditState state, Texture2D preview, string reason, float elapsedMs)
-    {
-        DrawableSuitsDiagnostics.Info($"PlacementEditPreviewRebuilt: target={target}; source={GetPlacementEditSourceName(target)}; reason={reason}; sourceSize={source?.width ?? 0}x{source?.height ?? 0}; generatedSize={preview?.width ?? 0}x{preview?.height ?? 0}; elapsedMs={elapsedMs:0.##}; crop={DescribePlacementCrop(state)}; stretch={DescribePlacementStretch(state)}; flip={DescribePlacementFlip(state)}; filters={DescribePlacementFilters(state)}; suit={_selectedSuitId}");
+        DrawableSuitsDiagnostics.Info($"PlacementEditedStampGenerated: target={target}; source={GetPlacementEditSourceName(target)}; quality=full; sourceSize={source?.width ?? 0}x{source?.height ?? 0}; crop={DescribePlacementCrop(state)}; stretch={DescribePlacementStretch(state)}; flip={DescribePlacementFlip(state)}; filters={DescribePlacementFilters(state)}; cacheHit={cacheHit}; generatedSize={generated?.width ?? 0}x{generated?.height ?? 0}; suit={_selectedSuitId}");
     }
 
     private void LogPlacementEditPreviewSkipped(PlacementEditTarget target, string reason, string failureReason)
@@ -12797,6 +12828,20 @@ internal sealed class SuitEditorController : MonoBehaviour
         _lastPlacementEditPreviewLogTime = Time.unscaledTime;
         _lastPlacementEditPreviewLogKey = key;
         DrawableSuitsDiagnostics.Warn($"PlacementEditPreviewSkipped: target={target}; source={GetPlacementEditSourceName(target)}; reason={reason}; failure={failureReason}; suit={_selectedSuitId}");
+    }
+
+    private void LogPlacementEditPreviewUpdated(PlacementEditTarget target, Texture2D source, PlacementEditState state, Texture2D preview, string reason, bool cacheHit, float elapsedMs)
+    {
+        var eventName = cacheHit ? "PlacementEditPreviewCacheHit" : "PlacementEditPreviewUpdated";
+        var key = $"{eventName}|target={target}|reason={reason}|source={GetPlacementEditSourceName(target)}|preview={preview?.width ?? 0}x{preview?.height ?? 0}|state={state?.Revision ?? -1}";
+        if (cacheHit && Time.unscaledTime - _lastPlacementEditPreviewLogTime < 0.5f && string.Equals(key, _lastPlacementEditPreviewLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastPlacementEditPreviewLogTime = Time.unscaledTime;
+        _lastPlacementEditPreviewLogKey = key;
+        DrawableSuitsDiagnostics.Info($"{eventName}: target={target}; source={GetPlacementEditSourceName(target)}; reason={reason}; quality=preview; sourceSize={source?.width ?? 0}x{source?.height ?? 0}; generatedSize={preview?.width ?? 0}x{preview?.height ?? 0}; crop={DescribePlacementCrop(state)}; stretch={DescribePlacementStretch(state)}; flip={DescribePlacementFlip(state)}; filters={DescribePlacementFilters(state)}; cacheHit={cacheHit}; elapsedMs={elapsedMs:0.##}; suit={_selectedSuitId}");
     }
 
     private void SetSavedDesignsStatus(string message)

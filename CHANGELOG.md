@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.54
+
+- Restored real-time Decal/Sticker edit-panel previews by rendering a lightweight preview-quality stamp while keeping final placement and stamping full quality.
+- Split temporary placement edit caches into preview-quality and full-quality stamp textures with cleanup on source changes, reset, close, and plugin shutdown.
+- Increased the shared orange slider dot handle size slightly while keeping long selected-decal filenames safely truncated inside compact UI boxes.
+
 ## 0.5.53
 
 - Deferred Decal/Sticker temporary edit preview rebuilds while crop, stretch, and filter sliders are moving, keeping the last preview visible until the new preview is ready.
