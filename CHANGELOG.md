@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.53
+
+- Deferred Decal/Sticker temporary edit preview rebuilds while crop, stretch, and filter sliders are moving, keeping the last preview visible until the new preview is ready.
+- Replaced the large rectangular slider handles with compact orange dot handles across the editor and edit panels.
+- Middle-ellipsized long selected decal filenames in compact display boxes so they no longer overflow the UI.
+
 ## 0.5.52
 
 - Fixed edited Decals stamping the original image by routing final Decal placement through the same temporary edited stamp texture used by previews.

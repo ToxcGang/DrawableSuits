@@ -111,6 +111,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private const float WorldPlacementPreviewMinInterval = 0.05f;
     private const float WorldPlacementPreviewIdleDelay = 0.15f;
     private const float WorldPlacementPreviewMoveThresholdPixels = 2f;
+    private const float PlacementEditPreviewDebounceSeconds = 0.12f;
+    private const float SliderHandleVisualSize = 12f;
     private const float DecalImportPickerTimeoutSeconds = 300f;
     private const float UvPanelMinZoom = 1f;
     private const float UvPanelMaxZoom = 8f;
@@ -135,6 +137,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private static readonly Color TerminalSliderFillColor = new(0.82f, 0.06f, 0.035f, 1f);
     private static readonly Color TerminalOutlineColor = new(0.42f, 0.025f, 0.02f, 0.9f);
     private static readonly Dictionary<ToolIconKind, Texture2D> ToolIconTextureCache = new();
+    private static Texture2D SliderHandleDotTexture;
+    private static Sprite SliderHandleDotSprite;
     private static readonly Vector2[] StickerTriangleVertices = { new(0f, 0.9f), new(-0.9f, -0.78f), new(0.9f, -0.78f) };
     private static readonly Vector2[] StickerArrowVertices = { new(-0.9f, -0.28f), new(0.12f, -0.28f), new(0.12f, -0.62f), new(0.9f, 0f), new(0.12f, 0.62f), new(0.12f, 0.28f), new(-0.9f, 0.28f) };
     private static readonly Vector2[] StickerLightningVertices = { new(-0.25f, 0.92f), new(0.55f, 0.92f), new(0.1f, 0.14f), new(0.64f, 0.14f), new(-0.32f, -0.96f), new(-0.02f, -0.24f), new(-0.58f, -0.24f) };
@@ -504,6 +508,11 @@ internal sealed class SuitEditorController : MonoBehaviour
     private readonly Dictionary<PlacementFilter, Text> _placementEditFilterValueLabels = new();
     private readonly Dictionary<PlacementFilter, DrawableSliderControl> _placementEditFilterSliders = new();
     private Texture2D _placementEditCheckerTexture;
+    private bool _placementEditPreviewPending;
+    private float _placementEditPreviewDueAt;
+    private PlacementEditTarget _placementEditPreviewPendingTarget;
+    private string _lastPlacementEditPreviewLogKey = string.Empty;
+    private float _lastPlacementEditPreviewLogTime;
     private DiagnosticsProcess _pendingDecalImportProcess;
     private float _pendingDecalImportStartedAt;
     private int _pendingDecalImportId;
@@ -1357,7 +1366,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             _handleRect.anchorMin = new Vector2(normalized, 0.5f);
             _handleRect.anchorMax = new Vector2(normalized, 0.5f);
             _handleRect.anchoredPosition = Vector2.zero;
-            _handleRect.sizeDelta = new Vector2(16f, 28f);
+            _handleRect.sizeDelta = new Vector2(SliderHandleVisualSize, SliderHandleVisualSize);
         }
     }
 
@@ -2126,6 +2135,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         ReapplyPlayerInputLock();
         EnsureCursorUnlockedWhileOpen();
         PollPendingDecalImport();
+        UpdatePlacementEditPreviewDebounce();
         HandleControllerCursor();
         UpdateCanvasCursor(false, "update");
         if (IsWorldThirdPersonMode)
@@ -3251,7 +3261,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         ApplyTerminalOutline(go, TerminalOutlineColor);
 
         var label = CreateAnchoredText(go.transform, "Label", text, 14, FontStyle.Normal, TextAnchor.MiddleCenter, new Rect(8f, 0f, rect.width - 16f, rect.height), TerminalTextColor);
-        label.horizontalOverflow = HorizontalWrapMode.Overflow;
+        label.horizontalOverflow = HorizontalWrapMode.Wrap;
         label.verticalOverflow = VerticalWrapMode.Truncate;
         return label;
     }
@@ -3574,6 +3584,42 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
     }
 
+    private static Sprite GetSliderHandleDotSprite()
+    {
+        if (SliderHandleDotSprite != null)
+        {
+            return SliderHandleDotSprite;
+        }
+
+        const int size = 24;
+        const float radius = 7.5f;
+        const float feather = 1.25f;
+        var center = new Vector2((size - 1) * 0.5f, (size - 1) * 0.5f);
+        var pixels = new Color32[size * size];
+        for (var y = 0; y < size; y++)
+        {
+            for (var x = 0; x < size; x++)
+            {
+                var distance = Vector2.Distance(new Vector2(x, y), center);
+                var alpha = Mathf.Clamp01((radius + feather - distance) / Mathf.Max(0.001f, feather));
+                pixels[(y * size) + x] = new Color32(255, 255, 255, (byte)Mathf.RoundToInt(alpha * 255f));
+            }
+        }
+
+        SliderHandleDotTexture = new Texture2D(size, size, TextureFormat.RGBA32, false)
+        {
+            name = "DrawableSuitsSliderHandleDot",
+            filterMode = FilterMode.Bilinear,
+            wrapMode = TextureWrapMode.Clamp,
+            hideFlags = HideFlags.HideAndDontSave
+        };
+        SliderHandleDotTexture.SetPixels32(pixels);
+        SliderHandleDotTexture.Apply(false, false);
+        SliderHandleDotSprite = Sprite.Create(SliderHandleDotTexture, new Rect(0f, 0f, size, size), new Vector2(0.5f, 0.5f), size);
+        SliderHandleDotSprite.name = "DrawableSuitsSliderHandleDotSprite";
+        return SliderHandleDotSprite;
+    }
+
     private static DrawableSliderControl CreateAnchoredSlider(Transform parent, string name, float min, float max, float value, Rect rect, Action<float> onValueChanged)
     {
         var go = CreateUiObject(name + "Slider", parent, typeof(RectTransform), typeof(Image), typeof(DrawableSliderControl));
@@ -3610,9 +3656,12 @@ internal sealed class SuitEditorController : MonoBehaviour
         handleRect.anchorMax = new Vector2(0f, 0.5f);
         handleRect.pivot = new Vector2(0.5f, 0.5f);
         handleRect.anchoredPosition = Vector2.zero;
-        handleRect.sizeDelta = new Vector2(16f, 28f);
+        handleRect.sizeDelta = new Vector2(SliderHandleVisualSize, SliderHandleVisualSize);
         var handleImage = handle.GetComponent<Image>();
-        handleImage.color = TerminalTextColor;
+        handleImage.sprite = GetSliderHandleDotSprite();
+        handleImage.type = Image.Type.Simple;
+        handleImage.preserveAspect = true;
+        handleImage.color = TerminalAccentHotColor;
         handleImage.raycastTarget = true;
 
         var slider = go.GetComponent<DrawableSliderControl>();
@@ -4493,7 +4542,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             _selectedDecalLabel.gameObject.transform.parent.gameObject.SetActive(decalControlsActive);
             _selectedDecalLabel.text = _selectedDecalIndex >= 0 && _selectedDecalIndex < _decalFiles.Count
-                ? Path.GetFileName(_decalFiles[_selectedDecalIndex])
+                ? MiddleEllipsize(Path.GetFileName(_decalFiles[_selectedDecalIndex]), 24)
                 : "No decal selected";
         }
     }
@@ -8045,6 +8094,35 @@ internal sealed class SuitEditorController : MonoBehaviour
         return _selectedDecalIndex >= 0 && _selectedDecalIndex < _decalFiles.Count
             ? Path.GetFileName(_decalFiles[_selectedDecalIndex])
             : "none";
+    }
+
+    private static string MiddleEllipsize(string value, int maxChars)
+    {
+        if (string.IsNullOrWhiteSpace(value) || maxChars <= 0)
+        {
+            return string.Empty;
+        }
+
+        if (value.Length <= maxChars)
+        {
+            return value;
+        }
+
+        if (maxChars <= 3)
+        {
+            return value.Substring(0, maxChars);
+        }
+
+        const string ellipsis = "...";
+        var visibleChars = maxChars - ellipsis.Length;
+        var left = Mathf.Max(1, visibleChars / 2);
+        var right = Mathf.Max(1, visibleChars - left);
+        if (left + right + ellipsis.Length > maxChars)
+        {
+            right = Mathf.Max(1, maxChars - ellipsis.Length - left);
+        }
+
+        return value.Substring(0, left) + ellipsis + value.Substring(value.Length - right);
     }
 
     private MirrorPaintTarget ResolveWorldMirrorTarget(Texture2D texture, RaycastHit hit, bool allowStatus)
@@ -12213,7 +12291,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         CloseStickersPanel();
         _activePlacementEditTarget = target;
         _placementEditPanelObject.SetActive(true);
-        RefreshPlacementEditPanelUi();
+        RefreshPlacementEditPanelUi(true);
         RebuildSelectableNavigation();
         var state = GetPlacementEditState(target);
         DrawableSuitsDiagnostics.Info($"PlacementEditPanelOpened: target={target}; source={GetPlacementEditSourceName(target)}; crop={DescribePlacementCrop(state)}; stretch={DescribePlacementStretch(state)}; flip={DescribePlacementFlip(state)}; filters={DescribePlacementFilters(state)}; suit={_selectedSuitId}");
@@ -12229,6 +12307,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         _activePlacementEditTarget = PlacementEditTarget.None;
+        _placementEditPreviewPending = false;
+        _placementEditPreviewPendingTarget = PlacementEditTarget.None;
         if (_placementEditPreviewImage != null)
         {
             _placementEditPreviewImage.texture = null;
@@ -12241,7 +12321,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
     }
 
-    private void RefreshPlacementEditPanelUi()
+    private void RefreshPlacementEditPanelUi(bool rebuildPreview = false)
     {
         if (!IsPlacementEditPanelOpen())
         {
@@ -12262,7 +12342,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
         if (_placementEditSourceLabel != null)
         {
-            _placementEditSourceLabel.text = $"{GetPlacementEditSourceName(target)}\nTemporary edits affect preview and future stamps only.";
+            _placementEditSourceLabel.text = $"{DisplayPlacementEditSourceName(target)}\nTemporary edits affect preview and future stamps only.";
         }
 
         SetPlacementEditSliderValues(state);
@@ -12275,8 +12355,82 @@ internal sealed class SuitEditorController : MonoBehaviour
             SetToolButtonColor(_placementEditFlipYButton, state.FlipY);
         }
 
+        if (_placementEditPreviewImage != null && (rebuildPreview || _placementEditPreviewImage.texture == null))
+        {
+            SchedulePlacementEditPreviewRebuild(rebuildPreview ? "panel refresh" : "missing preview", rebuildPreview);
+        }
+    }
+
+    private void SchedulePlacementEditPreviewRebuild(string reason, bool immediate)
+    {
+        if (!IsPlacementEditPanelOpen())
+        {
+            return;
+        }
+
+        _placementEditPreviewPending = true;
+        _placementEditPreviewPendingTarget = _activePlacementEditTarget;
+        _placementEditPreviewDueAt = Time.unscaledTime + (immediate ? 0f : PlacementEditPreviewDebounceSeconds);
+        if (!immediate)
+        {
+            SetPlacementEditStatus("Updating preview...");
+        }
+
+        LogPlacementEditPreviewDeferred(_placementEditPreviewPendingTarget, reason, immediate);
+        if (immediate)
+        {
+            UpdatePlacementEditPreviewDebounce();
+        }
+    }
+
+    private void UpdatePlacementEditPreviewDebounce()
+    {
+        if (!_placementEditPreviewPending)
+        {
+            return;
+        }
+
+        if (!IsPlacementEditPanelOpen())
+        {
+            _placementEditPreviewPending = false;
+            _placementEditPreviewPendingTarget = PlacementEditTarget.None;
+            return;
+        }
+
+        if (Time.unscaledTime < _placementEditPreviewDueAt)
+        {
+            return;
+        }
+
+        var target = _placementEditPreviewPendingTarget == PlacementEditTarget.None
+            ? _activePlacementEditTarget
+            : _placementEditPreviewPendingTarget;
+        _placementEditPreviewPending = false;
+        _placementEditPreviewPendingTarget = PlacementEditTarget.None;
+        RebuildPlacementEditPreview(target, "debounced");
+    }
+
+    private void RebuildPlacementEditPreview(PlacementEditTarget target, string reason)
+    {
+        var startedAt = Time.realtimeSinceStartup;
+        if (!IsPlacementEditPanelOpen() || target == PlacementEditTarget.None || target != _activePlacementEditTarget)
+        {
+            LogPlacementEditPreviewSkipped(target, reason, "panel closed or target changed");
+            return;
+        }
+
         if (_placementEditPreviewImage == null)
         {
+            LogPlacementEditPreviewSkipped(target, reason, "preview image missing");
+            return;
+        }
+
+        var state = GetPlacementEditState(target);
+        if (state == null)
+        {
+            _placementEditPreviewImage.texture = null;
+            SetPlacementEditStatus("No editable placement selected.");
+            LogPlacementEditPreviewSkipped(target, reason, "state missing");
             return;
         }
 
@@ -12289,11 +12443,14 @@ internal sealed class SuitEditorController : MonoBehaviour
             _placementEditPreviewImage.color = Color.white;
             FitPlacementEditPreview(preview);
             SetPlacementEditStatus(state.IsDefault ? "No temporary edits applied." : "Temporary edit preview ready.");
+            LogPlacementEditPreviewRebuilt(target, source, state, preview, reason, (Time.realtimeSinceStartup - startedAt) * 1000f);
             return;
         }
 
         _placementEditPreviewImage.texture = null;
-        SetPlacementEditStatus(string.IsNullOrWhiteSpace(sourceFailure) ? previewFailure : sourceFailure);
+        var failure = string.IsNullOrWhiteSpace(sourceFailure) ? previewFailure : sourceFailure;
+        SetPlacementEditStatus(failure);
+        LogPlacementEditPreviewSkipped(target, reason, failure);
     }
 
     private void SetPlacementEditSliderValues(PlacementEditState state)
@@ -12339,16 +12496,17 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         state.Revision++;
-        InvalidateEditedPlacementStamp(_activePlacementEditTarget);
+        InvalidateEditedPlacementStamp(_activePlacementEditTarget, destroyTexture: false);
         InvalidateDecalPreview($"placement edit changed: {reason}");
         RefreshPlacementEditPanelUi();
+        SchedulePlacementEditPreviewRebuild(reason, immediate: false);
         DrawableSuitsDiagnostics.Info($"PlacementEditChanged: target={_activePlacementEditTarget}; source={GetPlacementEditSourceName(_activePlacementEditTarget)}; reason={reason}; crop={DescribePlacementCrop(state)}; stretch={DescribePlacementStretch(state)}; flip={DescribePlacementFlip(state)}; filters={DescribePlacementFilters(state)}; revision={state.Revision}; suit={_selectedSuitId}");
     }
 
     private void ResetActivePlacementEdit()
     {
         ResetPlacementEdit(_activePlacementEditTarget, "user reset edits", true);
-        RefreshPlacementEditPanelUi();
+        RefreshPlacementEditPanelUi(true);
         SetPlacementEditStatus("Temporary edits reset.");
     }
 
@@ -12434,11 +12592,11 @@ internal sealed class SuitEditorController : MonoBehaviour
         return false;
     }
 
-    private void InvalidateEditedPlacementStamp(PlacementEditTarget target)
+    private void InvalidateEditedPlacementStamp(PlacementEditTarget target, bool destroyTexture = true)
     {
         if (target == PlacementEditTarget.Decal)
         {
-            if (_editedDecalStampTexture != null)
+            if (destroyTexture && _editedDecalStampTexture != null)
             {
                 Destroy(_editedDecalStampTexture);
                 _editedDecalStampTexture = null;
@@ -12450,7 +12608,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         if (target == PlacementEditTarget.Sticker)
         {
-            if (_editedStickerStampTexture != null)
+            if (destroyTexture && _editedStickerStampTexture != null)
             {
                 Destroy(_editedStickerStampTexture);
                 _editedStickerStampTexture = null;
@@ -12489,6 +12647,13 @@ internal sealed class SuitEditorController : MonoBehaviour
             PlacementEditTarget.Sticker => StickerShapeDisplayName(_stickerShape),
             _ => "None"
         };
+    }
+
+    private string DisplayPlacementEditSourceName(PlacementEditTarget target)
+    {
+        return target == PlacementEditTarget.Decal
+            ? MiddleEllipsize(GetPlacementEditSourceName(target), 48)
+            : GetPlacementEditSourceName(target);
     }
 
     private static string PlacementFilterDisplayName(PlacementFilter filter)
@@ -12600,6 +12765,38 @@ internal sealed class SuitEditorController : MonoBehaviour
     private void LogPlacementEditedStampGenerated(PlacementEditTarget target, Texture2D source, PlacementEditState state, Texture2D generated, bool cacheHit)
     {
         DrawableSuitsDiagnostics.Info($"PlacementEditedStampGenerated: target={target}; source={GetPlacementEditSourceName(target)}; sourceSize={source?.width ?? 0}x{source?.height ?? 0}; crop={DescribePlacementCrop(state)}; stretch={DescribePlacementStretch(state)}; flip={DescribePlacementFlip(state)}; filters={DescribePlacementFilters(state)}; cacheHit={cacheHit}; generatedSize={generated?.width ?? 0}x{generated?.height ?? 0}; suit={_selectedSuitId}");
+    }
+
+    private void LogPlacementEditPreviewDeferred(PlacementEditTarget target, string reason, bool immediate)
+    {
+        var key = $"deferred|target={target}|reason={reason}|immediate={immediate}|due={_placementEditPreviewDueAt:0.###}";
+        if (Time.unscaledTime - _lastPlacementEditPreviewLogTime < 0.25f && string.Equals(key, _lastPlacementEditPreviewLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastPlacementEditPreviewLogTime = Time.unscaledTime;
+        _lastPlacementEditPreviewLogKey = key;
+        var state = GetPlacementEditState(target);
+        DrawableSuitsDiagnostics.Info($"PlacementEditPreviewDeferred: target={target}; source={GetPlacementEditSourceName(target)}; reason={reason}; immediate={immediate}; dueInMs={Mathf.Max(0f, _placementEditPreviewDueAt - Time.unscaledTime) * 1000f:0.#}; crop={DescribePlacementCrop(state)}; stretch={DescribePlacementStretch(state)}; flip={DescribePlacementFlip(state)}; filters={DescribePlacementFilters(state)}; suit={_selectedSuitId}");
+    }
+
+    private void LogPlacementEditPreviewRebuilt(PlacementEditTarget target, Texture2D source, PlacementEditState state, Texture2D preview, string reason, float elapsedMs)
+    {
+        DrawableSuitsDiagnostics.Info($"PlacementEditPreviewRebuilt: target={target}; source={GetPlacementEditSourceName(target)}; reason={reason}; sourceSize={source?.width ?? 0}x{source?.height ?? 0}; generatedSize={preview?.width ?? 0}x{preview?.height ?? 0}; elapsedMs={elapsedMs:0.##}; crop={DescribePlacementCrop(state)}; stretch={DescribePlacementStretch(state)}; flip={DescribePlacementFlip(state)}; filters={DescribePlacementFilters(state)}; suit={_selectedSuitId}");
+    }
+
+    private void LogPlacementEditPreviewSkipped(PlacementEditTarget target, string reason, string failureReason)
+    {
+        var key = $"skipped|target={target}|reason={reason}|failure={failureReason}";
+        if (Time.unscaledTime - _lastPlacementEditPreviewLogTime < 0.5f && string.Equals(key, _lastPlacementEditPreviewLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastPlacementEditPreviewLogTime = Time.unscaledTime;
+        _lastPlacementEditPreviewLogKey = key;
+        DrawableSuitsDiagnostics.Warn($"PlacementEditPreviewSkipped: target={target}; source={GetPlacementEditSourceName(target)}; reason={reason}; failure={failureReason}; suit={_selectedSuitId}");
     }
 
     private void SetSavedDesignsStatus(string message)
