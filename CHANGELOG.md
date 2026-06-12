@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.52
+
+- Fixed edited Decals stamping the original image by routing final Decal placement through the same temporary edited stamp texture used by previews.
+- Replaced single Decal/Sticker filter selection with fixed multi-filter rows, each with its own intensity.
+- Fixed the temporary edit panel preview so crop and width/height stretch preserve the generated stamp aspect instead of stretching into a square.
+
+## 0.5.51
+
+- Added temporary Decal and Sticker edit panels for crop, width/height stretch, flip X/Y, and preset filters.
+- Edited decal/sticker stamps now affect previews and future placements only; source decal files and built-in sticker masks are not modified.
+- Routed edited Decal and Sticker stamps through the existing third-person projection, UV panel preview, Mirror, undo history, and recent-color behavior.
+
 ## 0.5.50
 
 - Added controller right-stick panning for the zoomed UV panel while the cursor is over the panel.

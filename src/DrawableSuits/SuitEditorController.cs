@@ -72,6 +72,25 @@ internal sealed class SuitEditorController : MonoBehaviour
         Shield
     }
 
+    private enum PlacementEditTarget
+    {
+        None,
+        Decal,
+        Sticker
+    }
+
+    private enum PlacementFilter
+    {
+        None,
+        Grayscale,
+        Invert,
+        Sepia,
+        Brightness,
+        Contrast,
+        Saturation,
+        HueShift
+    }
+
     private enum ToolIconKind
     {
         Paint,
@@ -120,6 +139,16 @@ internal sealed class SuitEditorController : MonoBehaviour
     private static readonly Vector2[] StickerArrowVertices = { new(-0.9f, -0.28f), new(0.12f, -0.28f), new(0.12f, -0.62f), new(0.9f, 0f), new(0.12f, 0.62f), new(0.12f, 0.28f), new(-0.9f, 0.28f) };
     private static readonly Vector2[] StickerLightningVertices = { new(-0.25f, 0.92f), new(0.55f, 0.92f), new(0.1f, 0.14f), new(0.64f, 0.14f), new(-0.32f, -0.96f), new(-0.02f, -0.24f), new(-0.58f, -0.24f) };
     private static readonly Vector2[] StickerShieldVertices = { new(-0.72f, 0.7f), new(0.72f, 0.7f), new(0.62f, -0.18f), new(0f, -0.92f), new(-0.62f, -0.18f) };
+    private static readonly PlacementFilter[] PlacementFilterRows =
+    {
+        PlacementFilter.Grayscale,
+        PlacementFilter.Sepia,
+        PlacementFilter.Invert,
+        PlacementFilter.Brightness,
+        PlacementFilter.Contrast,
+        PlacementFilter.Saturation,
+        PlacementFilter.HueShift
+    };
 
     private readonly Stack<UndoHistoryEntry> _undo = new();
     private readonly Stack<UndoHistoryEntry> _redo = new();
@@ -127,6 +156,8 @@ internal sealed class SuitEditorController : MonoBehaviour
     private readonly List<string> _decalFiles = new();
     private readonly List<string> _recentColors = new(MaxRecentColors);
     private readonly Dictionary<StickerShape, Texture2D> _stickerStampTextures = new();
+    private readonly PlacementEditState _decalPlacementEdit = new();
+    private readonly PlacementEditState _stickerPlacementEdit = new();
 
     private bool _isOpen;
     private Vector2 _cursor;
@@ -313,6 +344,10 @@ internal sealed class SuitEditorController : MonoBehaviour
     private int _decalListPage;
     private readonly List<RendererRestoreState> _rendererRestoreStates = new();
     private Texture2D _loadedDecal;
+    private Texture2D _editedDecalStampTexture;
+    private Texture2D _editedStickerStampTexture;
+    private string _editedDecalStampKey = string.Empty;
+    private string _editedStickerStampKey = string.Empty;
     private TextStampRenderer _textStampRenderer;
     private Texture2D _textStampTexture;
     private string _textStampTextureKey = string.Empty;
@@ -414,8 +449,10 @@ internal sealed class SuitEditorController : MonoBehaviour
     private readonly List<Button> _stickerShapeOptionButtons = new();
     private Text _selectedDecalLabel;
     private Button _decalsMenuButton;
+    private Button _editDecalButton;
     private Text _selectedStickerShapeLabel;
     private Button _stickersMenuButton;
+    private Button _editStickerButton;
     private GameObject _decalsPanelObject;
     private Text _decalsStatusLabel;
     private GameObject _stickersPanelObject;
@@ -441,6 +478,32 @@ internal sealed class SuitEditorController : MonoBehaviour
     private Text _savedDesignsStatusLabel;
     private Button _deleteSelectedDecalButton;
     private Button _addDecalButton;
+    private GameObject _placementEditPanelObject;
+    private PlacementEditTarget _activePlacementEditTarget;
+    private RectTransform _placementEditPreviewFrameRect;
+    private RectTransform _placementEditPreviewRect;
+    private RawImage _placementEditPreviewBackingImage;
+    private RawImage _placementEditPreviewImage;
+    private Text _placementEditTitleLabel;
+    private Text _placementEditSourceLabel;
+    private Text _placementEditCropLeftLabel;
+    private Text _placementEditCropRightLabel;
+    private Text _placementEditCropBottomLabel;
+    private Text _placementEditCropTopLabel;
+    private Text _placementEditStretchXLabel;
+    private Text _placementEditStretchYLabel;
+    private Text _placementEditStatusLabel;
+    private Button _placementEditFlipXButton;
+    private Button _placementEditFlipYButton;
+    private DrawableSliderControl _placementEditCropLeftSlider;
+    private DrawableSliderControl _placementEditCropRightSlider;
+    private DrawableSliderControl _placementEditCropBottomSlider;
+    private DrawableSliderControl _placementEditCropTopSlider;
+    private DrawableSliderControl _placementEditStretchXSlider;
+    private DrawableSliderControl _placementEditStretchYSlider;
+    private readonly Dictionary<PlacementFilter, Text> _placementEditFilterValueLabels = new();
+    private readonly Dictionary<PlacementFilter, DrawableSliderControl> _placementEditFilterSliders = new();
+    private Texture2D _placementEditCheckerTexture;
     private DiagnosticsProcess _pendingDecalImportProcess;
     private float _pendingDecalImportStartedAt;
     private int _pendingDecalImportId;
@@ -476,6 +539,137 @@ internal sealed class SuitEditorController : MonoBehaviour
         internal bool EventSystemEnabled;
         internal BaseInputModule[] Modules;
         internal bool[] ModuleEnabled;
+    }
+
+    private sealed class PlacementEditState
+    {
+        internal float CropLeft;
+        internal float CropRight;
+        internal float CropBottom;
+        internal float CropTop;
+        internal float StretchX = 1f;
+        internal float StretchY = 1f;
+        internal bool FlipX;
+        internal bool FlipY;
+        internal float GrayscaleAmount;
+        internal float InvertAmount;
+        internal float SepiaAmount;
+        internal float BrightnessAmount;
+        internal float ContrastAmount;
+        internal float SaturationAmount;
+        internal float HueShiftAmount;
+        internal int Revision;
+
+        internal bool IsDefault =>
+            CropLeft <= 0.0001f
+            && CropRight <= 0.0001f
+            && CropBottom <= 0.0001f
+            && CropTop <= 0.0001f
+            && Mathf.Abs(StretchX - 1f) <= 0.0001f
+            && Mathf.Abs(StretchY - 1f) <= 0.0001f
+            && !FlipX
+            && !FlipY
+            && !HasActiveFilters;
+
+        internal bool HasActiveFilters =>
+            GrayscaleAmount > 0.0001f
+            || InvertAmount > 0.0001f
+            || SepiaAmount > 0.0001f
+            || BrightnessAmount > 0.0001f
+            || ContrastAmount > 0.0001f
+            || SaturationAmount > 0.0001f
+            || HueShiftAmount > 0.0001f;
+
+        internal void Reset()
+        {
+            CropLeft = 0f;
+            CropRight = 0f;
+            CropBottom = 0f;
+            CropTop = 0f;
+            StretchX = 1f;
+            StretchY = 1f;
+            FlipX = false;
+            FlipY = false;
+            GrayscaleAmount = 0f;
+            InvertAmount = 0f;
+            SepiaAmount = 0f;
+            BrightnessAmount = 0f;
+            ContrastAmount = 0f;
+            SaturationAmount = 0f;
+            HueShiftAmount = 0f;
+            Revision++;
+        }
+
+        internal Rect CropRect(float minSize)
+        {
+            var left = Mathf.Clamp01(CropLeft);
+            var right = Mathf.Clamp01(CropRight);
+            var bottom = Mathf.Clamp01(CropBottom);
+            var top = Mathf.Clamp01(CropTop);
+            if (left + right > 1f - minSize)
+            {
+                var scale = (1f - minSize) / Mathf.Max(0.0001f, left + right);
+                left *= scale;
+                right *= scale;
+            }
+            if (bottom + top > 1f - minSize)
+            {
+                var scale = (1f - minSize) / Mathf.Max(0.0001f, bottom + top);
+                bottom *= scale;
+                top *= scale;
+            }
+
+            return new Rect(left, bottom, Mathf.Max(minSize, 1f - left - right), Mathf.Max(minSize, 1f - bottom - top));
+        }
+
+        internal string Key()
+        {
+            return $"crop={CropLeft:0.####},{CropRight:0.####},{CropBottom:0.####},{CropTop:0.####}|stretch={StretchX:0.###},{StretchY:0.###}|flip={FlipX},{FlipY}|filters={GrayscaleAmount:0.###},{SepiaAmount:0.###},{InvertAmount:0.###},{BrightnessAmount:0.###},{ContrastAmount:0.###},{SaturationAmount:0.###},{HueShiftAmount:0.###}|rev={Revision}";
+        }
+
+        internal float GetFilterAmount(PlacementFilter filter)
+        {
+            return filter switch
+            {
+                PlacementFilter.Grayscale => GrayscaleAmount,
+                PlacementFilter.Invert => InvertAmount,
+                PlacementFilter.Sepia => SepiaAmount,
+                PlacementFilter.Brightness => BrightnessAmount,
+                PlacementFilter.Contrast => ContrastAmount,
+                PlacementFilter.Saturation => SaturationAmount,
+                PlacementFilter.HueShift => HueShiftAmount,
+                _ => 0f
+            };
+        }
+
+        internal void SetFilterAmount(PlacementFilter filter, float amount)
+        {
+            amount = Mathf.Clamp01(amount);
+            switch (filter)
+            {
+                case PlacementFilter.Grayscale:
+                    GrayscaleAmount = amount;
+                    break;
+                case PlacementFilter.Invert:
+                    InvertAmount = amount;
+                    break;
+                case PlacementFilter.Sepia:
+                    SepiaAmount = amount;
+                    break;
+                case PlacementFilter.Brightness:
+                    BrightnessAmount = amount;
+                    break;
+                case PlacementFilter.Contrast:
+                    ContrastAmount = amount;
+                    break;
+                case PlacementFilter.Saturation:
+                    SaturationAmount = amount;
+                    break;
+                case PlacementFilter.HueShift:
+                    HueShiftAmount = amount;
+                    break;
+            }
+        }
     }
 
     private sealed class RendererRestoreState
@@ -1872,6 +2066,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             Destroy(_checkerTexture);
             _checkerTexture = null;
         }
+        DestroyPlacementEditResources();
         ResetNativeCursor("plugin destroy");
         DestroyCursorGraphics();
         if (_textStampRenderer != null)
@@ -1994,6 +2189,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         RefreshFileLists();
         _uvFallbackMode = DrawableSuitsPlugin.ModConfig.StartInUvFallbackMode.Value;
         ResetUvPanelView($"open from {source}", false);
+        ResetPlacementEdits("editor open", false);
         EnsureValidToolForCurrentState($"open from {source}");
         TryRebuildPreviewForCurrentReadiness(source);
         RefreshEditorReadiness($"after preview ({source})");
@@ -2122,6 +2318,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         CloseSavedDesignsPanel();
         CloseDecalsPanel();
         CloseStickersPanel();
+        ClosePlacementEditPanel();
+        ResetPlacementEdits($"close {reason}", true);
         HideCanvasCursor($"close {reason}", true);
         if (_editorCanvasObject != null)
         {
@@ -2416,10 +2614,12 @@ internal sealed class SuitEditorController : MonoBehaviour
             InvalidateTextStampTexture("text input changed");
             InvalidateDecalPreview("text input changed");
         });
-        _selectedDecalLabel = CreateAnchoredValueLabel(panel.transform, "SelectedDecalLabel", "No decal selected", new Rect(rightX, 334f, rightW, 34f));
+        _selectedDecalLabel = CreateAnchoredValueLabel(panel.transform, "SelectedDecalLabel", "No decal selected", new Rect(rightX, 334f, 142f, 34f));
         _decalsMenuButton = CreateAnchoredButton(panel.transform, "Decals", new Rect(rightX + 150f, 290f, 136f, 34f), OpenDecalsPanel);
-        _selectedStickerShapeLabel = CreateAnchoredValueLabel(panel.transform, "SelectedStickerShapeLabel", StickerShapeDisplayName(_stickerShape), new Rect(rightX, 334f, rightW, 34f));
+        _editDecalButton = CreateAnchoredButton(panel.transform, "Edit Decal", new Rect(rightX + 150f, 334f, 136f, 34f), () => OpenPlacementEditPanel(PlacementEditTarget.Decal));
+        _selectedStickerShapeLabel = CreateAnchoredValueLabel(panel.transform, "SelectedStickerShapeLabel", StickerShapeDisplayName(_stickerShape), new Rect(rightX, 334f, 142f, 34f));
         _stickersMenuButton = CreateAnchoredButton(panel.transform, "Stickers", new Rect(rightX + 150f, 290f, 136f, 34f), OpenStickersPanel);
+        _editStickerButton = CreateAnchoredButton(panel.transform, "Edit Sticker", new Rect(rightX + 150f, 334f, 136f, 34f), () => OpenPlacementEditPanel(PlacementEditTarget.Sticker));
         _stickerShapeButton = _stickersMenuButton;
 
         CreateSectionDivider(panel.transform, new Rect(rightX, 580f, rightW, 1f));
@@ -2506,6 +2706,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         BuildSavedDesignsPanel();
         BuildDecalsPanel();
         BuildStickersPanel();
+        BuildPlacementEditPanel();
 
         _editorCanvasObject.SetActive(false);
         RefreshListButtons();
@@ -2685,6 +2886,170 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         _stickersPanelObject.SetActive(false);
         DrawableSuitsDiagnostics.Info("StickersPanel built.");
+    }
+
+    private void BuildPlacementEditPanel()
+    {
+        _placementEditPanelObject = CreateUiObject("PlacementEditPanel", _editorCanvasObject.transform, typeof(RectTransform), typeof(Image));
+        var overlayRect = _placementEditPanelObject.GetComponent<RectTransform>();
+        overlayRect.anchorMin = Vector2.zero;
+        overlayRect.anchorMax = Vector2.one;
+        overlayRect.offsetMin = Vector2.zero;
+        overlayRect.offsetMax = Vector2.zero;
+        var overlayImage = _placementEditPanelObject.GetComponent<Image>();
+        overlayImage.color = new Color(0f, 0f, 0f, 0.28f);
+        overlayImage.raycastTarget = true;
+
+        var dialog = CreateUiObject("PlacementEditDialog", _placementEditPanelObject.transform, typeof(RectTransform), typeof(Image));
+        var dialogRect = dialog.GetComponent<RectTransform>();
+        dialogRect.anchorMin = new Vector2(0.5f, 0.5f);
+        dialogRect.anchorMax = new Vector2(0.5f, 0.5f);
+        dialogRect.pivot = new Vector2(0.5f, 0.5f);
+        dialogRect.anchoredPosition = Vector2.zero;
+        dialogRect.sizeDelta = new Vector2(720f, 640f);
+        var dialogImage = dialog.GetComponent<Image>();
+        dialogImage.color = TerminalDialogColor;
+        dialogImage.raycastTarget = true;
+        ApplyTerminalOutline(dialog, TerminalOutlineColor);
+
+        _placementEditTitleLabel = CreateAnchoredText(dialog.transform, "PlacementEditTitle", "Edit Placement", 22, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(18f, 14f, 360f, 34f), TerminalStatusColor);
+        _placementEditSourceLabel = CreateAnchoredText(dialog.transform, "PlacementEditSource", string.Empty, 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(18f, 50f, 360f, 42f), TerminalTextColor);
+
+        var previewFrame = CreateUiObject("PlacementEditPreviewFrame", dialog.transform, typeof(RectTransform), typeof(Image));
+        _placementEditPreviewFrameRect = previewFrame.GetComponent<RectTransform>();
+        SetAnchoredRect(_placementEditPreviewFrameRect, new Rect(520f, 50f, 160f, 160f));
+        previewFrame.GetComponent<Image>().color = TerminalInputColor;
+        ApplyTerminalOutline(previewFrame, TerminalOutlineColor);
+        var previewBackingObject = CreateUiObject("PlacementEditPreviewChecker", previewFrame.transform, typeof(RectTransform), typeof(RawImage));
+        var backingRect = previewBackingObject.GetComponent<RectTransform>();
+        backingRect.anchorMin = Vector2.zero;
+        backingRect.anchorMax = Vector2.one;
+        backingRect.offsetMin = new Vector2(8f, 8f);
+        backingRect.offsetMax = new Vector2(-8f, -8f);
+        _placementEditPreviewBackingImage = previewBackingObject.GetComponent<RawImage>();
+        _placementEditPreviewBackingImage.texture = GetPlacementEditCheckerTexture();
+        _placementEditPreviewBackingImage.color = Color.white;
+        _placementEditPreviewBackingImage.raycastTarget = false;
+        var previewObject = CreateUiObject("PlacementEditPreview", previewFrame.transform, typeof(RectTransform), typeof(RawImage));
+        _placementEditPreviewRect = previewObject.GetComponent<RectTransform>();
+        _placementEditPreviewRect.anchorMin = new Vector2(0.5f, 0.5f);
+        _placementEditPreviewRect.anchorMax = new Vector2(0.5f, 0.5f);
+        _placementEditPreviewRect.pivot = new Vector2(0.5f, 0.5f);
+        _placementEditPreviewRect.anchoredPosition = Vector2.zero;
+        _placementEditPreviewRect.sizeDelta = new Vector2(144f, 144f);
+        _placementEditPreviewImage = previewObject.GetComponent<RawImage>();
+        _placementEditPreviewImage.color = Color.white;
+        _placementEditPreviewImage.raycastTarget = false;
+
+        CreateAnchoredText(dialog.transform, "PlacementCropHeader", "Crop", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(18f, 104f, 250f, 24f), TerminalStatusColor);
+        _placementEditCropLeftLabel = CreateAnchoredText(dialog.transform, "PlacementCropLeftLabel", string.Empty, 13, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(18f, 136f, 88f, 22f), TerminalTextColor);
+        _placementEditCropLeftSlider = CreateAnchoredSlider(dialog.transform, "PlacementCropLeft", 0f, 0.95f, 0f, new Rect(112f, 136f, 250f, 22f), value =>
+        {
+            var state = GetPlacementEditState(_activePlacementEditTarget);
+            if (state == null)
+            {
+                return;
+            }
+
+            state.CropLeft = value;
+            OnPlacementEditChanged("crop left");
+        });
+        _placementEditCropRightLabel = CreateAnchoredText(dialog.transform, "PlacementCropRightLabel", string.Empty, 13, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(18f, 166f, 88f, 22f), TerminalTextColor);
+        _placementEditCropRightSlider = CreateAnchoredSlider(dialog.transform, "PlacementCropRight", 0f, 0.95f, 0f, new Rect(112f, 166f, 250f, 22f), value =>
+        {
+            var state = GetPlacementEditState(_activePlacementEditTarget);
+            if (state == null)
+            {
+                return;
+            }
+
+            state.CropRight = value;
+            OnPlacementEditChanged("crop right");
+        });
+        _placementEditCropBottomLabel = CreateAnchoredText(dialog.transform, "PlacementCropBottomLabel", string.Empty, 13, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(18f, 196f, 88f, 22f), TerminalTextColor);
+        _placementEditCropBottomSlider = CreateAnchoredSlider(dialog.transform, "PlacementCropBottom", 0f, 0.95f, 0f, new Rect(112f, 196f, 250f, 22f), value =>
+        {
+            var state = GetPlacementEditState(_activePlacementEditTarget);
+            if (state == null)
+            {
+                return;
+            }
+
+            state.CropBottom = value;
+            OnPlacementEditChanged("crop bottom");
+        });
+        _placementEditCropTopLabel = CreateAnchoredText(dialog.transform, "PlacementCropTopLabel", string.Empty, 13, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(18f, 226f, 88f, 22f), TerminalTextColor);
+        _placementEditCropTopSlider = CreateAnchoredSlider(dialog.transform, "PlacementCropTop", 0f, 0.95f, 0f, new Rect(112f, 226f, 250f, 22f), value =>
+        {
+            var state = GetPlacementEditState(_activePlacementEditTarget);
+            if (state == null)
+            {
+                return;
+            }
+
+            state.CropTop = value;
+            OnPlacementEditChanged("crop top");
+        });
+
+        CreateAnchoredText(dialog.transform, "PlacementTransformHeader", "Shape", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(18f, 268f, 250f, 24f), TerminalStatusColor);
+        _placementEditStretchXLabel = CreateAnchoredText(dialog.transform, "PlacementStretchXLabel", string.Empty, 13, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(18f, 300f, 88f, 22f), TerminalTextColor);
+        _placementEditStretchXSlider = CreateAnchoredSlider(dialog.transform, "PlacementStretchX", 0.25f, 3f, 1f, new Rect(112f, 300f, 250f, 22f), value =>
+        {
+            var state = GetPlacementEditState(_activePlacementEditTarget);
+            if (state == null)
+            {
+                return;
+            }
+
+            state.StretchX = value;
+            OnPlacementEditChanged("stretch x");
+        });
+        _placementEditStretchYLabel = CreateAnchoredText(dialog.transform, "PlacementStretchYLabel", string.Empty, 13, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(18f, 330f, 88f, 22f), TerminalTextColor);
+        _placementEditStretchYSlider = CreateAnchoredSlider(dialog.transform, "PlacementStretchY", 0.25f, 3f, 1f, new Rect(112f, 330f, 250f, 22f), value =>
+        {
+            var state = GetPlacementEditState(_activePlacementEditTarget);
+            if (state == null)
+            {
+                return;
+            }
+
+            state.StretchY = value;
+            OnPlacementEditChanged("stretch y");
+        });
+        _placementEditFlipXButton = CreateAnchoredButton(dialog.transform, "Flip X", new Rect(392f, 298f, 90f, 34f), TogglePlacementEditFlipX);
+        _placementEditFlipYButton = CreateAnchoredButton(dialog.transform, "Flip Y", new Rect(492f, 298f, 90f, 34f), TogglePlacementEditFlipY);
+
+        CreateAnchoredText(dialog.transform, "PlacementFilterHeader", "Filters", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(18f, 374f, 250f, 24f), TerminalStatusColor);
+        _placementEditFilterValueLabels.Clear();
+        _placementEditFilterSliders.Clear();
+        for (var i = 0; i < PlacementFilterRows.Length; i++)
+        {
+            var filter = PlacementFilterRows[i];
+            var y = 402f + (i * 24f);
+            CreateAnchoredText(dialog.transform, $"PlacementFilter{filter}Label", PlacementFilterDisplayName(filter), 12, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(18f, y, 92f, 20f), TerminalTextColor);
+            var valueLabel = CreateAnchoredText(dialog.transform, $"PlacementFilter{filter}Value", "0%", 12, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(350f, y, 56f, 20f), TerminalMutedTextColor);
+            var capturedFilter = filter;
+            var slider = CreateAnchoredSlider(dialog.transform, $"PlacementFilter{filter}", 0f, 1f, 0f, new Rect(112f, y, 230f, 20f), value =>
+            {
+                var state = GetPlacementEditState(_activePlacementEditTarget);
+                if (state == null)
+                {
+                    return;
+                }
+
+                state.SetFilterAmount(capturedFilter, value);
+                OnPlacementEditChanged($"filter {capturedFilter}");
+            });
+            _placementEditFilterValueLabels[filter] = valueLabel;
+            _placementEditFilterSliders[filter] = slider;
+        }
+
+        CreateAnchoredButton(dialog.transform, "Reset Edits", new Rect(18f, 586f, 126f, 34f), ResetActivePlacementEdit);
+        CreateAnchoredButton(dialog.transform, "Close", new Rect(594f, 586f, 90f, 34f), ClosePlacementEditPanel);
+        _placementEditStatusLabel = CreateAnchoredText(dialog.transform, "PlacementEditStatus", string.Empty, 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(156f, 584f, 426f, 44f), TerminalStatusColor);
+
+        _placementEditPanelObject.SetActive(false);
+        DrawableSuitsDiagnostics.Info("PlacementEditPanel built.");
     }
 
     private void BuildFallbackDiagnosticsCanvas(Exception originalException)
@@ -3960,6 +4325,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         SetInteractable(_stickerShapeButton, _canPaint && hasEditableTexture);
         SetInteractable(_decalsMenuButton, _canPaint && hasEditableTexture);
         SetInteractable(_stickersMenuButton, _canPaint && hasEditableTexture);
+        SetInteractable(_editDecalButton, _canPaint && hasEditableTexture && _loadedDecal != null);
+        SetInteractable(_editStickerButton, _canPaint && hasEditableTexture);
         SetInteractable(_applyButton, _canPaint && hasEditableTexture);
         SetInteractable(_saveButton, hasEditableTexture);
         SetInteractable(_exportCodeButton, hasEditableTexture);
@@ -3990,6 +4357,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         UpdateColorUi();
         UpdateRecentColorSwatches();
         UpdateUndoHistoryUi();
+        RefreshPlacementEditPanelUi();
     }
 
     private string BuildDiagnosticsSummary()
@@ -4104,6 +4472,10 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             _stickersMenuButton.gameObject.SetActive(stickerActive);
         }
+        if (_editStickerButton != null)
+        {
+            _editStickerButton.gameObject.SetActive(stickerActive);
+        }
         if (_selectedStickerShapeLabel != null)
         {
             _selectedStickerShapeLabel.gameObject.transform.parent.gameObject.SetActive(stickerActive);
@@ -4112,6 +4484,10 @@ internal sealed class SuitEditorController : MonoBehaviour
         if (_decalsMenuButton != null)
         {
             _decalsMenuButton.gameObject.SetActive(decalControlsActive);
+        }
+        if (_editDecalButton != null)
+        {
+            _editDecalButton.gameObject.SetActive(decalControlsActive);
         }
         if (_selectedDecalLabel != null)
         {
@@ -4629,9 +5005,14 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private void SelectStickerShape(StickerShape shape)
     {
+        var changed = _stickerShape != shape;
         _stickerShape = shape;
         HideStickerShapeMenu();
         CloseStickersPanel();
+        if (changed)
+        {
+            ResetPlacementEdit(PlacementEditTarget.Sticker, "sticker shape changed", true);
+        }
         UpdateStickerShapeButton();
         InvalidateDecalPreview("sticker shape changed");
         SetStatus($"Sticker shape: {StickerShapeDisplayName(_stickerShape)}.", false);
@@ -5883,9 +6264,14 @@ internal sealed class SuitEditorController : MonoBehaviour
         return _stickersPanelObject != null && _stickersPanelObject.activeInHierarchy;
     }
 
+    private bool IsPlacementEditPanelOpen()
+    {
+        return _placementEditPanelObject != null && _placementEditPanelObject.activeInHierarchy;
+    }
+
     private bool IsEditorModalOpen()
     {
-        return IsDesignCodePanelOpen() || IsSavedDesignsPanelOpen() || IsDecalsPanelOpen() || IsStickersPanelOpen();
+        return IsDesignCodePanelOpen() || IsSavedDesignsPanelOpen() || IsDecalsPanelOpen() || IsStickersPanelOpen() || IsPlacementEditPanelOpen();
     }
 
     private Texture2D EnsureCursorDotTexture()
@@ -6219,8 +6605,7 @@ internal sealed class SuitEditorController : MonoBehaviour
                 return false;
             }
 
-            stampTexture = _loadedDecal;
-            return true;
+            return TryGetEditedPlacementStamp(PlacementEditTarget.Decal, _loadedDecal, false, out stampTexture, out failureReason);
         }
 
         if (_tool == EditorTool.Text)
@@ -6230,7 +6615,12 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         if (_tool == EditorTool.Sticker)
         {
-            return TryGetStickerStampTexture(_stickerShape, out stampTexture, out failureReason);
+            if (!TryGetStickerStampTexture(_stickerShape, out var baseSticker, out failureReason))
+            {
+                return false;
+            }
+
+            return TryGetEditedPlacementStamp(PlacementEditTarget.Sticker, baseSticker, true, out stampTexture, out failureReason);
         }
 
         failureReason = "not a placement tool";
@@ -6340,12 +6730,11 @@ internal sealed class SuitEditorController : MonoBehaviour
             }
 
             var touchedPixels = mirrorTarget.Enabled && mirrorTarget.Available ? new HashSet<int>() : null;
-            var tintWithBrushColor = _tool == EditorTool.Sticker;
-            var primaryChanged = CompositeDecalSurfaceStamp(_decalPreviewTexture, stampTexture, hit.point, hit.normal, CurrentPlacementRotation(), false, Mathf.Clamp01(_brushOpacity * 0.62f), touchedPixels, out primaryStats, tintWithBrushColor);
+            var primaryChanged = CompositeDecalSurfaceStamp(_decalPreviewTexture, stampTexture, hit.point, hit.normal, CurrentPlacementRotation(), false, Mathf.Clamp01(_brushOpacity * 0.62f), touchedPixels, out primaryStats, false);
             var mirrorChanged = false;
             if (ShouldApplyMirror(sourceTexture, hit.textureCoord, mirrorTarget) && TryGetMirrorWorldPlacement(mirrorTarget, out var mirrorPoint, out var mirrorNormal))
             {
-                mirrorChanged = CompositeDecalSurfaceStamp(_decalPreviewTexture, stampTexture, mirrorPoint, mirrorNormal, -CurrentPlacementRotation(), true, Mathf.Clamp01(_brushOpacity * 0.62f), touchedPixels, out mirrorStats, tintWithBrushColor);
+                mirrorChanged = CompositeDecalSurfaceStamp(_decalPreviewTexture, stampTexture, mirrorPoint, mirrorNormal, -CurrentPlacementRotation(), true, Mathf.Clamp01(_brushOpacity * 0.62f), touchedPixels, out mirrorStats, false);
             }
 
             if (!primaryChanged && !mirrorChanged)
@@ -6541,7 +6930,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         var displayHeight = Mathf.Clamp(stampSize.y / Mathf.Max(1f, sourceTexture.height * view.height) * rect.height, 4f, rect.height * 1.5f);
 
         previewImage.texture = stampTexture;
-        previewImage.color = _tool == EditorTool.Text || _tool == EditorTool.Sticker
+        previewImage.color = _tool == EditorTool.Text
             ? new Color(_brushColor.r, _brushColor.g, _brushColor.b, mirrored ? 0.5f : 0.62f)
             : mirrored ? new Color(1f, 1f, 1f, 0.5f) : new Color(1f, 1f, 1f, 0.62f);
         previewImage.raycastTarget = false;
@@ -6864,9 +7253,224 @@ internal sealed class SuitEditorController : MonoBehaviour
         return _tool switch
         {
             EditorTool.Text => $"text:{NormalizeTextStampValue(_textStampValue).Length}",
-            EditorTool.Sticker => $"sticker:{_stickerShape}",
-            _ => CurrentDecalName()
+            EditorTool.Sticker => $"sticker:{_stickerShape}:edit={_stickerPlacementEdit.Revision}",
+            _ => $"{CurrentDecalName()}:edit={_decalPlacementEdit.Revision}"
         };
+    }
+
+    private bool TryGetEditedPlacementStamp(PlacementEditTarget target, Texture2D source, bool tintSticker, out Texture2D texture, out string failureReason)
+    {
+        texture = null;
+        failureReason = string.Empty;
+        if (source == null)
+        {
+            failureReason = "missing placement source";
+            return false;
+        }
+
+        var state = GetPlacementEditState(target);
+        if (state == null)
+        {
+            failureReason = "invalid placement edit target";
+            return false;
+        }
+
+        if (target == PlacementEditTarget.Decal && state.IsDefault)
+        {
+            texture = source;
+            return true;
+        }
+
+        var colorKey = tintSticker ? ColorToHex(_brushColor) : "source";
+        var key = $"{target}|source={source.name}|size={source.width}x{source.height}|state={state.Key()}|tint={tintSticker}:{colorKey}";
+        if (target == PlacementEditTarget.Decal
+            && _editedDecalStampTexture != null
+            && string.Equals(_editedDecalStampKey, key, StringComparison.Ordinal))
+        {
+            texture = _editedDecalStampTexture;
+            return true;
+        }
+
+        if (target == PlacementEditTarget.Sticker
+            && _editedStickerStampTexture != null
+            && string.Equals(_editedStickerStampKey, key, StringComparison.Ordinal))
+        {
+            texture = _editedStickerStampTexture;
+            return true;
+        }
+
+        if (!TryGenerateEditedPlacementStamp(target, source, tintSticker, state, out var generated, out failureReason))
+        {
+            return false;
+        }
+
+        if (target == PlacementEditTarget.Decal)
+        {
+            if (_editedDecalStampTexture != null)
+            {
+                Destroy(_editedDecalStampTexture);
+            }
+
+            _editedDecalStampTexture = generated;
+            _editedDecalStampKey = key;
+        }
+        else
+        {
+            if (_editedStickerStampTexture != null)
+            {
+                Destroy(_editedStickerStampTexture);
+            }
+
+            _editedStickerStampTexture = generated;
+            _editedStickerStampKey = key;
+        }
+
+        texture = generated;
+        LogPlacementEditedStampGenerated(target, source, state, generated, false);
+        return true;
+    }
+
+    private bool TryGenerateEditedPlacementStamp(PlacementEditTarget target, Texture2D source, bool tintSticker, PlacementEditState state, out Texture2D texture, out string failureReason)
+    {
+        texture = null;
+        failureReason = string.Empty;
+        if (source == null)
+        {
+            failureReason = "missing source texture";
+            return false;
+        }
+
+        try
+        {
+            var minCropSize = Mathf.Max(1f / Mathf.Max(1, source.width), 1f / Mathf.Max(1, source.height), 0.01f);
+            var crop = state.CropRect(minCropSize);
+            var cropPixelsW = Mathf.Max(1, Mathf.RoundToInt(crop.width * source.width));
+            var cropPixelsH = Mathf.Max(1, Mathf.RoundToInt(crop.height * source.height));
+            var maxTextureSize = Mathf.Clamp(SystemInfo.maxTextureSize > 0 ? SystemInfo.maxTextureSize : 2048, 256, 8192);
+            var outputWidth = Mathf.Clamp(Mathf.RoundToInt(cropPixelsW * Mathf.Max(0.01f, state.StretchX)), 1, maxTextureSize);
+            var outputHeight = Mathf.Clamp(Mathf.RoundToInt(cropPixelsH * Mathf.Max(0.01f, state.StretchY)), 1, maxTextureSize);
+            var pixels = new Color32[outputWidth * outputHeight];
+            for (var y = 0; y < outputHeight; y++)
+            {
+                var v = (y + 0.5f) / Mathf.Max(1f, outputHeight);
+                if (state.FlipY)
+                {
+                    v = 1f - v;
+                }
+
+                var sourceV = crop.yMin + v * crop.height;
+                for (var x = 0; x < outputWidth; x++)
+                {
+                    var u = (x + 0.5f) / Mathf.Max(1f, outputWidth);
+                    if (state.FlipX)
+                    {
+                        u = 1f - u;
+                    }
+
+                    var sourceU = crop.xMin + u * crop.width;
+                    var color = source.GetPixelBilinear(Mathf.Clamp01(sourceU), Mathf.Clamp01(sourceV));
+                    if (tintSticker)
+                    {
+                        color = new Color(_brushColor.r, _brushColor.g, _brushColor.b, color.a);
+                    }
+
+                    color = ApplyPlacementFilter(color, state);
+                    pixels[y * outputWidth + x] = color;
+                }
+            }
+
+            texture = new Texture2D(outputWidth, outputHeight, TextureFormat.RGBA32, false)
+            {
+                name = $"DrawableSuitsEdited{target}Stamp",
+                filterMode = FilterMode.Bilinear,
+                wrapMode = TextureWrapMode.Clamp,
+                hideFlags = HideFlags.HideAndDontSave
+            };
+            texture.SetPixels32(pixels);
+            texture.Apply(false, false);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            failureReason = ex.Message;
+            DrawableSuitsDiagnostics.Exception($"PlacementEditedStampGenerated failed. target={target}; source={source.name}; size={source.width}x{source.height}", ex);
+            return false;
+        }
+    }
+
+    private static Color ApplyPlacementFilter(Color color, PlacementEditState state)
+    {
+        if (state == null || !state.HasActiveFilters)
+        {
+            return color;
+        }
+
+        var result = new Color(color.r, color.g, color.b, 1f);
+        ApplyPlacementFilterAmount(ref result, state.GrayscaleAmount, ToGrayscale(result));
+        ApplyPlacementFilterAmount(ref result, state.SepiaAmount, ToSepia(result));
+        ApplyPlacementFilterAmount(ref result, state.InvertAmount, new Color(1f - result.r, 1f - result.g, 1f - result.b, 1f));
+        ApplyPlacementFilterAmount(ref result, state.BrightnessAmount, new Color(result.r + 0.35f, result.g + 0.35f, result.b + 0.35f, 1f));
+        ApplyPlacementFilterAmount(ref result, state.ContrastAmount, AdjustContrast(result, 2.25f));
+        ApplyPlacementFilterAmount(ref result, state.SaturationAmount, AdjustSaturation(result, 2.75f));
+        if (state.HueShiftAmount > 0.0001f)
+        {
+            result = ShiftHue(result, Mathf.Clamp01(state.HueShiftAmount) * 0.5f);
+        }
+
+        return new Color(Mathf.Clamp01(result.r), Mathf.Clamp01(result.g), Mathf.Clamp01(result.b), color.a);
+    }
+
+    private static void ApplyPlacementFilterAmount(ref Color color, float amount, Color filtered)
+    {
+        amount = Mathf.Clamp01(amount);
+        if (amount <= 0.0001f)
+        {
+            return;
+        }
+
+        var result = Color.Lerp(color, filtered, amount);
+        color = new Color(Mathf.Clamp01(result.r), Mathf.Clamp01(result.g), Mathf.Clamp01(result.b), 1f);
+    }
+
+    private static Color ToGrayscale(Color color)
+    {
+        var gray = color.r * 0.299f + color.g * 0.587f + color.b * 0.114f;
+        return new Color(gray, gray, gray, 1f);
+    }
+
+    private static Color ToSepia(Color color)
+    {
+        return new Color(
+            Mathf.Clamp01(color.r * 0.393f + color.g * 0.769f + color.b * 0.189f),
+            Mathf.Clamp01(color.r * 0.349f + color.g * 0.686f + color.b * 0.168f),
+            Mathf.Clamp01(color.r * 0.272f + color.g * 0.534f + color.b * 0.131f),
+            1f);
+    }
+
+    private static Color AdjustContrast(Color color, float factor)
+    {
+        return new Color(
+            Mathf.Clamp01((color.r - 0.5f) * factor + 0.5f),
+            Mathf.Clamp01((color.g - 0.5f) * factor + 0.5f),
+            Mathf.Clamp01((color.b - 0.5f) * factor + 0.5f),
+            1f);
+    }
+
+    private static Color AdjustSaturation(Color color, float factor)
+    {
+        var gray = ToGrayscale(color);
+        return new Color(
+            Mathf.Clamp01(gray.r + (color.r - gray.r) * factor),
+            Mathf.Clamp01(gray.g + (color.g - gray.g) * factor),
+            Mathf.Clamp01(gray.b + (color.b - gray.b) * factor),
+            1f);
+    }
+
+    private static Color ShiftHue(Color color, float amount)
+    {
+        Color.RGBToHSV(color, out var hue, out var saturation, out var value);
+        hue = Mathf.Repeat(hue + amount, 1f);
+        return Color.HSVToRGB(hue, saturation, value);
     }
 
     private bool TryGetTextStampTexture(out Texture2D texture, out string failureReason)
@@ -8708,9 +9312,13 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        if (_loadedDecal == null)
+        if (!TryGetActivePlacementStamp(out var stampTexture, out var failureReason))
         {
             WarnMissingDecal("WorldThirdPerson surface stamp");
+            if (!string.IsNullOrWhiteSpace(failureReason))
+            {
+                SetStatus($"Decal failed: {failureReason}.", false);
+            }
             _tool = EditorTool.Paint;
             UpdateToolButtons();
             return;
@@ -8719,17 +9327,17 @@ internal sealed class SuitEditorController : MonoBehaviour
         SaveUndo("Decal placed");
         ClearRedoHistory("world decal stamp");
         var touchedPixels = mirrorTarget.Enabled && mirrorTarget.Available ? new HashSet<int>() : null;
-        var primaryChanged = CompositeDecalSurfaceStamp(texture, _loadedDecal, hit.point, hit.normal, _decalRotation, false, _brushOpacity, touchedPixels, out var primaryStats);
+        var primaryChanged = CompositeDecalSurfaceStamp(texture, stampTexture, hit.point, hit.normal, _decalRotation, false, _brushOpacity, touchedPixels, out var primaryStats);
         var mirrorChanged = false;
         TextSurfaceStampStats mirrorStats = default;
         if (ShouldApplyMirror(texture, hit.textureCoord, mirrorTarget) && TryGetMirrorWorldPlacement(mirrorTarget, out var mirrorPoint, out var mirrorNormal))
         {
-            mirrorChanged = CompositeDecalSurfaceStamp(texture, _loadedDecal, mirrorPoint, mirrorNormal, -_decalRotation, true, _brushOpacity, touchedPixels, out mirrorStats);
+            mirrorChanged = CompositeDecalSurfaceStamp(texture, stampTexture, mirrorPoint, mirrorNormal, -_decalRotation, true, _brushOpacity, touchedPixels, out mirrorStats);
         }
 
         if (!primaryChanged && !mirrorChanged)
         {
-            LogDecalSurfaceStampSkipped("WorldThirdPerson", "surface projection wrote no pixels", texture, hit, mirrorTarget, _loadedDecal, primaryStats, mirrorStats);
+            LogDecalSurfaceStampSkipped("WorldThirdPerson", "surface projection wrote no pixels", texture, hit, mirrorTarget, stampTexture, primaryStats, mirrorStats);
             DropLastUndoEntry("Decal placed wrote no pixels");
             return;
         }
@@ -8742,7 +9350,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         {
             SetStatus("Mirror target not found; applied primary only.", false);
         }
-        LogDecalSurfaceStampCommitted(texture, hit, mirrorTarget, _loadedDecal, primaryStats, mirrorStats);
+        LogDecalSurfaceStampCommitted(texture, hit, mirrorTarget, stampTexture, primaryStats, mirrorStats);
         LogPaintApplied(texture, hit.textureCoord, mirrorTarget);
         UpdateBrushIndicator();
     }
@@ -8824,7 +9432,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        if (!TryGetStickerStampTexture(_stickerShape, out var stampTexture, out var failureReason))
+        if (!TryGetActivePlacementStamp(out var stampTexture, out var failureReason))
         {
             SetStatus($"Sticker failed: {failureReason}.", false);
             LogStickerSurfaceStampSkipped("WorldThirdPerson", failureReason, texture, hit, mirrorTarget, stampTexture, default, default);
@@ -8834,12 +9442,12 @@ internal sealed class SuitEditorController : MonoBehaviour
         SaveUndo("Sticker placed");
         ClearRedoHistory("world sticker stamp");
         var touchedPixels = mirrorTarget.Enabled && mirrorTarget.Available ? new HashSet<int>() : null;
-        var primaryChanged = CompositeDecalSurfaceStamp(texture, stampTexture, hit.point, hit.normal, _stickerRotation, false, _brushOpacity, touchedPixels, out var primaryStats, true);
+        var primaryChanged = CompositeDecalSurfaceStamp(texture, stampTexture, hit.point, hit.normal, _stickerRotation, false, _brushOpacity, touchedPixels, out var primaryStats, false);
         var mirrorChanged = false;
         TextSurfaceStampStats mirrorStats = default;
         if (ShouldApplyMirror(texture, hit.textureCoord, mirrorTarget) && TryGetMirrorWorldPlacement(mirrorTarget, out var mirrorPoint, out var mirrorNormal))
         {
-            mirrorChanged = CompositeDecalSurfaceStamp(texture, stampTexture, mirrorPoint, mirrorNormal, -_stickerRotation, true, _brushOpacity, touchedPixels, out mirrorStats, true);
+            mirrorChanged = CompositeDecalSurfaceStamp(texture, stampTexture, mirrorPoint, mirrorNormal, -_stickerRotation, true, _brushOpacity, touchedPixels, out mirrorStats, false);
         }
 
         if (!primaryChanged && !mirrorChanged)
@@ -10063,13 +10671,17 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private bool ApplyDecal(Texture2D target, Vector2 uv, bool mirrored = false, HashSet<int> touchedPixels = null)
     {
-        if (_loadedDecal == null)
+        if (!TryGetActivePlacementStamp(out var stampTexture, out var failureReason))
         {
             WarnMissingDecal("ApplyDecal");
+            if (!string.IsNullOrWhiteSpace(failureReason))
+            {
+                DrawableSuitsDiagnostics.Info($"DecalStampSkipped: mode=ApplyDecal; reason={failureReason}; decal={CurrentDecalName()}; suit={_selectedSuitId}");
+            }
             return false;
         }
 
-        return CompositePlacementStamp(target, _loadedDecal, uv, _decalSize, mirrored ? -_decalRotation : _decalRotation, _brushOpacity, mirrored, touchedPixels);
+        return CompositePlacementStamp(target, stampTexture, uv, _decalSize, mirrored ? -_decalRotation : _decalRotation, _brushOpacity, mirrored, touchedPixels);
     }
 
     private bool ApplyTextStamp(Texture2D target, Vector2 uv, bool mirrored = false, HashSet<int> touchedPixels = null)
@@ -10085,13 +10697,13 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private bool ApplyStickerStamp(Texture2D target, Vector2 uv, bool mirrored = false, HashSet<int> touchedPixels = null)
     {
-        if (!TryGetStickerStampTexture(_stickerShape, out var stampTexture, out var failureReason))
+        if (!TryGetActivePlacementStamp(out var stampTexture, out var failureReason))
         {
             LogStickerStampSkipped("ApplyStickerStamp", failureReason);
             return false;
         }
 
-        return CompositePlacementStamp(target, stampTexture, uv, _stickerSize, mirrored ? -_stickerRotation : _stickerRotation, _brushOpacity, mirrored, touchedPixels, true);
+        return CompositePlacementStamp(target, stampTexture, uv, _stickerSize, mirrored ? -_stickerRotation : _stickerRotation, _brushOpacity, mirrored, touchedPixels, false);
     }
 
     private bool CompositeTextSurfaceStamp(Texture2D target, Texture2D stamp, Vector3 center, Vector3 normal, float rotation, bool mirrored, float opacity, HashSet<int> touchedPixels, out TextSurfaceStampStats stats)
@@ -11577,6 +12189,419 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
     }
 
+    private void OpenPlacementEditPanel(PlacementEditTarget target)
+    {
+        if (_placementEditPanelObject == null)
+        {
+            return;
+        }
+
+        if (target == PlacementEditTarget.Decal && _loadedDecal == null)
+        {
+            SetStatus("Select a decal before editing it.", false);
+            return;
+        }
+
+        if (target == PlacementEditTarget.Sticker && !TryGetStickerStampTexture(_stickerShape, out _, out var failureReason))
+        {
+            SetStatus($"Sticker failed: {failureReason}.", false);
+            return;
+        }
+
+        CancelPendingFileDeletes("open placement edit panel");
+        CloseDecalsPanel();
+        CloseStickersPanel();
+        _activePlacementEditTarget = target;
+        _placementEditPanelObject.SetActive(true);
+        RefreshPlacementEditPanelUi();
+        RebuildSelectableNavigation();
+        var state = GetPlacementEditState(target);
+        DrawableSuitsDiagnostics.Info($"PlacementEditPanelOpened: target={target}; source={GetPlacementEditSourceName(target)}; crop={DescribePlacementCrop(state)}; stretch={DescribePlacementStretch(state)}; flip={DescribePlacementFlip(state)}; filters={DescribePlacementFilters(state)}; suit={_selectedSuitId}");
+    }
+
+    private void ClosePlacementEditPanel()
+    {
+        var wasOpen = IsPlacementEditPanelOpen();
+        var target = _activePlacementEditTarget;
+        if (_placementEditPanelObject != null)
+        {
+            _placementEditPanelObject.SetActive(false);
+        }
+
+        _activePlacementEditTarget = PlacementEditTarget.None;
+        if (_placementEditPreviewImage != null)
+        {
+            _placementEditPreviewImage.texture = null;
+        }
+
+        RebuildSelectableNavigation();
+        if (wasOpen)
+        {
+            DrawableSuitsDiagnostics.Info($"PlacementEditPanelClosed: target={target}; source={GetPlacementEditSourceName(target)}; suit={_selectedSuitId}");
+        }
+    }
+
+    private void RefreshPlacementEditPanelUi()
+    {
+        if (!IsPlacementEditPanelOpen())
+        {
+            return;
+        }
+
+        var target = _activePlacementEditTarget;
+        var state = GetPlacementEditState(target);
+        if (state == null)
+        {
+            SetPlacementEditStatus("No editable placement selected.");
+            return;
+        }
+
+        if (_placementEditTitleLabel != null)
+        {
+            _placementEditTitleLabel.text = target == PlacementEditTarget.Sticker ? "Edit Sticker" : "Edit Decal";
+        }
+        if (_placementEditSourceLabel != null)
+        {
+            _placementEditSourceLabel.text = $"{GetPlacementEditSourceName(target)}\nTemporary edits affect preview and future stamps only.";
+        }
+
+        SetPlacementEditSliderValues(state);
+        if (_placementEditFlipXButton != null)
+        {
+            SetToolButtonColor(_placementEditFlipXButton, state.FlipX);
+        }
+        if (_placementEditFlipYButton != null)
+        {
+            SetToolButtonColor(_placementEditFlipYButton, state.FlipY);
+        }
+
+        if (_placementEditPreviewImage == null)
+        {
+            return;
+        }
+
+        var sourceFailure = string.Empty;
+        var previewFailure = string.Empty;
+        if (TryGetPlacementEditSourceTexture(target, out var source, out sourceFailure)
+            && TryGetEditedPlacementStamp(target, source, target == PlacementEditTarget.Sticker, out var preview, out previewFailure))
+        {
+            _placementEditPreviewImage.texture = preview;
+            _placementEditPreviewImage.color = Color.white;
+            FitPlacementEditPreview(preview);
+            SetPlacementEditStatus(state.IsDefault ? "No temporary edits applied." : "Temporary edit preview ready.");
+            return;
+        }
+
+        _placementEditPreviewImage.texture = null;
+        SetPlacementEditStatus(string.IsNullOrWhiteSpace(sourceFailure) ? previewFailure : sourceFailure);
+    }
+
+    private void SetPlacementEditSliderValues(PlacementEditState state)
+    {
+        if (state == null)
+        {
+            return;
+        }
+
+        _placementEditCropLeftSlider?.SetValue(state.CropLeft, false);
+        _placementEditCropRightSlider?.SetValue(state.CropRight, false);
+        _placementEditCropBottomSlider?.SetValue(state.CropBottom, false);
+        _placementEditCropTopSlider?.SetValue(state.CropTop, false);
+        _placementEditStretchXSlider?.SetValue(state.StretchX, false);
+        _placementEditStretchYSlider?.SetValue(state.StretchY, false);
+        foreach (var filter in PlacementFilterRows)
+        {
+            var amount = state.GetFilterAmount(filter);
+            if (_placementEditFilterSliders.TryGetValue(filter, out var slider))
+            {
+                slider.SetValue(amount, false);
+            }
+            if (_placementEditFilterValueLabels.TryGetValue(filter, out var label))
+            {
+                label.text = $"{Mathf.RoundToInt(amount * 100f)}%";
+                label.color = amount > 0.0001f ? TerminalStatusColor : TerminalMutedTextColor;
+            }
+        }
+        if (_placementEditCropLeftLabel != null) _placementEditCropLeftLabel.text = $"Left {Mathf.RoundToInt(state.CropLeft * 100f)}%";
+        if (_placementEditCropRightLabel != null) _placementEditCropRightLabel.text = $"Right {Mathf.RoundToInt(state.CropRight * 100f)}%";
+        if (_placementEditCropBottomLabel != null) _placementEditCropBottomLabel.text = $"Bottom {Mathf.RoundToInt(state.CropBottom * 100f)}%";
+        if (_placementEditCropTopLabel != null) _placementEditCropTopLabel.text = $"Top {Mathf.RoundToInt(state.CropTop * 100f)}%";
+        if (_placementEditStretchXLabel != null) _placementEditStretchXLabel.text = $"Width {state.StretchX:0.##}x";
+        if (_placementEditStretchYLabel != null) _placementEditStretchYLabel.text = $"Height {state.StretchY:0.##}x";
+    }
+
+    private void OnPlacementEditChanged(string reason)
+    {
+        var state = GetPlacementEditState(_activePlacementEditTarget);
+        if (state == null)
+        {
+            return;
+        }
+
+        state.Revision++;
+        InvalidateEditedPlacementStamp(_activePlacementEditTarget);
+        InvalidateDecalPreview($"placement edit changed: {reason}");
+        RefreshPlacementEditPanelUi();
+        DrawableSuitsDiagnostics.Info($"PlacementEditChanged: target={_activePlacementEditTarget}; source={GetPlacementEditSourceName(_activePlacementEditTarget)}; reason={reason}; crop={DescribePlacementCrop(state)}; stretch={DescribePlacementStretch(state)}; flip={DescribePlacementFlip(state)}; filters={DescribePlacementFilters(state)}; revision={state.Revision}; suit={_selectedSuitId}");
+    }
+
+    private void ResetActivePlacementEdit()
+    {
+        ResetPlacementEdit(_activePlacementEditTarget, "user reset edits", true);
+        RefreshPlacementEditPanelUi();
+        SetPlacementEditStatus("Temporary edits reset.");
+    }
+
+    private void ResetPlacementEdits(string reason, bool log)
+    {
+        ResetPlacementEdit(PlacementEditTarget.Decal, reason, log);
+        ResetPlacementEdit(PlacementEditTarget.Sticker, reason, log);
+    }
+
+    private void ResetPlacementEdit(PlacementEditTarget target, string reason, bool log)
+    {
+        var state = GetPlacementEditState(target);
+        if (state == null)
+        {
+            return;
+        }
+
+        state.Reset();
+        InvalidateEditedPlacementStamp(target);
+        InvalidateDecalPreview($"placement edit reset: {reason}");
+        if (log)
+        {
+            DrawableSuitsDiagnostics.Info($"PlacementEditReset: target={target}; source={GetPlacementEditSourceName(target)}; reason={reason}; crop={DescribePlacementCrop(state)}; stretch={DescribePlacementStretch(state)}; flip={DescribePlacementFlip(state)}; filters={DescribePlacementFilters(state)}; revision={state.Revision}; suit={_selectedSuitId}");
+        }
+    }
+
+    private void TogglePlacementEditFlipX()
+    {
+        var state = GetPlacementEditState(_activePlacementEditTarget);
+        if (state == null)
+        {
+            return;
+        }
+
+        state.FlipX = !state.FlipX;
+        OnPlacementEditChanged("flip x");
+    }
+
+    private void TogglePlacementEditFlipY()
+    {
+        var state = GetPlacementEditState(_activePlacementEditTarget);
+        if (state == null)
+        {
+            return;
+        }
+
+        state.FlipY = !state.FlipY;
+        OnPlacementEditChanged("flip y");
+    }
+
+    private PlacementEditState GetPlacementEditState(PlacementEditTarget target)
+    {
+        return target switch
+        {
+            PlacementEditTarget.Decal => _decalPlacementEdit,
+            PlacementEditTarget.Sticker => _stickerPlacementEdit,
+            _ => null
+        };
+    }
+
+    private bool TryGetPlacementEditSourceTexture(PlacementEditTarget target, out Texture2D texture, out string failureReason)
+    {
+        texture = null;
+        failureReason = string.Empty;
+        if (target == PlacementEditTarget.Decal)
+        {
+            if (_loadedDecal == null)
+            {
+                failureReason = "Select a decal first.";
+                return false;
+            }
+
+            texture = _loadedDecal;
+            return true;
+        }
+
+        if (target == PlacementEditTarget.Sticker)
+        {
+            return TryGetStickerStampTexture(_stickerShape, out texture, out failureReason);
+        }
+
+        failureReason = "No placement edit target.";
+        return false;
+    }
+
+    private void InvalidateEditedPlacementStamp(PlacementEditTarget target)
+    {
+        if (target == PlacementEditTarget.Decal)
+        {
+            if (_editedDecalStampTexture != null)
+            {
+                Destroy(_editedDecalStampTexture);
+                _editedDecalStampTexture = null;
+            }
+
+            _editedDecalStampKey = string.Empty;
+            return;
+        }
+
+        if (target == PlacementEditTarget.Sticker)
+        {
+            if (_editedStickerStampTexture != null)
+            {
+                Destroy(_editedStickerStampTexture);
+                _editedStickerStampTexture = null;
+            }
+
+            _editedStickerStampKey = string.Empty;
+        }
+    }
+
+    private void DestroyPlacementEditResources()
+    {
+        InvalidateEditedPlacementStamp(PlacementEditTarget.Decal);
+        InvalidateEditedPlacementStamp(PlacementEditTarget.Sticker);
+        if (_placementEditCheckerTexture != null)
+        {
+            Destroy(_placementEditCheckerTexture);
+            _placementEditCheckerTexture = null;
+        }
+    }
+
+    private void SetPlacementEditStatus(string message)
+    {
+        if (_placementEditStatusLabel != null)
+        {
+            _placementEditStatusLabel.text = message ?? string.Empty;
+        }
+    }
+
+    private string GetPlacementEditSourceName(PlacementEditTarget target)
+    {
+        return target switch
+        {
+            PlacementEditTarget.Decal => _selectedDecalIndex >= 0 && _selectedDecalIndex < _decalFiles.Count
+                ? Path.GetFileName(_decalFiles[_selectedDecalIndex])
+                : _loadedDecal != null ? _loadedDecal.name : "No decal selected",
+            PlacementEditTarget.Sticker => StickerShapeDisplayName(_stickerShape),
+            _ => "None"
+        };
+    }
+
+    private static string PlacementFilterDisplayName(PlacementFilter filter)
+    {
+        return filter switch
+        {
+            PlacementFilter.None => "None",
+            PlacementFilter.Grayscale => "Grayscale",
+            PlacementFilter.Invert => "Invert",
+            PlacementFilter.Sepia => "Sepia",
+            PlacementFilter.Brightness => "Brightness",
+            PlacementFilter.Contrast => "Contrast",
+            PlacementFilter.Saturation => "Saturation",
+            PlacementFilter.HueShift => "Hue Shift",
+            _ => filter.ToString()
+        };
+    }
+
+    private static string DescribePlacementCrop(PlacementEditState state)
+    {
+        return state == null
+            ? "none"
+            : $"{state.CropLeft:0.###},{state.CropRight:0.###},{state.CropBottom:0.###},{state.CropTop:0.###}";
+    }
+
+    private static string DescribePlacementStretch(PlacementEditState state)
+    {
+        return state == null ? "none" : $"{state.StretchX:0.###},{state.StretchY:0.###}";
+    }
+
+    private static string DescribePlacementFlip(PlacementEditState state)
+    {
+        return state == null ? "none" : $"{state.FlipX},{state.FlipY}";
+    }
+
+    private static string DescribePlacementFilters(PlacementEditState state)
+    {
+        if (state == null)
+        {
+            return "none";
+        }
+
+        return $"gray={state.GrayscaleAmount:0.###},sepia={state.SepiaAmount:0.###},invert={state.InvertAmount:0.###},brightness={state.BrightnessAmount:0.###},contrast={state.ContrastAmount:0.###},saturation={state.SaturationAmount:0.###},hue={state.HueShiftAmount:0.###}";
+    }
+
+    private void FitPlacementEditPreview(Texture2D texture)
+    {
+        if (_placementEditPreviewRect == null || _placementEditPreviewFrameRect == null || texture == null)
+        {
+            return;
+        }
+
+        var frameSize = _placementEditPreviewFrameRect.rect.size;
+        if (frameSize.x <= 1f || frameSize.y <= 1f)
+        {
+            frameSize = _placementEditPreviewFrameRect.sizeDelta;
+        }
+
+        var availableWidth = Mathf.Max(24f, frameSize.x - 16f);
+        var availableHeight = Mathf.Max(24f, frameSize.y - 16f);
+        var aspect = texture.width / Mathf.Max(1f, (float)texture.height);
+        var width = availableWidth;
+        var height = width / Mathf.Max(0.0001f, aspect);
+        if (height > availableHeight)
+        {
+            height = availableHeight;
+            width = height * aspect;
+        }
+
+        _placementEditPreviewRect.anchorMin = new Vector2(0.5f, 0.5f);
+        _placementEditPreviewRect.anchorMax = new Vector2(0.5f, 0.5f);
+        _placementEditPreviewRect.pivot = new Vector2(0.5f, 0.5f);
+        _placementEditPreviewRect.anchoredPosition = Vector2.zero;
+        _placementEditPreviewRect.sizeDelta = new Vector2(Mathf.Clamp(width, 8f, availableWidth), Mathf.Clamp(height, 8f, availableHeight));
+    }
+
+    private Texture2D GetPlacementEditCheckerTexture()
+    {
+        if (_placementEditCheckerTexture != null)
+        {
+            return _placementEditCheckerTexture;
+        }
+
+        const int size = 32;
+        const int cell = 8;
+        var texture = new Texture2D(size, size, TextureFormat.RGBA32, false)
+        {
+            name = "DrawableSuitsPlacementEditChecker",
+            filterMode = FilterMode.Point,
+            wrapMode = TextureWrapMode.Repeat,
+            hideFlags = HideFlags.HideAndDontSave
+        };
+        var dark = new Color32(18, 8, 8, 255);
+        var light = new Color32(42, 18, 18, 255);
+        var pixels = new Color32[size * size];
+        for (var y = 0; y < size; y++)
+        {
+            for (var x = 0; x < size; x++)
+            {
+                pixels[(y * size) + x] = ((x / cell) + (y / cell)) % 2 == 0 ? dark : light;
+            }
+        }
+        texture.SetPixels32(pixels);
+        texture.Apply(false, false);
+        _placementEditCheckerTexture = texture;
+        return texture;
+    }
+
+    private void LogPlacementEditedStampGenerated(PlacementEditTarget target, Texture2D source, PlacementEditState state, Texture2D generated, bool cacheHit)
+    {
+        DrawableSuitsDiagnostics.Info($"PlacementEditedStampGenerated: target={target}; source={GetPlacementEditSourceName(target)}; sourceSize={source?.width ?? 0}x{source?.height ?? 0}; crop={DescribePlacementCrop(state)}; stretch={DescribePlacementStretch(state)}; flip={DescribePlacementFlip(state)}; filters={DescribePlacementFilters(state)}; cacheHit={cacheHit}; generatedSize={generated?.width ?? 0}x{generated?.height ?? 0}; suit={_selectedSuitId}");
+    }
+
     private void SetSavedDesignsStatus(string message)
     {
         if (_savedDesignsStatusLabel != null)
@@ -11667,6 +12692,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             _loadedDecal = null;
         }
 
+        ResetPlacementEdit(PlacementEditTarget.Decal, "decal deleted", true);
         InvalidateDecalPreview("decal deleted");
         RefreshFileLists();
         EnsureValidToolForCurrentState("decal deleted");
@@ -12334,6 +13360,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         CancelPendingDecalDelete("decal selection changed");
         _selectedDecalIndex = index;
+        ResetPlacementEdit(PlacementEditTarget.Decal, "select decal", true);
         InvalidateDecalPreview("select decal");
         if (_loadedDecal != null)
         {

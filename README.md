@@ -137,7 +137,7 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.50 behavior:
+Expected 0.5.52 behavior:
 
 - Opening the editor shows an Imperium-inspired red/dark terminal overlay and a third-person camera view of the local player.
 - Paint, Erase, Fill, Decal, Text, Sticker, Eyedropper, and Mirror use embedded generated PNG icon masks instead of large text tool buttons or procedural mesh glyphs. The active tool label names the current icon, and Mirror remains a UI-only modifier.
@@ -163,6 +163,9 @@ Expected 0.5.50 behavior:
 - Controller `A` does not activate UI immediately after opening; move the left stick once to arm the virtual cursor, then `A` clicks the control under the cursor.
 - Normal buttons should not stay highlighted after unrelated clicks; only selected tools, decals, and saved designs keep orange selection styling.
 - The decal section has a `Decals` menu button. Its modal `Add Decal` button starts an external Windows picker process, waits asynchronously for a selected PNG/JPG/JPEG, validates and copies it into the Decals folder, refreshes decal rows, selects the imported image, and shows only a short status line. `Refresh` still reloads decal rows after manual folder changes.
+- `Edit Decal` opens a temporary edit panel for the selected decal. Crop, stretch, flip, and filter settings affect previews and future stamps; the source image file is never overwritten.
+- Decal and Sticker temporary filters use fixed rows for Grayscale, Sepia, Invert, Brightness, Contrast, Saturation, and Hue Shift, with independent intensity sliders that can be combined.
+- The temporary edit preview preserves the generated stamp aspect after crop and width/height stretch, so the panel preview should match the placement preview and final stamp shape.
 - In Decal or Sticker mode over the third-person suit, the projected preview hides while the cursor is moving and appears after the cursor has been still briefly. Click/RT still stamps immediately even before the preview appears.
 - Decal placement is single-shot: holding left mouse or RT places one decal until the input is released and pressed again.
 - Third-person Decal preview and stamping project onto the visible suit surface and fill between valid projected samples, so decals avoid both UV-island wrapping and small suit-background cracks on curved geometry. The UV panel keeps direct flat UV decal stamping.
@@ -175,6 +178,7 @@ Expected 0.5.50 behavior:
 - The UV panel keeps direct flat UV Text stamping for texture-layout editing.
 - Text is baked into the suit texture after stamping. It is not an editable layer after placement.
 - In Sticker mode, the `Stickers` menu offers Circle, Square, Triangle, Diamond, Star, Heart, Arrow, Lightning Bolt, Plus/Cross, Ring, Crescent, and Shield. Stickers use the current brush color and opacity, preview live on the suit or UV panel, stamp once per press, and are baked into the texture.
+- `Edit Sticker` opens the same temporary edit controls for the selected built-in sticker. Stickers remain brush-color based; filters are applied after tinting for the temporary stamp texture only.
 - The `Fill` button is a UI-only tool. It flood-fills the contiguous same-color region under the cursor using the current brush color and opacity.
 - Fill is single-shot: holding left mouse or controller RT fills once until the input is released and pressed again.
 - The Fill Tolerance slider appears when Fill is active. Lower tolerance fills tighter matching regions; higher tolerance accepts more color variation.
@@ -219,6 +223,7 @@ Troubleshooting:
 - If Eyedropper does not sample a color, check `EyedropperMiss` entries for whether the cursor was over the visible suit or UV panel. A successful sample logs `EyedropperSampled` with UV, pixel, sampled hex color, and return tool.
 - If Text does not preview or stamp, check that the text field is not empty, then search `diagnostics.log` for `TextStampRendered`, `TextPreviewUpdated`, `TextPreviewHidden`, `TextStampCommitted`, or `TextStampSkipped`.
 - If Sticker does not preview or stamp, confirm Sticker tool is active and a shape is selected, then search `diagnostics.log` for `StickerShapeSelected`, `StickerPreviewUpdated`, `StickerPreviewHidden`, `StickerStampCommitted`, or `StickerStampSkipped`.
+- If Decal or Sticker temporary edits do not appear, final Decal stamps use the original image, or the edit-panel preview looks stretched, confirm the installed package is 0.5.52 or newer and check `PlacementEditPanelOpened`, `PlacementEditChanged`, `PlacementEditedStampGenerated`, `PlacementEditReset`, and `PlacementEditPanelClosed`. These edits are session-only and never modify decal files or built-in sticker sources.
 - If Text stamps with a black rectangle, confirm the installed package is 0.5.10 or newer. `TextStampRendered` should report `alphaMode=luminance`, glyph bounds, and a trimmed final texture size.
 - If third-person Text drops side letters, confirm the installed package is 0.5.11 or newer and check `TextSurfacePreviewUpdated`, `TextSurfaceStampCommitted`, or `TextSurfaceStampSkipped` for written and skipped glyph-pixel counts.
 - If third-person Text appears backwards, confirm the installed package is 0.5.12 or newer and check `TextProjectionFrameBuilt` for camera-right alignment and sample order diagnostics.
