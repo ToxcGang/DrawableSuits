@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using System.Threading.Tasks;
 using GameNetcodeStuff;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -517,6 +518,12 @@ internal sealed class SuitEditorController : MonoBehaviour
     private float _lastPlacementEditPreviewLogTime;
     private string _lastPlacementSourcePixelsLogKey = string.Empty;
     private float _lastPlacementSourcePixelsLogTime;
+    private DecalEditPreviewJobRequest _pendingDecalEditPreviewJob;
+    private DecalEditPreviewJobRequest _runningDecalEditPreviewJob;
+    private Task<DecalEditPreviewJobResult> _runningDecalEditPreviewTask;
+    private int _decalEditPreviewJobSerial;
+    private string _lastDecalEditPreviewJobLogKey = string.Empty;
+    private float _lastDecalEditPreviewJobLogTime;
     private DiagnosticsProcess _pendingDecalImportProcess;
     private float _pendingDecalImportStartedAt;
     private int _pendingDecalImportId;
@@ -693,6 +700,88 @@ internal sealed class SuitEditorController : MonoBehaviour
         internal int Width;
         internal int Height;
         internal Color32[] Pixels;
+    }
+
+    private sealed class PlacementEditSnapshot
+    {
+        internal float CropLeft;
+        internal float CropRight;
+        internal float CropBottom;
+        internal float CropTop;
+        internal float StretchX = 1f;
+        internal float StretchY = 1f;
+        internal bool FlipX;
+        internal bool FlipY;
+        internal float GrayscaleAmount;
+        internal float InvertAmount;
+        internal float SepiaAmount;
+        internal float BrightnessAmount;
+        internal float ContrastAmount;
+        internal float SaturationAmount;
+        internal float HueShiftAmount;
+        internal int Revision;
+        internal string Key = string.Empty;
+
+        internal bool HasActiveFilters =>
+            GrayscaleAmount > 0.0001f
+            || InvertAmount > 0.0001f
+            || SepiaAmount > 0.0001f
+            || BrightnessAmount > 0.0001f
+            || ContrastAmount > 0.0001f
+            || SaturationAmount > 0.0001f
+            || HueShiftAmount > 0.0001f;
+
+        internal static PlacementEditSnapshot From(PlacementEditState state)
+        {
+            return new PlacementEditSnapshot
+            {
+                CropLeft = state?.CropLeft ?? 0f,
+                CropRight = state?.CropRight ?? 0f,
+                CropBottom = state?.CropBottom ?? 0f,
+                CropTop = state?.CropTop ?? 0f,
+                StretchX = state?.StretchX ?? 1f,
+                StretchY = state?.StretchY ?? 1f,
+                FlipX = state?.FlipX ?? false,
+                FlipY = state?.FlipY ?? false,
+                GrayscaleAmount = state?.GrayscaleAmount ?? 0f,
+                InvertAmount = state?.InvertAmount ?? 0f,
+                SepiaAmount = state?.SepiaAmount ?? 0f,
+                BrightnessAmount = state?.BrightnessAmount ?? 0f,
+                ContrastAmount = state?.ContrastAmount ?? 0f,
+                SaturationAmount = state?.SaturationAmount ?? 0f,
+                HueShiftAmount = state?.HueShiftAmount ?? 0f,
+                Revision = state?.Revision ?? 0,
+                Key = state?.Key() ?? string.Empty
+            };
+        }
+    }
+
+    private sealed class DecalEditPreviewJobRequest
+    {
+        internal int Serial;
+        internal string Key = string.Empty;
+        internal string SourceName = string.Empty;
+        internal int SourceWidth;
+        internal int SourceHeight;
+        internal int MaxTextureSize;
+        internal Color32[] SourcePixels;
+        internal PlacementEditSnapshot State;
+    }
+
+    private sealed class DecalEditPreviewJobResult
+    {
+        internal int Serial;
+        internal string Key = string.Empty;
+        internal string SourceName = string.Empty;
+        internal int SourceWidth;
+        internal int SourceHeight;
+        internal int OutputWidth;
+        internal int OutputHeight;
+        internal Color32[] Pixels;
+        internal string FailureReason = string.Empty;
+        internal float WorkerMs;
+
+        internal bool Success => Pixels != null && Pixels.Length == OutputWidth * OutputHeight && OutputWidth > 0 && OutputHeight > 0 && string.IsNullOrWhiteSpace(FailureReason);
     }
 
     private sealed class RendererRestoreState
@@ -2150,6 +2239,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         ReapplyPlayerInputLock();
         EnsureCursorUnlockedWhileOpen();
         PollPendingDecalImport();
+        PollDecalEditPreviewJob();
         HandleControllerCursor();
         UpdateCanvasCursor(false, "update");
         if (IsWorldThirdPersonMode)
@@ -7469,6 +7559,251 @@ internal sealed class SuitEditorController : MonoBehaviour
         return true;
     }
 
+    private bool TryUpdateAsyncDecalEditPreview(Texture2D source, PlacementEditState state, string reason, float startedAt, out string failureReason)
+    {
+        failureReason = string.Empty;
+        if (source == null)
+        {
+            failureReason = "missing decal source";
+            return false;
+        }
+
+        if (state == null)
+        {
+            failureReason = "missing decal edit state";
+            return false;
+        }
+
+        if (state.IsDefault)
+        {
+            _placementEditPreviewImage.texture = source;
+            _placementEditPreviewImage.color = Color.white;
+            FitPlacementEditPreview(source);
+            SetPlacementEditStatus("No temporary edits applied.");
+            LogPlacementEditPreviewUpdated(PlacementEditTarget.Decal, source, state, source, reason, true, false, (Time.realtimeSinceStartup - startedAt) * 1000f);
+            return true;
+        }
+
+        var key = BuildPlacementStampKey(PlacementEditTarget.Decal, source, false, state, "full", 0);
+        if (_editedDecalStampTexture != null && string.Equals(_editedDecalStampKey, key, StringComparison.Ordinal))
+        {
+            _placementEditPreviewImage.texture = _editedDecalStampTexture;
+            _placementEditPreviewImage.color = Color.white;
+            FitPlacementEditPreview(_editedDecalStampTexture);
+            SetPlacementEditStatus("Temporary edit preview ready.");
+            LogPlacementEditPreviewUpdated(PlacementEditTarget.Decal, source, state, _editedDecalStampTexture, reason, true, true, (Time.realtimeSinceStartup - startedAt) * 1000f);
+            return true;
+        }
+
+        if (!QueueDecalEditPreviewJob(source, state, key, reason, out failureReason))
+        {
+            return false;
+        }
+
+        SetPlacementEditStatus("Rendering decal preview...");
+        return true;
+    }
+
+    private bool QueueDecalEditPreviewJob(Texture2D source, PlacementEditState state, string key, string reason, out string failureReason)
+    {
+        failureReason = string.Empty;
+        if (source == null || state == null)
+        {
+            failureReason = "missing decal edit source";
+            return false;
+        }
+
+        if (_runningDecalEditPreviewTask != null
+            && !_runningDecalEditPreviewTask.IsCompleted
+            && _runningDecalEditPreviewJob != null
+            && string.Equals(_runningDecalEditPreviewJob.Key, key, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (_pendingDecalEditPreviewJob != null && string.Equals(_pendingDecalEditPreviewJob.Key, key, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (!TryGetPlacementSourcePixels(PlacementEditTarget.Decal, source, out var pixels, out var width, out var height, out var cacheHit, out failureReason))
+        {
+            return false;
+        }
+
+        var request = new DecalEditPreviewJobRequest
+        {
+            Serial = ++_decalEditPreviewJobSerial,
+            Key = key,
+            SourceName = GetPlacementEditSourceName(PlacementEditTarget.Decal),
+            SourceWidth = width,
+            SourceHeight = height,
+            MaxTextureSize = Mathf.Clamp(SystemInfo.maxTextureSize > 0 ? SystemInfo.maxTextureSize : 2048, 256, 8192),
+            SourcePixels = pixels,
+            State = PlacementEditSnapshot.From(state)
+        };
+
+        _pendingDecalEditPreviewJob = request;
+        LogDecalEditPreviewJobQueued(request, reason, cacheHit, _runningDecalEditPreviewTask != null && !_runningDecalEditPreviewTask.IsCompleted);
+        if (_runningDecalEditPreviewTask == null || _runningDecalEditPreviewTask.IsCompleted)
+        {
+            StartPendingDecalEditPreviewJob();
+        }
+
+        return true;
+    }
+
+    private void StartPendingDecalEditPreviewJob()
+    {
+        if (_pendingDecalEditPreviewJob == null)
+        {
+            return;
+        }
+
+        _runningDecalEditPreviewJob = _pendingDecalEditPreviewJob;
+        _pendingDecalEditPreviewJob = null;
+        try
+        {
+            var request = _runningDecalEditPreviewJob;
+            _runningDecalEditPreviewTask = Task.Run(() => RunDecalEditPreviewJob(request));
+        }
+        catch (Exception ex)
+        {
+            DrawableSuitsDiagnostics.Exception($"DecalEditPreviewJobQueued failed to start. source={_runningDecalEditPreviewJob.SourceName}; serial={_runningDecalEditPreviewJob.Serial}; suit={_selectedSuitId}", ex);
+            _runningDecalEditPreviewTask = null;
+            _runningDecalEditPreviewJob = null;
+        }
+    }
+
+    private void PollDecalEditPreviewJob()
+    {
+        if (_runningDecalEditPreviewTask == null)
+        {
+            return;
+        }
+
+        if (!_runningDecalEditPreviewTask.IsCompleted)
+        {
+            return;
+        }
+
+        var request = _runningDecalEditPreviewJob;
+        DecalEditPreviewJobResult result;
+        try
+        {
+            result = _runningDecalEditPreviewTask.Result;
+        }
+        catch (Exception ex)
+        {
+            result = new DecalEditPreviewJobResult
+            {
+                Serial = request?.Serial ?? 0,
+                Key = request?.Key ?? string.Empty,
+                SourceName = request?.SourceName ?? "unknown",
+                SourceWidth = request?.SourceWidth ?? 0,
+                SourceHeight = request?.SourceHeight ?? 0,
+                FailureReason = ex.GetBaseException().Message
+            };
+        }
+
+        LogDecalEditPreviewJobCompleted(result);
+        var discardReason = GetDecalEditPreviewDiscardReason(result);
+        if (!string.IsNullOrWhiteSpace(discardReason))
+        {
+            LogDecalEditPreviewJobDiscarded(result, discardReason);
+        }
+        else if (!result.Success)
+        {
+            SetPlacementEditStatus(string.IsNullOrWhiteSpace(result.FailureReason) ? "Decal preview render failed." : result.FailureReason);
+            LogPlacementEditPreviewSkipped(PlacementEditTarget.Decal, "async preview completed", result.FailureReason);
+        }
+        else
+        {
+            ApplyDecalEditPreviewJobResult(result);
+        }
+
+        _runningDecalEditPreviewTask = null;
+        _runningDecalEditPreviewJob = null;
+        StartPendingDecalEditPreviewJob();
+    }
+
+    private string GetDecalEditPreviewDiscardReason(DecalEditPreviewJobResult result)
+    {
+        if (result == null)
+        {
+            return "missing result";
+        }
+
+        if (result.Serial != _decalEditPreviewJobSerial)
+        {
+            return "newer decal edit job exists";
+        }
+
+        if (!IsPlacementEditPanelOpen() || _activePlacementEditTarget != PlacementEditTarget.Decal)
+        {
+            return "decal edit panel closed";
+        }
+
+        if (!TryGetPlacementEditSourceTexture(PlacementEditTarget.Decal, out var source, out _))
+        {
+            return "decal source unavailable";
+        }
+
+        var state = GetPlacementEditState(PlacementEditTarget.Decal);
+        var expectedKey = BuildPlacementStampKey(PlacementEditTarget.Decal, source, false, state, "full", 0);
+        return string.Equals(result.Key, expectedKey, StringComparison.Ordinal)
+            ? string.Empty
+            : "decal edit key changed";
+    }
+
+    private void ApplyDecalEditPreviewJobResult(DecalEditPreviewJobResult result)
+    {
+        var startedAt = Time.realtimeSinceStartup;
+        var texture = new Texture2D(result.OutputWidth, result.OutputHeight, TextureFormat.RGBA32, false)
+        {
+            name = "DrawableSuitsEditedDecalStamp",
+            filterMode = FilterMode.Bilinear,
+            wrapMode = TextureWrapMode.Clamp,
+            hideFlags = HideFlags.HideAndDontSave
+        };
+        texture.SetPixels32(result.Pixels);
+        texture.Apply(false, false);
+
+        if (_editedDecalStampTexture != null)
+        {
+            Destroy(_editedDecalStampTexture);
+        }
+        if (_editedDecalPreviewStampTexture != null)
+        {
+            Destroy(_editedDecalPreviewStampTexture);
+            _editedDecalPreviewStampTexture = null;
+            _editedDecalPreviewStampKey = string.Empty;
+        }
+
+        _editedDecalStampTexture = texture;
+        _editedDecalStampKey = result.Key;
+        if (_placementEditPreviewImage != null && IsPlacementEditPanelOpen() && _activePlacementEditTarget == PlacementEditTarget.Decal)
+        {
+            _placementEditPreviewImage.texture = texture;
+            _placementEditPreviewImage.color = Color.white;
+            FitPlacementEditPreview(texture);
+            SetPlacementEditStatus("Temporary edit preview ready.");
+        }
+
+        InvalidateDecalPreview("decal edit preview job applied");
+        LogDecalEditPreviewJobApplied(result, (Time.realtimeSinceStartup - startedAt) * 1000f);
+    }
+
+    private void CancelDecalEditPreviewJobs(string reason)
+    {
+        _decalEditPreviewJobSerial++;
+        _pendingDecalEditPreviewJob = null;
+        if (_runningDecalEditPreviewJob != null)
+        {
+            DrawableSuitsDiagnostics.Info($"DecalEditPreviewJobDiscarded: source={_runningDecalEditPreviewJob.SourceName}; serial={_runningDecalEditPreviewJob.Serial}; reason={reason}; suit={_selectedSuitId}");
+        }
+    }
+
     private string BuildPlacementStampKey(PlacementEditTarget target, Texture2D source, bool tintSticker, PlacementEditState state, string quality, int maxDimension)
     {
         var colorKey = tintSticker ? ColorToHex(_brushColor) : "source";
@@ -7565,6 +7900,339 @@ internal sealed class SuitEditorController : MonoBehaviour
             DrawableSuitsDiagnostics.Exception($"PlacementEditedStampGenerated failed. target={target}; source={source.name}; size={source.width}x{source.height}", ex);
             return false;
         }
+    }
+
+    private static DecalEditPreviewJobResult RunDecalEditPreviewJob(DecalEditPreviewJobRequest request)
+    {
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var result = new DecalEditPreviewJobResult
+        {
+            Serial = request?.Serial ?? 0,
+            Key = request?.Key ?? string.Empty,
+            SourceName = request?.SourceName ?? "unknown",
+            SourceWidth = request?.SourceWidth ?? 0,
+            SourceHeight = request?.SourceHeight ?? 0
+        };
+
+        try
+        {
+            if (request == null)
+            {
+                result.FailureReason = "missing decal preview request";
+                return result;
+            }
+
+            if (!TryGenerateEditedDecalPixels(
+                    request.SourcePixels,
+                    request.SourceWidth,
+                    request.SourceHeight,
+                    request.State,
+                    request.MaxTextureSize,
+                    out var pixels,
+                    out var outputWidth,
+                    out var outputHeight,
+                    out var failureReason))
+            {
+                result.FailureReason = failureReason;
+                return result;
+            }
+
+            result.Pixels = pixels;
+            result.OutputWidth = outputWidth;
+            result.OutputHeight = outputHeight;
+            return result;
+        }
+        catch (Exception ex)
+        {
+            result.FailureReason = ex.Message;
+            return result;
+        }
+        finally
+        {
+            stopwatch.Stop();
+            result.WorkerMs = (float)stopwatch.Elapsed.TotalMilliseconds;
+        }
+    }
+
+    private static bool TryGenerateEditedDecalPixels(
+        Color32[] sourcePixels,
+        int sourceWidth,
+        int sourceHeight,
+        PlacementEditSnapshot state,
+        int maxTextureSize,
+        out Color32[] outputPixels,
+        out int outputWidth,
+        out int outputHeight,
+        out string failureReason)
+    {
+        outputPixels = null;
+        outputWidth = 0;
+        outputHeight = 0;
+        failureReason = string.Empty;
+        if (sourcePixels == null || sourceWidth <= 0 || sourceHeight <= 0 || sourcePixels.Length < sourceWidth * sourceHeight)
+        {
+            failureReason = "Decal source pixel data was invalid.";
+            return false;
+        }
+
+        state ??= new PlacementEditSnapshot();
+        var minCropSize = Math.Max(Math.Max(1.0 / Math.Max(1, sourceWidth), 1.0 / Math.Max(1, sourceHeight)), 0.01);
+        var left = Clamp01Double(state.CropLeft);
+        var right = Clamp01Double(state.CropRight);
+        var bottom = Clamp01Double(state.CropBottom);
+        var top = Clamp01Double(state.CropTop);
+        if (left + right > 1.0 - minCropSize)
+        {
+            var scale = (1.0 - minCropSize) / Math.Max(0.0001, left + right);
+            left *= scale;
+            right *= scale;
+        }
+        if (bottom + top > 1.0 - minCropSize)
+        {
+            var scale = (1.0 - minCropSize) / Math.Max(0.0001, bottom + top);
+            bottom *= scale;
+            top *= scale;
+        }
+
+        var cropWidth = Math.Max(minCropSize, 1.0 - left - right);
+        var cropHeight = Math.Max(minCropSize, 1.0 - bottom - top);
+        var cropPixelsW = Math.Max(1, RoundPositiveToInt(cropWidth * sourceWidth));
+        var cropPixelsH = Math.Max(1, RoundPositiveToInt(cropHeight * sourceHeight));
+        maxTextureSize = ClampInt(maxTextureSize > 0 ? maxTextureSize : 2048, 256, 8192);
+        var targetWidth = Math.Max(1.0, cropPixelsW * Math.Max(0.01, state.StretchX));
+        var targetHeight = Math.Max(1.0, cropPixelsH * Math.Max(0.01, state.StretchY));
+        outputWidth = ClampInt(RoundPositiveToInt(targetWidth), 1, maxTextureSize);
+        outputHeight = ClampInt(RoundPositiveToInt(targetHeight), 1, maxTextureSize);
+        outputPixels = new Color32[outputWidth * outputHeight];
+
+        for (var y = 0; y < outputHeight; y++)
+        {
+            var v = (y + 0.5) / Math.Max(1.0, outputHeight);
+            if (state.FlipY)
+            {
+                v = 1.0 - v;
+            }
+
+            var sourceV = bottom + v * cropHeight;
+            for (var x = 0; x < outputWidth; x++)
+            {
+                var u = (x + 0.5) / Math.Max(1.0, outputWidth);
+                if (state.FlipX)
+                {
+                    u = 1.0 - u;
+                }
+
+                var sourceU = left + u * cropWidth;
+                var color = SamplePlacementSourceBilinearColor32(sourcePixels, sourceWidth, sourceHeight, sourceU, sourceV);
+                outputPixels[(y * outputWidth) + x] = ApplyPlacementFilterToColor32(color, state);
+            }
+        }
+
+        return true;
+    }
+
+    private static Color32 SamplePlacementSourceBilinearColor32(Color32[] pixels, int width, int height, double u, double v)
+    {
+        if (pixels == null || width <= 0 || height <= 0 || pixels.Length < width * height)
+        {
+            return new Color32(0, 0, 0, 0);
+        }
+
+        var x = Clamp01Double(u) * Math.Max(0, width - 1);
+        var y = Clamp01Double(v) * Math.Max(0, height - 1);
+        var x0 = ClampInt((int)Math.Floor(x), 0, width - 1);
+        var y0 = ClampInt((int)Math.Floor(y), 0, height - 1);
+        var x1 = Math.Min(width - 1, x0 + 1);
+        var y1 = Math.Min(height - 1, y0 + 1);
+        var tx = x - x0;
+        var ty = y - y0;
+        var c00 = pixels[(y0 * width) + x0];
+        var c10 = pixels[(y0 * width) + x1];
+        var c01 = pixels[(y1 * width) + x0];
+        var c11 = pixels[(y1 * width) + x1];
+        var r0 = LerpDouble(c00.r, c10.r, tx);
+        var r1 = LerpDouble(c01.r, c11.r, tx);
+        var g0 = LerpDouble(c00.g, c10.g, tx);
+        var g1 = LerpDouble(c01.g, c11.g, tx);
+        var b0 = LerpDouble(c00.b, c10.b, tx);
+        var b1 = LerpDouble(c01.b, c11.b, tx);
+        var a0 = LerpDouble(c00.a, c10.a, tx);
+        var a1 = LerpDouble(c01.a, c11.a, tx);
+        return new Color32(
+            ByteFrom255(LerpDouble(r0, r1, ty)),
+            ByteFrom255(LerpDouble(g0, g1, ty)),
+            ByteFrom255(LerpDouble(b0, b1, ty)),
+            ByteFrom255(LerpDouble(a0, a1, ty)));
+    }
+
+    private static Color32 ApplyPlacementFilterToColor32(Color32 color, PlacementEditSnapshot state)
+    {
+        if (state == null || !state.HasActiveFilters)
+        {
+            return color;
+        }
+
+        var r = color.r / 255.0;
+        var g = color.g / 255.0;
+        var b = color.b / 255.0;
+        ApplyPlacementFilterAmount(ref r, ref g, ref b, state.GrayscaleAmount, GrayscaleR(r, g, b), GrayscaleR(r, g, b), GrayscaleR(r, g, b));
+        ApplyPlacementFilterAmount(
+            ref r,
+            ref g,
+            ref b,
+            state.SepiaAmount,
+            Clamp01Double(r * 0.393 + g * 0.769 + b * 0.189),
+            Clamp01Double(r * 0.349 + g * 0.686 + b * 0.168),
+            Clamp01Double(r * 0.272 + g * 0.534 + b * 0.131));
+        ApplyPlacementFilterAmount(ref r, ref g, ref b, state.InvertAmount, 1.0 - r, 1.0 - g, 1.0 - b);
+        ApplyPlacementFilterAmount(ref r, ref g, ref b, state.BrightnessAmount, r + 0.35, g + 0.35, b + 0.35);
+        ApplyPlacementFilterAmount(
+            ref r,
+            ref g,
+            ref b,
+            state.ContrastAmount,
+            (r - 0.5) * 2.25 + 0.5,
+            (g - 0.5) * 2.25 + 0.5,
+            (b - 0.5) * 2.25 + 0.5);
+        var gray = GrayscaleR(r, g, b);
+        ApplyPlacementFilterAmount(ref r, ref g, ref b, state.SaturationAmount, gray + (r - gray) * 2.75, gray + (g - gray) * 2.75, gray + (b - gray) * 2.75);
+        if (state.HueShiftAmount > 0.0001f)
+        {
+            RgbToHsv(r, g, b, out var hue, out var saturation, out var value);
+            HsvToRgb(Repeat01(hue + Clamp01Double(state.HueShiftAmount) * 0.5), saturation, value, out r, out g, out b);
+        }
+
+        return new Color32(ToByte01(r), ToByte01(g), ToByte01(b), color.a);
+    }
+
+    private static void ApplyPlacementFilterAmount(ref double r, ref double g, ref double b, float amount, double filteredR, double filteredG, double filteredB)
+    {
+        var t = Clamp01Double(amount);
+        if (t <= 0.0001)
+        {
+            return;
+        }
+
+        r = Clamp01Double(LerpDouble(r, filteredR, t));
+        g = Clamp01Double(LerpDouble(g, filteredG, t));
+        b = Clamp01Double(LerpDouble(b, filteredB, t));
+    }
+
+    private static double GrayscaleR(double r, double g, double b)
+    {
+        return r * 0.299 + g * 0.587 + b * 0.114;
+    }
+
+    private static void RgbToHsv(double r, double g, double b, out double h, out double s, out double v)
+    {
+        var max = Math.Max(r, Math.Max(g, b));
+        var min = Math.Min(r, Math.Min(g, b));
+        v = max;
+        var delta = max - min;
+        s = max <= 0.000001 ? 0.0 : delta / max;
+        if (delta <= 0.000001)
+        {
+            h = 0.0;
+            return;
+        }
+
+        if (Math.Abs(max - r) <= 0.000001)
+        {
+            h = ((g - b) / delta) % 6.0;
+        }
+        else if (Math.Abs(max - g) <= 0.000001)
+        {
+            h = ((b - r) / delta) + 2.0;
+        }
+        else
+        {
+            h = ((r - g) / delta) + 4.0;
+        }
+
+        h /= 6.0;
+        h = Repeat01(h);
+    }
+
+    private static void HsvToRgb(double h, double s, double v, out double r, out double g, out double b)
+    {
+        h = Repeat01(h);
+        s = Clamp01Double(s);
+        v = Clamp01Double(v);
+        var c = v * s;
+        var x = c * (1.0 - Math.Abs((h * 6.0) % 2.0 - 1.0));
+        var m = v - c;
+        var segment = (int)Math.Floor(h * 6.0);
+        switch (segment)
+        {
+            case 0:
+                r = c; g = x; b = 0.0;
+                break;
+            case 1:
+                r = x; g = c; b = 0.0;
+                break;
+            case 2:
+                r = 0.0; g = c; b = x;
+                break;
+            case 3:
+                r = 0.0; g = x; b = c;
+                break;
+            case 4:
+                r = x; g = 0.0; b = c;
+                break;
+            default:
+                r = c; g = 0.0; b = x;
+                break;
+        }
+
+        r = Clamp01Double(r + m);
+        g = Clamp01Double(g + m);
+        b = Clamp01Double(b + m);
+    }
+
+    private static double Repeat01(double value)
+    {
+        value -= Math.Floor(value);
+        return value < 0.0 ? value + 1.0 : value;
+    }
+
+    private static double Clamp01Double(double value)
+    {
+        if (value <= 0.0)
+        {
+            return 0.0;
+        }
+
+        return value >= 1.0 ? 1.0 : value;
+    }
+
+    private static int ClampInt(int value, int min, int max)
+    {
+        if (value < min)
+        {
+            return min;
+        }
+
+        return value > max ? max : value;
+    }
+
+    private static int RoundPositiveToInt(double value)
+    {
+        return (int)Math.Floor(Math.Max(0.0, value) + 0.5);
+    }
+
+    private static double LerpDouble(double a, double b, double t)
+    {
+        return a + (b - a) * t;
+    }
+
+    private static byte ByteFrom255(double value)
+    {
+        return (byte)ClampInt(RoundPositiveToInt(value), 0, 255);
+    }
+
+    private static byte ToByte01(double value)
+    {
+        return ByteFrom255(Clamp01Double(value) * 255.0);
     }
 
     private bool TryGetPlacementSourcePixels(PlacementEditTarget target, Texture2D source, out Color32[] pixels, out int width, out int height, out bool cacheHit, out string failureReason)
@@ -12562,6 +13230,11 @@ internal sealed class SuitEditorController : MonoBehaviour
             _placementEditPreviewImage.texture = null;
         }
 
+        if (target == PlacementEditTarget.Decal)
+        {
+            CancelDecalEditPreviewJobs("placement edit panel closed");
+        }
+
         RebuildSelectableNavigation();
         if (wasOpen)
         {
@@ -12637,6 +13310,24 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         var sourceFailure = string.Empty;
         var previewFailure = string.Empty;
+        if (target == PlacementEditTarget.Decal)
+        {
+            if (TryGetPlacementEditSourceTexture(target, out var decalSource, out sourceFailure)
+                && TryUpdateAsyncDecalEditPreview(decalSource, state, reason, startedAt, out previewFailure))
+            {
+                return;
+            }
+
+            var decalFailure = string.IsNullOrWhiteSpace(sourceFailure) ? previewFailure : sourceFailure;
+            if (_placementEditPreviewImage.texture == null)
+            {
+                _placementEditPreviewImage.texture = null;
+            }
+            SetPlacementEditStatus(decalFailure);
+            LogPlacementEditPreviewSkipped(target, reason, decalFailure);
+            return;
+        }
+
         if (TryGetPlacementEditSourceTexture(target, out var source, out sourceFailure)
             && TryGetEditedPlacementPreviewStamp(target, source, target == PlacementEditTarget.Sticker, out var preview, out previewFailure, out var cacheHit, out var cpuPixelSamplingUsed))
         {
@@ -12796,6 +13487,11 @@ internal sealed class SuitEditorController : MonoBehaviour
     {
         if (target == PlacementEditTarget.Decal)
         {
+            if (destroyTexture)
+            {
+                CancelDecalEditPreviewJobs("edited decal stamp invalidated");
+            }
+
             if (destroyTexture && _editedDecalStampTexture != null)
             {
                 Destroy(_editedDecalStampTexture);
@@ -12901,7 +13597,19 @@ internal sealed class SuitEditorController : MonoBehaviour
             : $"{state.CropLeft:0.###},{state.CropRight:0.###},{state.CropBottom:0.###},{state.CropTop:0.###}";
     }
 
+    private static string DescribePlacementCrop(PlacementEditSnapshot state)
+    {
+        return state == null
+            ? "none"
+            : $"{state.CropLeft:0.###},{state.CropRight:0.###},{state.CropBottom:0.###},{state.CropTop:0.###}";
+    }
+
     private static string DescribePlacementStretch(PlacementEditState state)
+    {
+        return state == null ? "none" : $"{state.StretchX:0.###},{state.StretchY:0.###}";
+    }
+
+    private static string DescribePlacementStretch(PlacementEditSnapshot state)
     {
         return state == null ? "none" : $"{state.StretchX:0.###},{state.StretchY:0.###}";
     }
@@ -12911,7 +13619,22 @@ internal sealed class SuitEditorController : MonoBehaviour
         return state == null ? "none" : $"{state.FlipX},{state.FlipY}";
     }
 
+    private static string DescribePlacementFlip(PlacementEditSnapshot state)
+    {
+        return state == null ? "none" : $"{state.FlipX},{state.FlipY}";
+    }
+
     private static string DescribePlacementFilters(PlacementEditState state)
+    {
+        if (state == null)
+        {
+            return "none";
+        }
+
+        return $"gray={state.GrayscaleAmount:0.###},sepia={state.SepiaAmount:0.###},invert={state.InvertAmount:0.###},brightness={state.BrightnessAmount:0.###},contrast={state.ContrastAmount:0.###},saturation={state.SaturationAmount:0.###},hue={state.HueShiftAmount:0.###}";
+    }
+
+    private static string DescribePlacementFilters(PlacementEditSnapshot state)
     {
         if (state == null)
         {
@@ -13014,6 +13737,37 @@ internal sealed class SuitEditorController : MonoBehaviour
         _lastPlacementEditPreviewLogTime = Time.unscaledTime;
         _lastPlacementEditPreviewLogKey = key;
         DrawableSuitsDiagnostics.Info($"{eventName}: target={target}; source={GetPlacementEditSourceName(target)}; reason={reason}; quality=preview; sourceSize={source?.width ?? 0}x{source?.height ?? 0}; generatedSize={preview?.width ?? 0}x{preview?.height ?? 0}; crop={DescribePlacementCrop(state)}; stretch={DescribePlacementStretch(state)}; flip={DescribePlacementFlip(state)}; filters={DescribePlacementFilters(state)}; cacheHit={cacheHit}; cpuPixels={cpuPixelSamplingUsed}; elapsedMs={elapsedMs:0.##}; suit={_selectedSuitId}");
+    }
+
+    private void LogDecalEditPreviewJobQueued(DecalEditPreviewJobRequest request, string reason, bool sourceCacheHit, bool workerBusy)
+    {
+        var key = $"queued|serial={request?.Serial ?? 0}|source={request?.SourceName}|size={request?.SourceWidth ?? 0}x{request?.SourceHeight ?? 0}|state={request?.State?.Revision ?? -1}";
+        _lastDecalEditPreviewJobLogTime = Time.unscaledTime;
+        _lastDecalEditPreviewJobLogKey = key;
+        DrawableSuitsDiagnostics.Info($"DecalEditPreviewJobQueued: source={request?.SourceName}; sourceSize={request?.SourceWidth ?? 0}x{request?.SourceHeight ?? 0}; outputSize=pending; crop={DescribePlacementCrop(request?.State)}; stretch={DescribePlacementStretch(request?.State)}; flip={DescribePlacementFlip(request?.State)}; filters={DescribePlacementFilters(request?.State)}; reason={reason}; serial={request?.Serial ?? 0}; workerBusy={workerBusy}; sourceCacheHit={sourceCacheHit}; suit={_selectedSuitId}");
+    }
+
+    private void LogDecalEditPreviewJobCompleted(DecalEditPreviewJobResult result)
+    {
+        DrawableSuitsDiagnostics.Info($"DecalEditPreviewJobCompleted: source={result?.SourceName}; sourceSize={result?.SourceWidth ?? 0}x{result?.SourceHeight ?? 0}; outputSize={result?.OutputWidth ?? 0}x{result?.OutputHeight ?? 0}; serial={result?.Serial ?? 0}; workerMs={result?.WorkerMs ?? 0f:0.##}; success={result?.Success ?? false}; failure={result?.FailureReason ?? string.Empty}; suit={_selectedSuitId}");
+    }
+
+    private void LogDecalEditPreviewJobDiscarded(DecalEditPreviewJobResult result, string reason)
+    {
+        var key = $"discard|serial={result?.Serial ?? 0}|reason={reason}";
+        if (Time.unscaledTime - _lastDecalEditPreviewJobLogTime < 0.25f && string.Equals(key, _lastDecalEditPreviewJobLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastDecalEditPreviewJobLogTime = Time.unscaledTime;
+        _lastDecalEditPreviewJobLogKey = key;
+        DrawableSuitsDiagnostics.Info($"DecalEditPreviewJobDiscarded: source={result?.SourceName}; sourceSize={result?.SourceWidth ?? 0}x{result?.SourceHeight ?? 0}; outputSize={result?.OutputWidth ?? 0}x{result?.OutputHeight ?? 0}; serial={result?.Serial ?? 0}; reason={reason}; workerMs={result?.WorkerMs ?? 0f:0.##}; suit={_selectedSuitId}");
+    }
+
+    private void LogDecalEditPreviewJobApplied(DecalEditPreviewJobResult result, float uploadMs)
+    {
+        DrawableSuitsDiagnostics.Info($"DecalEditPreviewJobApplied: source={result?.SourceName}; sourceSize={result?.SourceWidth ?? 0}x{result?.SourceHeight ?? 0}; outputSize={result?.OutputWidth ?? 0}x{result?.OutputHeight ?? 0}; serial={result?.Serial ?? 0}; workerMs={result?.WorkerMs ?? 0f:0.##}; uploadMs={uploadMs:0.##}; cacheKeySet={_editedDecalStampKey.Length > 0}; suit={_selectedSuitId}");
     }
 
     private void SetSavedDesignsStatus(string message)

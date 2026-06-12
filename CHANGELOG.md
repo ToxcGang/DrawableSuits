@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.56
+
+- Moved full-quality Decal temporary edit preview rendering into a latest-only async CPU job so slider changes no longer block Unity's main thread.
+- Completed Decal edit-preview jobs now populate the same full-quality edited stamp cache used by placement previews and final stamping.
+- Added `DecalEditPreviewJobQueued`, `DecalEditPreviewJobCompleted`, `DecalEditPreviewJobDiscarded`, and `DecalEditPreviewJobApplied` diagnostics.
+
 ## 0.5.55
 
 - Cached Decal edit-panel source pixels and switched preview-quality rendering to manual CPU bilinear sampling so large decal previews no longer call Unity texture APIs per pixel.
