@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.58
+
+- Isolated Decal/Sticker edit modals from world/UV placement preview generation so slider changes no longer trigger full-quality edited stamp generation.
+- Deferred full-quality placement stamp creation until after target checks and the settled world-preview idle delay.
+- Added `PlacementPreviewSkippedForModal` and `PlacementPreviewStampDeferred` diagnostics.
+
 ## 0.5.57
 
 - Replaced Decal edit-panel full-quality preview jobs with a small preview-resolution CPU render path so crop, stretch, flip, and filter sliders stay responsive.
