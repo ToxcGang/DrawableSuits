@@ -120,6 +120,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private const float UvPanelDpadZoomFactorPerSecond = 1.9f;
     private const float UvPanelGamepadPanDeadzone = 0.2f;
     private const float UvPanelGamepadPanSpeed = 1.8f;
+    private const float PlacementRotationShortcutStepDegrees = 5f;
 
     private static readonly Color TerminalPanelColor = new(0.018f, 0.022f, 0.024f, 0.88f);
     private static readonly Color TerminalDialogColor = new(0.022f, 0.024f, 0.026f, 0.98f);
@@ -2645,7 +2646,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         BuildRecentColorSwatches(panel.transform, new Rect(leftX, 730f, leftW, 64f));
 
         _uvFallbackButton = CreateAnchoredButton(panel.transform, "Use UV Fallback", new Rect(rightX, 54f, 150f, 34f), ToggleUvFallback);
-        CreateAnchoredText(panel.transform, "WorldHelp", "Aim at suit or UV panel. Hold paint/erase; RT stamps or samples. Wheel/D-pad zooms target. Right-drag or right stick pans UV; off panel, orbit world.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(rightX, 96f, rightW, 76f), TerminalMutedTextColor);
+        CreateAnchoredText(panel.transform, "WorldHelp", "Aim at suit or UV panel. RT stamps/samples; hold paint/erase. Wheel/D-pad U/D zooms; D-pad L/R or ,/. rotates decals/stickers. Right-drag or right stick pans UV.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(rightX, 96f, rightW, 76f), TerminalMutedTextColor);
 
         CreateSectionDivider(panel.transform, new Rect(rightX, 180f, rightW, 1f));
         _placementHeaderLabel = CreateAnchoredText(panel.transform, "PlacementHeader", "Decal", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(rightX, 188f, rightW, 24f), TerminalTextColor);
@@ -3652,6 +3653,47 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
     }
 
+    private bool CanHandlePlacementRotationShortcuts()
+    {
+        return CanUsePlacementRotationShortcut()
+            && !IsTypingInInputField()
+            && !IsVirtualPointerEditingUi();
+    }
+
+    private bool IsTypingInInputField()
+    {
+        if (IsInputFocused(_designNameInput)
+            || IsInputFocused(_textStampInput)
+            || IsInputFocused(_colorHexInput)
+            || IsInputFocused(_designCodeInput)
+            || IsInputFocused(_virtualPointerInput))
+        {
+            return true;
+        }
+
+        var eventSystem = EventSystem.current ?? _editorEventSystem;
+        var selected = eventSystem != null ? eventSystem.currentSelectedGameObject : null;
+        if (selected == null)
+        {
+            return false;
+        }
+
+        return IsInputFocused(selected.GetComponent<InputField>())
+            || IsInputFocused(selected.GetComponentInParent<InputField>());
+    }
+
+    private bool IsVirtualPointerEditingUi()
+    {
+        return _virtualPointerDown
+            || _virtualPointerSlider != null
+            || _virtualPointerColorPicker != null;
+    }
+
+    private static bool IsInputFocused(InputField input)
+    {
+        return input != null && input.isFocused;
+    }
+
     private static Sprite GetSliderHandleDotSprite()
     {
         if (SliderHandleDotSprite != null)
@@ -4623,6 +4665,55 @@ internal sealed class SuitEditorController : MonoBehaviour
     private float CurrentPlacementRotation()
     {
         return _tool == EditorTool.Text ? _textRotation : _tool == EditorTool.Sticker ? _stickerRotation : _decalRotation;
+    }
+
+    private bool CanUsePlacementRotationShortcut()
+    {
+        return (_tool == EditorTool.Decal && _loadedDecal != null) || _tool == EditorTool.Sticker;
+    }
+
+    private void ApplyPlacementRotationShortcut(float deltaDegrees, string source)
+    {
+        if (!CanUsePlacementRotationShortcut())
+        {
+            return;
+        }
+
+        var previous = CurrentPlacementRotation();
+        var updated = NormalizePlacementRotation(previous + deltaDegrees);
+        if (_tool == EditorTool.Sticker)
+        {
+            _stickerRotation = updated;
+        }
+        else
+        {
+            _decalRotation = updated;
+        }
+
+        if (_decalRotationSlider != null)
+        {
+            _decalRotationSlider.SetValue(updated, false);
+        }
+
+        UpdateLabels();
+        InvalidateDecalPreview($"placement rotation shortcut {source}");
+        var toolName = ToolDisplayName(_tool);
+        SetStatus($"{toolName} rotation: {Mathf.RoundToInt(updated)} deg.", false);
+        DrawableSuitsDiagnostics.Info($"PlacementRotationShortcutApplied: tool={_tool}; source={source}; previous={previous:0.##}; new={updated:0.##}; delta={deltaDegrees:0.##}; selected={CurrentPlacementName()}; mirror={_mirrorEnabled}; suit={_selectedSuitId}");
+    }
+
+    private static float NormalizePlacementRotation(float value)
+    {
+        while (value > 180f)
+        {
+            value -= 360f;
+        }
+        while (value < -180f)
+        {
+            value += 360f;
+        }
+
+        return Mathf.Clamp(value, -180f, 180f);
     }
 
     private void UpdateColorUi()
@@ -9501,6 +9592,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
+        var canRotatePlacement = CanHandlePlacementRotationShortcuts();
         var gamepad = Gamepad.current;
         if (gamepad != null)
         {
@@ -9515,6 +9607,30 @@ internal sealed class SuitEditorController : MonoBehaviour
             if (gamepad.startButton.wasPressedThisFrame)
             {
                 SaveDesign();
+            }
+
+            if (canRotatePlacement)
+            {
+                if (gamepad.dpad.left.wasPressedThisFrame)
+                {
+                    ApplyPlacementRotationShortcut(-PlacementRotationShortcutStepDegrees, "GamepadDpadLeft");
+                }
+                if (gamepad.dpad.right.wasPressedThisFrame)
+                {
+                    ApplyPlacementRotationShortcut(PlacementRotationShortcutStepDegrees, "GamepadDpadRight");
+                }
+            }
+        }
+
+        if (canRotatePlacement)
+        {
+            if (DrawableSuitsInput.WasKeyPressed(Key.Comma))
+            {
+                ApplyPlacementRotationShortcut(-PlacementRotationShortcutStepDegrees, "KeyboardComma");
+            }
+            if (DrawableSuitsInput.WasKeyPressed(Key.Period))
+            {
+                ApplyPlacementRotationShortcut(PlacementRotationShortcutStepDegrees, "KeyboardPeriod");
             }
         }
 

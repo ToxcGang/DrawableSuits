@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.60
+
+- Added Decal and Sticker placement rotation shortcuts: keyboard `,` rotates left, `.` rotates right, and controller D-pad left/right rotates by 5 degrees per press.
+- Rotation shortcuts now sync the placement rotation slider/label, invalidate previews, and log `PlacementRotationShortcutApplied` diagnostics.
+- Shortcuts are ignored while modal panels are open, text fields are focused, or UI controls are being dragged.
+
 ## 0.5.59
 
 - Froze the third-person editor avatar proxy after the initial setup bake so idle breathing animation no longer moves the paint target.

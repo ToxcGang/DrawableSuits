@@ -16,7 +16,7 @@ DrawableSuits is a Lethal Company v81 BepInEx mod that lets players draw on suit
 - Pause-menu entry point: use the `DrawableSuits` button below Resume.
 - Fallback shortcuts: `F8` on keyboard or `View/Back + Y` on controller.
 - Emergency open shortcut: `F10`, which opens the editor and does not toggle it closed.
-- Controller support: left stick moves the editor cursor, `A` clicks exactly the UI control under the cursor, right trigger paints only, right stick/bumpers orbit the camera, D-pad up/down zooms, `Y` cycles tools, `X` undoes, and Start saves.
+- Controller support: left stick moves the editor cursor, `A` clicks exactly the UI control under the cursor, right trigger paints only, right stick/bumpers orbit the camera, D-pad up/down zooms, D-pad left/right rotates Decal/Sticker placement, `Y` cycles tools, `X` undoes, and Start saves.
 - Direct surface painting: the editor bakes a hidden mesh collider from the local player model and paints by raycasting from the third-person camera to suit UV coordinates.
 - Always-visible UV texture panel: while third-person editing is active, the right-column texture panel stays visible and editable without toggling views. Texture-only fallback is still available for diagnostics or third-person setup failures.
 - PNG/JPG decals from `BepInEx/config/DrawableSuits/Decals`. The Decals menu `Add Decal` button launches an external Windows image picker process, copies the selected PNG/JPG/JPEG into the Decals folder, refreshes the rows, and loads the imported decal.
@@ -46,6 +46,7 @@ Keyboard and mouse:
 - Text: click the `Text` UI button, type up to 64 characters, then left-click the suit to stamp it. Text uses the current brush color and opacity.
 - Decal: click the `Decal` UI button, open the `Decals` menu to choose a decal, then left-click the suit to stamp it.
 - Sticker: click the `Sticker` UI button, open the `Stickers` menu to choose a built-in shape, then left-click the suit to stamp it. Stickers use the current brush color and opacity.
+- Decal/Sticker rotation shortcuts: press `,` to rotate the active Decal or Sticker left by 5 degrees, or `.` to rotate right by 5 degrees. These shortcuts are ignored while typing or using modal panels.
 - Eyedropper: click the `Eyedropper` UI button, then left-click the suit to sample that texture color. It returns to the previous tool after one successful sample.
 - Mirror: click the `Mirror` UI button to duplicate paint, erase, fill, decal stamps, text stamps, and sticker stamps onto the opposite suit surface.
 - Export Code / Import Code: use the design code panel to copy the current editable texture as a compact `DSUIT2:` code or paste a shared `DSUIT2:` or legacy `DSUIT1:` code into the current suit.
@@ -77,6 +78,7 @@ Controller:
 - Right trigger: paint/erase continuously; in Fill mode, fill once per press; in Decal, Text, or Sticker mode, stamp one preview at the cursor location.
 - Right stick or bumpers: orbit the third-person editor camera.
 - D-pad up/down: zoom the third-person editor camera.
+- D-pad left/right: rotate the active Decal or Sticker placement by 5 degrees per press. This shortcut is ignored for other tools and while modal panels are open.
 - `Y`: cycle Paint/Erase/Decal. Fill, Text, Sticker, Eyedropper, Mirror, and Brush Shape are UI-only and are not part of this shortcut.
 - `X`: undo.
 - Start: save.
@@ -137,7 +139,7 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.59 behavior:
+Expected 0.5.60 behavior:
 
 - Opening the editor shows an Imperium-inspired red/dark terminal overlay and a third-person camera view of the local player.
 - Paint, Erase, Fill, Decal, Text, Sticker, Eyedropper, and Mirror use embedded generated PNG icon masks instead of large text tool buttons or procedural mesh glyphs. The active tool label names the current icon, and Mirror remains a UI-only modifier.
@@ -181,6 +183,7 @@ Expected 0.5.59 behavior:
 - Text is baked into the suit texture after stamping. It is not an editable layer after placement.
 - In Sticker mode, the `Stickers` menu offers Circle, Square, Triangle, Diamond, Star, Heart, Arrow, Lightning Bolt, Plus/Cross, Ring, Crescent, and Shield. Stickers use the current brush color and opacity, preview live on the suit or UV panel, stamp once per press, and are baked into the texture.
 - `Edit Sticker` opens the same temporary edit controls for the selected built-in sticker. Stickers remain brush-color based; filters are applied after tinting for the temporary stamp texture only.
+- In Decal or Sticker mode, keyboard `,` and `.` or controller D-pad left/right rotate placement by 5 degrees per press, update the rotation slider/label, and invalidate the placement preview. These shortcuts do not apply to Text, Paint, Erase, Fill, or Eyedropper.
 - The `Fill` button is a UI-only tool. It flood-fills the contiguous same-color region under the cursor using the current brush color and opacity.
 - Fill is single-shot: holding left mouse or controller RT fills once until the input is released and pressed again.
 - The Fill Tolerance slider appears when Fill is active. Lower tolerance fills tighter matching regions; higher tolerance accepts more color variation.
