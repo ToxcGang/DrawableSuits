@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.59
+
+- Froze the third-person editor avatar proxy after the initial setup bake so idle breathing animation no longer moves the paint target.
+- Stopped normal world raycasts and editor updates from rebaking the skinned suit mesh every frame.
+- Added `WorldAvatarProxyRebaked` and `WorldAvatarProxyPoseFrozen` diagnostics for explicit proxy rebuilds.
+
 ## 0.5.58
 
 - Isolated Decal/Sticker edit modals from world/UV placement preview generation so slider changes no longer trigger full-quality edited stamp generation.

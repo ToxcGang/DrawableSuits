@@ -2209,7 +2209,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         UpdateCanvasCursor(false, "update");
         if (IsWorldThirdPersonMode)
         {
-            UpdateWorldPaintProxy(false);
             UpdateWorldEditorCamera(false);
         }
         HandleVirtualCursorClick();
@@ -6149,7 +6148,7 @@ internal sealed class SuitEditorController : MonoBehaviour
                 return false;
             }
 
-            if (!TryGetWorldPaintHit(out var hit, false))
+            if (!TryGetWorldPaintHit(out var hit))
             {
                 fallbackReason = "world miss";
                 return false;
@@ -6687,7 +6686,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         if (IsWorldThirdPersonMode)
         {
-            if (IsCursorOverEditorPanel() || !TryGetWorldPaintHit(out var hit, false))
+            if (IsCursorOverEditorPanel() || !TryGetWorldPaintHit(out var hit))
             {
                 HideDecalPlacementPreview("world miss", false);
                 return;
@@ -9732,7 +9731,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         var texture = DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId);
         var canTargetWorld = !IsCursorOverEditorPanel();
         RaycastHit hit = default;
-        var hitAvailable = canTargetWorld && TryGetWorldPaintHit(out hit, true);
+        var hitAvailable = canTargetWorld && TryGetWorldPaintHit(out hit);
         var uv = hitAvailable ? hit.textureCoord : default;
 
         if (_tool == EditorTool.Eyedropper)
@@ -14603,7 +14602,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             }
             _worldBrushMarker.SetActive(false);
 
-            var proxyReady = UpdateWorldPaintProxy(true);
+            var proxyReady = UpdateWorldPaintProxy(true, context);
             _worldPreviewReady = proxyReady && _worldEditorCamera != null && _worldPaintCollider != null;
             if (_worldPreviewReady)
             {
@@ -15019,7 +15018,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         return string.Join("/", names);
     }
 
-    private bool UpdateWorldPaintProxy(bool forceLog)
+    private bool UpdateWorldPaintProxy(bool forceLog, string context = "explicit rebuild")
     {
         var source = _worldSourceRenderer ?? FindBestSuitRenderer(StartOfRound.Instance?.localPlayerController);
         if (source == null || _worldPaintCollider == null || _worldPaintMesh == null || _worldPaintProxyObject == null || _worldAvatarMeshFilter == null || _worldAvatarRenderer == null)
@@ -15061,7 +15060,8 @@ internal sealed class SuitEditorController : MonoBehaviour
             source.enabled = false;
             if (forceLog)
             {
-                DrawableSuitsDiagnostics.Info($"WorldAvatarProxy updated. mesh={_lastWorldProxyMeshSummary}; renderer={DescribeRendererCandidate(source, "source")}; vertices={_worldPaintMesh.vertexCount}; subMeshes={_worldPaintMesh.subMeshCount}; bounds={_worldPaintMesh.bounds}; proxyPos={_worldPaintProxyObject.transform.position}; proxyRot={_worldPaintProxyObject.transform.rotation.eulerAngles}; proxyScale={_worldPaintProxyObject.transform.localScale}; layer={_worldPaintLayer}; rendererEnabled={_worldAvatarRenderer.enabled}; proxyMaterials=[{DescribeMaterials(_worldAvatarRenderer.sharedMaterials)}]; collider={_worldPaintCollider != null}");
+                DrawableSuitsDiagnostics.Info($"WorldAvatarProxyRebaked: context={context}; mesh={_lastWorldProxyMeshSummary}; renderer={DescribeRendererCandidate(source, "source")}; vertices={_worldPaintMesh.vertexCount}; subMeshes={_worldPaintMesh.subMeshCount}; bounds={_worldPaintMesh.bounds}; proxyPos={_worldPaintProxyObject.transform.position}; proxyRot={_worldPaintProxyObject.transform.rotation.eulerAngles}; proxyScale={_worldPaintProxyObject.transform.localScale}; layer={_worldPaintLayer}; rendererEnabled={_worldAvatarRenderer.enabled}; proxyMaterials=[{DescribeMaterials(_worldAvatarRenderer.sharedMaterials)}]; collider={_worldPaintCollider != null}");
+                DrawableSuitsDiagnostics.Info($"WorldAvatarProxyPoseFrozen: context={context}; source={DescribeRendererCandidate(source, "source")}; vertices={_worldPaintMesh.vertexCount}; bounds={_worldPaintMesh.bounds}; collider={_worldPaintCollider != null}; note=proxy mesh will not rebake during normal editor updates");
                 LogVisibleEditorCameraRenderers(source);
             }
             return true;
@@ -15233,7 +15233,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
     }
 
-    private bool TryGetWorldPaintHit(out RaycastHit hit, bool updateProxy)
+    private bool TryGetWorldPaintHit(out RaycastHit hit)
     {
         hit = default;
         _lastWorldRaycastHit = false;
@@ -15247,10 +15247,8 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
-        if (updateProxy)
-        {
-            UpdateWorldPaintProxy(false);
-        }
+        // The editor avatar proxy is baked once during setup and then kept static.
+        // Do not rebake here; idle breathing animation would move the paint target.
 
         var ray = _worldEditorCamera.ScreenPointToRay(_cursor);
         if (!Physics.Raycast(ray, out hit, 25f, 1 << _worldPaintLayer, QueryTriggerInteraction.Ignore))

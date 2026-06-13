@@ -137,7 +137,7 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.58 behavior:
+Expected 0.5.59 behavior:
 
 - Opening the editor shows an Imperium-inspired red/dark terminal overlay and a third-person camera view of the local player.
 - Paint, Erase, Fill, Decal, Text, Sticker, Eyedropper, and Mirror use embedded generated PNG icon masks instead of large text tool buttons or procedural mesh glyphs. The active tool label names the current icon, and Mirror remains a UI-only modifier.
@@ -145,7 +145,7 @@ Expected 0.5.58 behavior:
 - The editor edits only the local player's currently worn suit. The old Previous, Use Current, and Next suit-selection buttons are not present.
 - The diagnostics text should show `Preview mode: WorldThirdPerson` when the default path succeeds.
 - The UV texture panel is visible at the same time as the third-person suit and can be edited directly by moving the cursor over it.
-- The visible editor model is `DrawableSuitsWorldAvatarProxy`, a baked suit/body proxy on an isolated layer, not the live first-person local rig. First-person helmet/viewmodel renderers are hidden during editing and restored on close.
+- The visible editor model is `DrawableSuitsWorldAvatarProxy`, a baked suit/body proxy on an isolated layer, not the live first-person local rig. The proxy pose is frozen while the editor is open so idle breathing does not move the paint target. First-person helmet/viewmodel renderers are hidden during editing and restored on close.
 - Normal session startup should log `SessionSafetyCheck` with `EditorOpen=False`, no active DrawableSuits cameras, `Camera.main` state, local player state, prompt context, and `jetpackWarningGuard` status.
 - If third-person setup fails, the editor falls back to texture-only `TextureFallback` and logs the reason.
 - The UV texture panel shows the editable texture in a reserved right-column preview slot below the placement controls. It should not cover the color picker, brush controls, tools, design controls, or modal selectors.
@@ -198,7 +198,7 @@ Expected 0.5.58 behavior:
 - Paint and Erase in third-person mode project onto the visible suit surface and fill between valid projected samples, so brush strokes avoid UV-island cutoffs while still guarding against unrelated UV island bleeding. The UV panel keeps direct flat UV brush painting.
 - Brush Shape changes Paint and Erase only. Circle keeps the classic brush, Square paints a square footprint, Pixel edits one texture pixel, Spray Paint and Noise/Scatter use deterministic sparse coverage per stroke, and Soft Airbrush uses a softer circular falloff.
 - Paint, erase, decal preview, and decal stamping operate on the full editable texture.
-- Active editor diagnostics report full proxy mesh/collider state through `WorldAvatarProxy updated`; `PartClassifierBuilt` should not appear during normal editor use.
+- Active editor diagnostics report full proxy mesh/collider state through `WorldAvatarProxyRebaked` and `WorldAvatarProxyPoseFrozen`; `PartClassifierBuilt` should not appear during normal editor use.
 
 Troubleshooting:
 
@@ -209,7 +209,8 @@ Troubleshooting:
 - If Mirror does not appear to find the opposite side, check `MirrorSurfaceMap built` and `MirrorSurfaceTarget` diagnostics. Asymmetric or unusual modded meshes may not have a reliable opposite surface for every hit.
 - If entering a session starts on a black screen before opening DrawableSuits, check `SessionSafetyCheck` lines. They list `Camera.main`, active cameras, camera target textures, local player flags, prompt context such as grab/hover fields, local renderer materials, and any repaired DrawableSuits objects. DrawableSuits should report no active DrawableSuits cameras while `EditorOpen=False`.
 - If the black screen shows `Grab: [E]` and `SessionSafetyCheck` reports `Camera.main=null`, inspect `LogOutput.log` for repeated `JetpackWarning` `PlayerControllerB.LateUpdate` `NullReferenceException`. By default, DrawableSuits disables only `JetpackWarning.Patches.PlayerControllerB_LateUpdate_Postfix` after repeated failures and logs the unpatch result in `diagnostics.log`. Set `AutoDisableBrokenJetpackWarningLateUpdatePatch=false` to turn this compatibility guard off.
-- If third person shows first-person arms, a giant helmet, held items, or another partial rig, check `World renderer candidate`, `Hidden nearby first-person overlay renderer`, `World editor visible renderer candidate`, and `WorldAvatarProxy updated` lines. The selected renderer should be a body/suit renderer and the proxy should use only the player-specific DrawableSuits material for suit-compatible submeshes.
+- If third person shows first-person arms, a giant helmet, held items, or another partial rig, check `World renderer candidate`, `Hidden nearby first-person overlay renderer`, `World editor visible renderer candidate`, and `WorldAvatarProxyRebaked` lines. The selected renderer should be a body/suit renderer and the proxy should use only the player-specific DrawableSuits material for suit-compatible submeshes.
+- If the third-person editor avatar moves or breathes while open, confirm the installed package is 0.5.59 or newer and check `WorldAvatarProxyPoseFrozen`. `WorldAvatarProxyRebaked` should appear only for explicit preview setup/rebuilds, not every frame while idle.
 - If you use ModelReplacementAPI and the editor shows the wrong model, duplicate helmets, or an uneditable suit, this is expected. DrawableSuits is not compatible with ModelReplacementAPI; use the UV panel where possible or disable the replacement while editing.
 - If action buttons such as Reset, Save, or Load also select decal/save rows, confirm the installed package is 0.4.7 or newer. Lists now use stable row pools and log `ListRowsUpdated` instead of rebuilding/destroying row buttons during normal UI refresh.
 - If controller `A` clicks the wrong UI item, confirm the installed package is 0.4.7 or newer, move the left stick before the first `A` press, then check `Virtual cursor A press` and `Virtual cursor A release` diagnostics. They should show the same resolved button or control that is visually under the cursor.
@@ -220,7 +221,7 @@ Troubleshooting:
 - If right trigger zooms the third-person camera, confirm the installed package is 0.4.4 or newer. In 0.4.4, right trigger is paint-only and D-pad up/down controls controller zoom.
 - If the UV panel or texture-only fallback shows a second colored cursor, confirm the installed package is 0.4.4 or newer. The old filled brush indicator is disabled because it looked like another cursor.
 - If editing one player changes every other player wearing the same skin, confirm the installed package is 0.4.4 or newer. Active edits now sync with owner client IDs and do not mutate suit rack/global suit materials.
-- If you cannot see the local suit in third person, check `diagnostics.log` for `WorldThirdPerson setup`, `WorldAvatarProxy updated`, and `WorldEditorCamera updated`.
+- If you cannot see the local suit in third person, check `diagnostics.log` for `WorldThirdPerson setup`, `WorldAvatarProxyRebaked`, `WorldAvatarProxyPoseFrozen`, and `WorldEditorCamera updated`.
 - If painting misses the suit, check `PaintAttempt` entries for `world paint input`, UV coordinates, and whether the cursor is over the editor panel.
 - If Eyedropper does not sample a color, check `EyedropperMiss` entries for whether the cursor was over the visible suit or UV panel. A successful sample logs `EyedropperSampled` with UV, pixel, sampled hex color, and return tool.
 - If Text does not preview or stamp, check that the text field is not empty, then search `diagnostics.log` for `TextStampRendered`, `TextPreviewUpdated`, `TextPreviewHidden`, `TextStampCommitted`, or `TextStampSkipped`.
