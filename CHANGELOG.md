@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.62
+
+- Reclaimed the empty left-panel space left by the removed editor diagnostics block.
+- Rewrote the README into a shorter informational guide without install instructions.
+- Kept the right-column UV panel and editor tool behavior unchanged.
+
 ## 0.5.61
 
 - Removed visible startup/F9 debug HUDs and the editor diagnostics text block while keeping file-based diagnostics logging.

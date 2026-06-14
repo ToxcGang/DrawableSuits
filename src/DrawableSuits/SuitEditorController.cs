@@ -2585,6 +2585,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         const float leftW = 274f;
         const float rightX = 314f;
         const float rightW = 286f;
+        const float leftContentLift = 124f;
 
         CreateAnchoredText(panel.transform, "Title", $"{PluginInfo.Name} {PluginInfo.Version}", 24, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 12f, 360f, 34f), TerminalStatusColor);
         CreateAnchoredButton(panel.transform, "Close", new Rect(512f, 14f, 88f, 34f), CloseEditor);
@@ -2592,43 +2593,43 @@ internal sealed class SuitEditorController : MonoBehaviour
         _statusLabel = CreateAnchoredText(panel.transform, "StatusLabel", string.Empty, 15, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 86f, leftW, 46f), TerminalStatusColor);
         _statusLabel.color = TerminalStatusColor;
 
-        CreateSectionDivider(panel.transform, new Rect(leftX, 274f, leftW, 1f));
-        CreateAnchoredText(panel.transform, "ToolHeader", "Tools", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 282f, 72f, 24f), TerminalTextColor);
-        _activeToolLabel = CreateAnchoredText(panel.transform, "ActiveToolLabel", string.Empty, 13, FontStyle.Normal, TextAnchor.MiddleRight, new Rect(leftX + 86f, 282f, leftW - 86f, 24f), TerminalMutedTextColor);
+        CreateSectionDivider(panel.transform, new Rect(leftX, 274f - leftContentLift, leftW, 1f));
+        CreateAnchoredText(panel.transform, "ToolHeader", "Tools", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 282f - leftContentLift, 72f, 24f), TerminalTextColor);
+        _activeToolLabel = CreateAnchoredText(panel.transform, "ActiveToolLabel", string.Empty, 13, FontStyle.Normal, TextAnchor.MiddleRight, new Rect(leftX + 86f, 282f - leftContentLift, leftW - 86f, 24f), TerminalMutedTextColor);
         const float toolIcon = 42f;
         const float toolGap = 8f;
-        _paintButton = CreateAnchoredIconButton(panel.transform, "Paint", ToolIconKind.Paint, new Rect(leftX, 310f, toolIcon, 34f), () => SetTool(EditorTool.Paint));
-        _eraseButton = CreateAnchoredIconButton(panel.transform, "Erase", ToolIconKind.Erase, new Rect(leftX + (toolIcon + toolGap), 310f, toolIcon, 34f), () => SetTool(EditorTool.Erase));
-        _fillButton = CreateAnchoredIconButton(panel.transform, "Fill", ToolIconKind.Fill, new Rect(leftX + (toolIcon + toolGap) * 2f, 310f, toolIcon, 34f), () => SetTool(EditorTool.FillBucket));
-        _mirrorButton = CreateAnchoredIconButton(panel.transform, "Mirror", ToolIconKind.Mirror, new Rect(leftX + (toolIcon + toolGap) * 3f, 310f, toolIcon, 34f), ToggleMirror);
-        _decalButton = CreateAnchoredIconButton(panel.transform, "Decal", ToolIconKind.Decal, new Rect(leftX, 352f, toolIcon, 34f), () => SetTool(EditorTool.Decal));
-        _textButton = CreateAnchoredIconButton(panel.transform, "Text", ToolIconKind.Text, new Rect(leftX + (toolIcon + toolGap), 352f, toolIcon, 34f), () => SetTool(EditorTool.Text));
-        _stickerButton = CreateAnchoredIconButton(panel.transform, "Sticker", ToolIconKind.Sticker, new Rect(leftX + (toolIcon + toolGap) * 2f, 352f, toolIcon, 34f), () => SetTool(EditorTool.Sticker));
-        _eyedropperButton = CreateAnchoredIconButton(panel.transform, "Eyedropper", ToolIconKind.Eyedropper, new Rect(leftX + (toolIcon + toolGap) * 3f, 352f, toolIcon, 34f), () => SetTool(EditorTool.Eyedropper));
+        _paintButton = CreateAnchoredIconButton(panel.transform, "Paint", ToolIconKind.Paint, new Rect(leftX, 310f - leftContentLift, toolIcon, 34f), () => SetTool(EditorTool.Paint));
+        _eraseButton = CreateAnchoredIconButton(panel.transform, "Erase", ToolIconKind.Erase, new Rect(leftX + (toolIcon + toolGap), 310f - leftContentLift, toolIcon, 34f), () => SetTool(EditorTool.Erase));
+        _fillButton = CreateAnchoredIconButton(panel.transform, "Fill", ToolIconKind.Fill, new Rect(leftX + (toolIcon + toolGap) * 2f, 310f - leftContentLift, toolIcon, 34f), () => SetTool(EditorTool.FillBucket));
+        _mirrorButton = CreateAnchoredIconButton(panel.transform, "Mirror", ToolIconKind.Mirror, new Rect(leftX + (toolIcon + toolGap) * 3f, 310f - leftContentLift, toolIcon, 34f), ToggleMirror);
+        _decalButton = CreateAnchoredIconButton(panel.transform, "Decal", ToolIconKind.Decal, new Rect(leftX, 352f - leftContentLift, toolIcon, 34f), () => SetTool(EditorTool.Decal));
+        _textButton = CreateAnchoredIconButton(panel.transform, "Text", ToolIconKind.Text, new Rect(leftX + (toolIcon + toolGap), 352f - leftContentLift, toolIcon, 34f), () => SetTool(EditorTool.Text));
+        _stickerButton = CreateAnchoredIconButton(panel.transform, "Sticker", ToolIconKind.Sticker, new Rect(leftX + (toolIcon + toolGap) * 2f, 352f - leftContentLift, toolIcon, 34f), () => SetTool(EditorTool.Sticker));
+        _eyedropperButton = CreateAnchoredIconButton(panel.transform, "Eyedropper", ToolIconKind.Eyedropper, new Rect(leftX + (toolIcon + toolGap) * 3f, 352f - leftContentLift, toolIcon, 34f), () => SetTool(EditorTool.Eyedropper));
 
-        CreateSectionDivider(panel.transform, new Rect(leftX, 390f, leftW, 1f));
-        CreateAnchoredText(panel.transform, "BrushHeader", "Brush", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 394f, leftW, 24f), TerminalTextColor);
-        _brushShapeLabel = CreateAnchoredText(panel.transform, "BrushShapeLabel", "Shape", 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 424f, 94f, 24f), TerminalTextColor);
-        _brushShapeButton = CreateAnchoredButton(panel.transform, BrushShapeDisplayName(_brushShape), new Rect(leftX + 100f, 420f, 174f, 30f), ToggleBrushShapeMenu);
-        BuildBrushShapeMenu(panel.transform, new Rect(leftX + 100f, 452f, 174f, 178f));
-        _brushSizeLabel = CreateAnchoredText(panel.transform, "BrushSizeLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 458f, 94f, 24f), TerminalTextColor);
-        _brushSizeSlider = CreateAnchoredSlider(panel.transform, "BrushSize", 1f, 96f, _brushSize, new Rect(leftX + 100f, 460f, 174f, 24f), value => _brushSize = value);
-        _brushOpacityLabel = CreateAnchoredText(panel.transform, "BrushOpacityLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 492f, 94f, 24f), TerminalTextColor);
-        _brushOpacitySlider = CreateAnchoredSlider(panel.transform, "BrushOpacity", 0.05f, 1f, _brushOpacity, new Rect(leftX + 100f, 494f, 174f, 24f), value => _brushOpacity = value);
-        _fillToleranceLabel = CreateAnchoredText(panel.transform, "FillToleranceLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 526f, 104f, 24f), TerminalTextColor);
-        _fillToleranceSlider = CreateAnchoredSlider(panel.transform, "FillTolerance", 0f, 0.5f, _fillTolerance, new Rect(leftX + 110f, 528f, 164f, 24f), value => _fillTolerance = value);
+        CreateSectionDivider(panel.transform, new Rect(leftX, 390f - leftContentLift, leftW, 1f));
+        CreateAnchoredText(panel.transform, "BrushHeader", "Brush", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 394f - leftContentLift, leftW, 24f), TerminalTextColor);
+        _brushShapeLabel = CreateAnchoredText(panel.transform, "BrushShapeLabel", "Shape", 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 424f - leftContentLift, 94f, 24f), TerminalTextColor);
+        _brushShapeButton = CreateAnchoredButton(panel.transform, BrushShapeDisplayName(_brushShape), new Rect(leftX + 100f, 420f - leftContentLift, 174f, 30f), ToggleBrushShapeMenu);
+        BuildBrushShapeMenu(panel.transform, new Rect(leftX + 100f, 452f - leftContentLift, 174f, 178f));
+        _brushSizeLabel = CreateAnchoredText(panel.transform, "BrushSizeLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 458f - leftContentLift, 94f, 24f), TerminalTextColor);
+        _brushSizeSlider = CreateAnchoredSlider(panel.transform, "BrushSize", 1f, 96f, _brushSize, new Rect(leftX + 100f, 460f - leftContentLift, 174f, 24f), value => _brushSize = value);
+        _brushOpacityLabel = CreateAnchoredText(panel.transform, "BrushOpacityLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 492f - leftContentLift, 94f, 24f), TerminalTextColor);
+        _brushOpacitySlider = CreateAnchoredSlider(panel.transform, "BrushOpacity", 0.05f, 1f, _brushOpacity, new Rect(leftX + 100f, 494f - leftContentLift, 174f, 24f), value => _brushOpacity = value);
+        _fillToleranceLabel = CreateAnchoredText(panel.transform, "FillToleranceLabel", string.Empty, 14, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 526f - leftContentLift, 104f, 24f), TerminalTextColor);
+        _fillToleranceSlider = CreateAnchoredSlider(panel.transform, "FillTolerance", 0f, 0.5f, _fillTolerance, new Rect(leftX + 110f, 528f - leftContentLift, 164f, 24f), value => _fillTolerance = value);
 
-        CreateSectionDivider(panel.transform, new Rect(leftX, 556f, leftW, 1f));
-        CreateAnchoredText(panel.transform, "ColorHeader", "Color", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 564f, leftW, 24f), TerminalTextColor);
-        _colorPicker = CreateAnchoredColorPicker(panel.transform, new Rect(leftX, 588f, leftW, 104f), _brushColor, color =>
+        CreateSectionDivider(panel.transform, new Rect(leftX, 556f - leftContentLift, leftW, 1f));
+        CreateAnchoredText(panel.transform, "ColorHeader", "Color", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 564f - leftContentLift, leftW, 24f), TerminalTextColor);
+        _colorPicker = CreateAnchoredColorPicker(panel.transform, new Rect(leftX, 588f - leftContentLift, leftW, 104f), _brushColor, color =>
         {
             _brushColor = color;
             UpdateColorUi();
         }, out _colorSwatch, out _colorHexInput);
         _colorHexInput.onValueChanged.AddListener(PreviewHexInput);
         _colorHexInput.onEndEdit.AddListener(ApplyHexInput);
-        _recentColorsLabel = CreateAnchoredText(panel.transform, "RecentColorsHeader", "Recent Colors", 14, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 704f, leftW, 22f), TerminalTextColor);
-        BuildRecentColorSwatches(panel.transform, new Rect(leftX, 730f, leftW, 64f));
+        _recentColorsLabel = CreateAnchoredText(panel.transform, "RecentColorsHeader", "Recent Colors", 14, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 704f - leftContentLift, leftW, 22f), TerminalTextColor);
+        BuildRecentColorSwatches(panel.transform, new Rect(leftX, 730f - leftContentLift, leftW, 64f));
 
         _uvFallbackButton = CreateAnchoredButton(panel.transform, "Use UV Fallback", new Rect(rightX, 54f, 150f, 34f), ToggleUvFallback);
         CreateAnchoredText(panel.transform, "WorldHelp", "Aim at suit or UV panel. RT stamps/samples; hold paint/erase. Wheel/D-pad U/D zooms; D-pad L/R or ,/. rotates decals/stickers. Right-drag or right stick pans UV.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(rightX, 96f, rightW, 76f), TerminalMutedTextColor);
