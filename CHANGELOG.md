@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.61
+
+- Removed visible startup/F9 debug HUDs and the editor diagnostics text block while keeping file-based diagnostics logging.
+- Stopped creating obsolete `DebugOverlayKey`, `ShowStartupDiagnostics`, and `StartupDiagnosticsSeconds` config entries for new configs.
+- Removed the fallback diagnostics canvas; editor UI build failures now log to `diagnostics.log` and report a concise open failure.
+
 ## 0.5.60
 
 - Added Decal and Sticker placement rotation shortcuts: keyboard `,` rotates left, `.` rotates right, and controller D-pad left/right rotates by 5 degrees per press.

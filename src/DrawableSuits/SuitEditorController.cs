@@ -301,7 +301,6 @@ internal sealed class SuitEditorController : MonoBehaviour
     private string _lastWorldProxyMaterialLogKey = string.Empty;
     private float _lastWorldProxyMaterialLogTime;
     private Vector2 _lastWorldPaintUv;
-    private bool _lastWorldRaycastHit;
     private Vector3 _lastWorldHitPoint;
     private Vector3 _lastWorldHitNormal;
     private Texture2D _decalPreviewTexture;
@@ -422,8 +421,6 @@ internal sealed class SuitEditorController : MonoBehaviour
     private RawImage _previewImage;
     private Text _suitLabel;
     private Text _statusLabel;
-    private Text _diagnosticsLabel;
-    private Text _fallbackDiagnosticsLabel;
     private Text _activeToolLabel;
     private Text _brushSizeLabel;
     private Text _brushOpacityLabel;
@@ -2537,7 +2534,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
         catch (Exception ex)
         {
-            DrawableSuitsDiagnostics.Exception("BuildEditorCanvas failed; attempting fallback diagnostics canvas", ex);
+            DrawableSuitsDiagnostics.Exception("BuildEditorCanvas failed", ex);
             if (_editorCanvasObject != null)
             {
                 Destroy(_editorCanvasObject);
@@ -2547,18 +2544,8 @@ internal sealed class SuitEditorController : MonoBehaviour
                 _cursorMarker = null;
             }
 
-            try
-            {
-                BuildFallbackDiagnosticsCanvas(ex);
-                LogCanvasState("fallback-created");
-                return _editorCanvasObject != null;
-            }
-            catch (Exception fallbackEx)
-            {
-                DrawableSuitsDiagnostics.Exception("BuildFallbackDiagnosticsCanvas failed", fallbackEx);
-                failureReason = $"DrawableSuits editor cannot open: failed to build Unity UI overlay ({ex.Message}); fallback also failed ({fallbackEx.Message}).";
-                return false;
-            }
+            failureReason = $"DrawableSuits editor cannot open: failed to build Unity UI overlay ({ex.Message}). Check BepInEx/config/DrawableSuits/Logs/diagnostics.log for details.";
+            return false;
         }
     }
 
@@ -2604,8 +2591,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         _suitLabel = CreateAnchoredText(panel.transform, "SuitLabel", string.Empty, 18, FontStyle.Normal, TextAnchor.MiddleLeft, new Rect(leftX, 54f, 420f, 28f), TerminalTextColor);
         _statusLabel = CreateAnchoredText(panel.transform, "StatusLabel", string.Empty, 15, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 86f, leftW, 46f), TerminalStatusColor);
         _statusLabel.color = TerminalStatusColor;
-        _diagnosticsLabel = CreateAnchoredText(panel.transform, "DiagnosticsLabel", string.Empty, 12, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 138f, leftW, 128f), TerminalDiagnosticsColor);
-        _diagnosticsLabel.color = TerminalDiagnosticsColor;
 
         CreateSectionDivider(panel.transform, new Rect(leftX, 274f, leftW, 1f));
         CreateAnchoredText(panel.transform, "ToolHeader", "Tools", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, 282f, 72f, 24f), TerminalTextColor);
@@ -3129,57 +3114,6 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         _placementEditPanelObject.SetActive(false);
         DrawableSuitsDiagnostics.Info("PlacementEditPanel built.");
-    }
-
-    private void BuildFallbackDiagnosticsCanvas(Exception originalException)
-    {
-        _bootstrapShell = true;
-        _editorCanvasObject = new GameObject("DrawableSuitsEditorCanvas", typeof(RectTransform), typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
-        DontDestroyOnLoad(_editorCanvasObject);
-        _canvasRect = _editorCanvasObject.GetComponent<RectTransform>();
-        _canvasRect.anchorMin = Vector2.zero;
-        _canvasRect.anchorMax = Vector2.one;
-        _canvasRect.offsetMin = Vector2.zero;
-        _canvasRect.offsetMax = Vector2.zero;
-
-        var canvas = _editorCanvasObject.GetComponent<Canvas>();
-        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-        canvas.sortingOrder = EditorCanvasSortingOrder;
-
-        var scaler = _editorCanvasObject.GetComponent<CanvasScaler>();
-        scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-        scaler.referenceResolution = new Vector2(1920f, 1080f);
-        scaler.matchWidthOrHeight = 0.5f;
-
-        var panel = new GameObject("EditorPanelFallback", typeof(RectTransform), typeof(Image));
-        panel.transform.SetParent(_editorCanvasObject.transform, false);
-        _panelRect = panel.GetComponent<RectTransform>();
-        _panelRect.anchorMin = new Vector2(0f, 1f);
-        _panelRect.anchorMax = new Vector2(0f, 1f);
-        _panelRect.pivot = new Vector2(0f, 1f);
-        _panelRect.anchoredPosition = new Vector2(24f, -24f);
-        _panelRect.sizeDelta = new Vector2(560f, 260f);
-        panel.GetComponent<Image>().color = new Color(0.03f, 0.035f, 0.04f, 0.96f);
-
-        var textObject = new GameObject("DiagnosticsTextFallback", typeof(RectTransform), typeof(Text));
-        textObject.transform.SetParent(panel.transform, false);
-        var textRect = textObject.GetComponent<RectTransform>();
-        textRect.anchorMin = Vector2.zero;
-        textRect.anchorMax = Vector2.one;
-        textRect.offsetMin = new Vector2(14f, 14f);
-        textRect.offsetMax = new Vector2(-14f, -14f);
-
-        _fallbackDiagnosticsLabel = textObject.GetComponent<Text>();
-        _fallbackDiagnosticsLabel.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
-        _fallbackDiagnosticsLabel.fontSize = 18;
-        _fallbackDiagnosticsLabel.color = Color.white;
-        _fallbackDiagnosticsLabel.alignment = TextAnchor.UpperLeft;
-        _fallbackDiagnosticsLabel.horizontalOverflow = HorizontalWrapMode.Wrap;
-        _fallbackDiagnosticsLabel.verticalOverflow = VerticalWrapMode.Overflow;
-        _fallbackDiagnosticsLabel.text = $"DrawableSuits diagnostics fallback\nFull editor build failed: {originalException.GetType().Name}: {originalException.Message}";
-
-        _editorCanvasObject.SetActive(false);
-        DrawableSuitsDiagnostics.Info("Fallback diagnostics canvas built.");
     }
 
     private void EnsureCursorCanvas()
@@ -4453,15 +4387,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         if (_decalSizeSlider != null) _decalSizeSlider.SetValue(CurrentPlacementSize(), false);
         if (_decalRotationSlider != null) _decalRotationSlider.SetValue(CurrentPlacementRotation(), false);
 
-        if (_diagnosticsLabel != null)
-        {
-            _diagnosticsLabel.text = BuildDiagnosticsSummary();
-        }
-        if (_fallbackDiagnosticsLabel != null)
-        {
-            _fallbackDiagnosticsLabel.text = "DrawableSuits diagnostics\n" + BuildDiagnosticsSummary();
-        }
-
         if (_usingTexturePreview)
         {
             UseTexturePreview("UpdateUiState", false);
@@ -4517,40 +4442,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         UpdateRecentColorSwatches();
         UpdateUndoHistoryUi();
         RefreshPlacementEditPanelUi();
-    }
-
-    private string BuildDiagnosticsSummary()
-    {
-        var camera = Camera.main;
-        return string.Join("\n", new[]
-        {
-            $"Selected suit id: {_selectedSuitId}",
-            $"Suit count: {_knownSuitCount}",
-            $"Local player found: {_hasLocalPlayer}",
-            $"Player model found: {_hasPlayerModel}",
-            $"Main camera found: {_hasCamera} ({(camera != null ? camera.name : "null")})",
-            $"Preview mode: {_previewMode}",
-            $"Editable texture: {DescribeEditableTexture()}",
-            $"Preview UI texture: {DescribePreviewImageTexture()}",
-            $"Tool: {_tool}",
-            $"Brush shape: {_brushShape}",
-            $"Mirror enabled: {_mirrorEnabled}",
-            $"Mirror map: {(_mirrorSurfaceMap != null ? $"{_mirrorSurfaceMap.TriangleCount} tris" : "none")}",
-            $"Texture-only mode: {_uvFallbackMode}",
-            $"UV panel visible: {_previewViewportRect != null && _previewViewportRect.gameObject.activeSelf}",
-            $"UV panel zoom: {_uvPanelZoom:0.##} ({GetUvPanelViewRect()})",
-            $"World camera found: {_worldEditorCamera != null}",
-            $"World avatar proxy found: {_worldAvatarRenderer != null}",
-            $"World source renderer: {_worldSourceRendererSummary}",
-            $"World paint collider found: {_worldPaintCollider != null}",
-            $"World raycast hit: {_lastWorldRaycastHit}",
-            $"Experimental model preview: {DrawableSuitsPlugin.ModConfig.EnableExperimentalModelPreview.Value}",
-            $"Preview camera found: {_previewCamera != null}",
-            $"Preview collider found: {_hasPreviewCollider}",
-            $"Can paint/apply texture: {_canPaint}",
-            $"Canvas active: {(_editorCanvasObject != null && _editorCanvasObject.activeSelf)}",
-            "Diagnostics log: BepInEx/config/DrawableSuits/Logs/diagnostics.log"
-        });
     }
 
     private static void SetInteractable(Selectable selectable, bool interactable)
@@ -15352,7 +15243,6 @@ internal sealed class SuitEditorController : MonoBehaviour
     private bool TryGetWorldPaintHit(out RaycastHit hit)
     {
         hit = default;
-        _lastWorldRaycastHit = false;
         if (!IsWorldThirdPersonMode || _worldEditorCamera == null || _worldPaintCollider == null)
         {
             return false;
@@ -15372,7 +15262,6 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
-        _lastWorldRaycastHit = true;
         _lastWorldPaintUv = hit.textureCoord;
         _lastWorldHitPoint = hit.point;
         _lastWorldHitNormal = hit.normal;
@@ -15437,7 +15326,6 @@ internal sealed class SuitEditorController : MonoBehaviour
         _worldSourceRenderer = null;
         _worldSourceRendererSummary = "none";
         _worldPreviewReady = false;
-        _lastWorldRaycastHit = false;
         if (restoreRenderers)
         {
             RestorePlayerRenderers();

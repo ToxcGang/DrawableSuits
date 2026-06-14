@@ -117,9 +117,7 @@ DrawableSuits is not compatible with ModelReplacementAPI. Replacement models can
 The BepInEx config file controls:
 
 - Open editor key.
-- Emergency diagnostics overlay key.
-- Debug HUD toggle key.
-- Startup diagnostics HUD enable/disable and display duration.
+- Emergency open key.
 - Controller cursor speed.
 - Max editable texture size.
 - Undo history size.
@@ -139,13 +137,13 @@ DrawableSuits writes detailed startup, pause-menu, input, editor, camera, collid
 
 When testing with Gale, also search `BepInEx/LogOutput.log` in the active Gale profile for `DrawableSuits`.
 
-Expected 0.5.60 behavior:
+Expected 0.5.61 behavior:
 
 - Opening the editor shows an Imperium-inspired red/dark terminal overlay and a third-person camera view of the local player.
+- Visible startup, F9, editor diagnostics, and fallback diagnostics HUDs are removed. Troubleshooting details are written to `BepInEx/config/DrawableSuits/Logs/diagnostics.log`.
 - Paint, Erase, Fill, Decal, Text, Sticker, Eyedropper, and Mirror use embedded generated PNG icon masks instead of large text tool buttons or procedural mesh glyphs. The active tool label names the current icon, and Mirror remains a UI-only modifier.
 - Paint, Fill, and Eyedropper icons should read clearly as a paint brush, paint bucket, and eyedropper at the in-game toolbar size.
 - The editor edits only the local player's currently worn suit. The old Previous, Use Current, and Next suit-selection buttons are not present.
-- The diagnostics text should show `Preview mode: WorldThirdPerson` when the default path succeeds.
 - The UV texture panel is visible at the same time as the third-person suit and can be edited directly by moving the cursor over it.
 - The visible editor model is `DrawableSuitsWorldAvatarProxy`, a baked suit/body proxy on an isolated layer, not the live first-person local rig. The proxy pose is frozen while the editor is open so idle breathing does not move the paint target. First-person helmet/viewmodel renderers are hidden during editing and restored on close.
 - Normal session startup should log `SessionSafetyCheck` with `EditorOpen=False`, no active DrawableSuits cameras, `Camera.main` state, local player state, prompt context, and `jetpackWarningGuard` status.
