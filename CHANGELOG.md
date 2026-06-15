@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.67
+
+- Cleaned up editor layout spacing after the debug HUD removal.
+- Rebalanced the left and right editor columns, enlarged the UV panel slot, and added subtle section grouping diagnostics.
+
 ## 0.5.66
 
 - Tightened the pause-menu inline prefix spacing so `DrawableSuits` aligns more closely with native menu rows.
