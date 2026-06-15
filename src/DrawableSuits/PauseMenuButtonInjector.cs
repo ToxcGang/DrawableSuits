@@ -30,10 +30,19 @@ internal static class PauseMenuButtonInjector
 
         var rows = CollectRows(panel);
         DrawableSuitsDiagnostics.Info($"EnsureButton started. menuOpen={quickMenu.isMenuOpen}; panel={panel.name}; rowsFound={rows.Count}; labels=[{DescribeRows(rows)}]");
+        var template = ChooseTemplateRow(rows);
+        DrawableSuitsDiagnostics.Info($"Pause-menu DrawableSuits template selected: label={template?.LabelText ?? "none"}; object={template?.GameObject.name ?? "none"}; sibling={template?.RectTransform.GetSiblingIndex().ToString() ?? "none"}");
         var buttonObject = FindExistingButton(panel);
+        if (buttonObject != null && template != null)
+        {
+            DrawableSuitsDiagnostics.Info("Replacing existing DrawableSuits pause button with a fresh clone so native prefix/arrow children match the current menu template.");
+            buttonObject.SetActive(false);
+            Object.Destroy(buttonObject);
+            buttonObject = null;
+        }
+
         if (buttonObject == null)
         {
-            var template = ChooseTemplateRow(rows);
             DrawableSuitsDiagnostics.Info($"No existing DrawableSuits pause button. template={(template != null ? template.LabelText + "/" + template.GameObject.name : "none")}.");
             buttonObject = template != null
                 ? CloneTemplate(template)
@@ -51,11 +60,12 @@ internal static class PauseMenuButtonInjector
         }
 
         RemoveDuplicateButtons(panel, buttonObject);
-        ConfigureButton(buttonObject, quickMenu);
+        ConfigureButton(buttonObject, quickMenu, template);
         PlaceButtonAndRows(panel, buttonObject);
         RebuildNavigation(panel);
         var buttonRect = buttonObject.GetComponent<RectTransform>();
-        DrawableSuitsDiagnostics.Info($"EnsureButton complete. exists={buttonObject != null}; active={buttonObject.activeSelf}; anchoredPosition={buttonRect?.anchoredPosition.ToString() ?? "null"}; siblingIndex={buttonObject.transform.GetSiblingIndex()}; rowsAfter={CollectRows(panel).Count}");
+        var button = buttonObject.GetComponent<Button>();
+        DrawableSuitsDiagnostics.Info($"EnsureButton complete. exists={buttonObject != null}; active={buttonObject.activeSelf}; anchoredPosition={buttonRect?.anchoredPosition.ToString() ?? "null"}; siblingIndex={buttonObject.transform.GetSiblingIndex()}; nav={DescribeNavigation(button)}; colors={DescribeButtonColors(button)}; rowsAfter={CollectRows(panel).Count}");
     }
 
     public static void SelectIfNeeded(QuickMenuManager quickMenu)
@@ -65,10 +75,10 @@ internal static class PauseMenuButtonInjector
             return;
         }
 
-            if (EventSystem.current.currentSelectedGameObject != null)
-            {
-                return;
-            }
+        if (EventSystem.current.currentSelectedGameObject != null)
+        {
+            return;
+        }
 
         var panel = quickMenu.mainButtonsPanel.GetComponent<RectTransform>();
         var rows = GetRowsInVisualOrder(panel);
@@ -171,11 +181,16 @@ internal static class PauseMenuButtonInjector
         return root;
     }
 
-    private static void ConfigureButton(GameObject buttonObject, QuickMenuManager quickMenu)
+    private static void ConfigureButton(GameObject buttonObject, QuickMenuManager quickMenu, MenuRow template)
     {
         buttonObject.name = ButtonName;
         buttonObject.SetActive(true);
-        SetButtonText(buttonObject);
+        if (template != null)
+        {
+            ApplyTemplateStyle(template, buttonObject);
+        }
+
+        SetButtonText(buttonObject, template?.LabelText);
 
         var button = buttonObject.GetComponent<Button>() ?? buttonObject.AddComponent<Button>();
         button.interactable = true;
@@ -188,18 +203,101 @@ internal static class PauseMenuButtonInjector
         button.navigation = navigation;
     }
 
-    private static void SetButtonText(GameObject buttonObject)
+    private static void ApplyTemplateStyle(MenuRow template, GameObject buttonObject)
     {
-        foreach (var label in buttonObject.GetComponentsInChildren<TextMeshProUGUI>(true))
+        var targetRect = buttonObject.GetComponent<RectTransform>();
+        if (targetRect != null)
         {
-            label.text = ButtonText;
-            label.enableWordWrapping = false;
+            CopyRectTemplate(template.RectTransform, targetRect);
         }
 
-        foreach (var label in buttonObject.GetComponentsInChildren<Text>(true))
+        var templateButton = template.Button;
+        var targetButton = buttonObject.GetComponent<Button>() ?? buttonObject.AddComponent<Button>();
+        targetButton.transition = templateButton.transition;
+        targetButton.colors = templateButton.colors;
+        targetButton.spriteState = templateButton.spriteState;
+        targetButton.animationTriggers = templateButton.animationTriggers;
+        targetButton.targetGraphic = buttonObject.GetComponent<Graphic>() ?? buttonObject.GetComponentInChildren<Graphic>(true);
+
+        var templateImage = template.GameObject.GetComponent<Image>();
+        var targetImage = buttonObject.GetComponent<Image>();
+        if (templateImage != null && targetImage != null)
         {
-            label.text = ButtonText;
+            targetImage.sprite = templateImage.sprite;
+            targetImage.overrideSprite = templateImage.overrideSprite;
+            targetImage.type = templateImage.type;
+            targetImage.preserveAspect = templateImage.preserveAspect;
+            targetImage.fillCenter = templateImage.fillCenter;
+            targetImage.fillMethod = templateImage.fillMethod;
+            targetImage.fillAmount = templateImage.fillAmount;
+            targetImage.fillClockwise = templateImage.fillClockwise;
+            targetImage.fillOrigin = templateImage.fillOrigin;
+            targetImage.color = templateImage.color;
+            targetImage.material = templateImage.material;
+            targetImage.raycastTarget = templateImage.raycastTarget;
         }
+
+        var templateLayout = template.GameObject.GetComponent<LayoutElement>();
+        var targetLayout = buttonObject.GetComponent<LayoutElement>();
+        if (templateLayout != null)
+        {
+            targetLayout ??= buttonObject.AddComponent<LayoutElement>();
+            targetLayout.ignoreLayout = templateLayout.ignoreLayout;
+            targetLayout.minWidth = templateLayout.minWidth;
+            targetLayout.minHeight = templateLayout.minHeight;
+            targetLayout.preferredWidth = templateLayout.preferredWidth;
+            targetLayout.preferredHeight = templateLayout.preferredHeight;
+            targetLayout.flexibleWidth = templateLayout.flexibleWidth;
+            targetLayout.flexibleHeight = templateLayout.flexibleHeight;
+            targetLayout.layoutPriority = templateLayout.layoutPriority;
+        }
+
+        DrawableSuitsDiagnostics.Info($"Applied pause-menu template style. template={template.LabelText}/{template.GameObject.name}; target={buttonObject.name}; colors={DescribeButtonColors(targetButton)}");
+    }
+
+    private static void SetButtonText(GameObject buttonObject, string templateLabelText)
+    {
+        var tmpLabels = buttonObject.GetComponentsInChildren<TextMeshProUGUI>(true);
+        var primaryTmp = FindPrimaryTmpLabel(tmpLabels, templateLabelText);
+        var preserved = new List<string>();
+        foreach (var label in tmpLabels)
+        {
+            if (label == null)
+            {
+                continue;
+            }
+
+            if (label == primaryTmp)
+            {
+                label.text = ButtonText;
+                label.enableWordWrapping = false;
+            }
+            else
+            {
+                preserved.Add(label.text ?? string.Empty);
+            }
+        }
+
+        var legacyLabels = buttonObject.GetComponentsInChildren<Text>(true);
+        var primaryLegacy = primaryTmp == null ? FindPrimaryLegacyLabel(legacyLabels, templateLabelText) : null;
+        foreach (var label in legacyLabels)
+        {
+            if (label == null)
+            {
+                continue;
+            }
+
+            if (label == primaryLegacy)
+            {
+                label.text = ButtonText;
+            }
+            else
+            {
+                preserved.Add(label.text ?? string.Empty);
+            }
+        }
+
+        DrawableSuitsDiagnostics.Info($"Pause-menu DrawableSuits text configured. templateLabel={templateLabelText ?? "none"}; primaryTmp={DescribeTmpLabel(primaryTmp)}; primaryLegacy={DescribeLegacyLabel(primaryLegacy)}; preserved=[{string.Join(", ", preserved)}]");
     }
 
     private static void PlaceButtonAndRows(RectTransform panel, GameObject buttonObject)
@@ -409,20 +507,21 @@ internal static class PauseMenuButtonInjector
 
     private static string GetLabelText(GameObject gameObject)
     {
-        var tmp = gameObject.GetComponentInChildren<TextMeshProUGUI>(true);
+        var tmp = FindPrimaryTmpLabel(gameObject.GetComponentsInChildren<TextMeshProUGUI>(true), null);
         if (tmp != null)
         {
             return tmp.text ?? string.Empty;
         }
 
-        var text = gameObject.GetComponentInChildren<Text>(true);
+        var text = FindPrimaryLegacyLabel(gameObject.GetComponentsInChildren<Text>(true), null);
         return text != null ? text.text ?? string.Empty : string.Empty;
     }
 
     private static MenuRow ChooseTemplateRow(List<MenuRow> rows)
     {
-        return FindRowContaining(rows, "settings")
+        return FindResumeRow(rows)
             ?? FindRowContaining(rows, "invite")
+            ?? FindRowContaining(rows, "settings")
             ?? FindRowContaining(rows, "lethalconfig")
             ?? FirstNonDrawableRow(rows);
     }
@@ -480,6 +579,130 @@ internal static class PauseMenuButtonInjector
     private static string Normalize(string value)
     {
         return (value ?? string.Empty).Replace(" ", string.Empty).Replace("\n", string.Empty).ToLowerInvariant();
+    }
+
+    private static TextMeshProUGUI FindPrimaryTmpLabel(TextMeshProUGUI[] labels, string preferredText)
+    {
+        TextMeshProUGUI best = null;
+        var bestScore = float.MinValue;
+        var preferred = Normalize(preferredText);
+        foreach (var label in labels)
+        {
+            if (label == null)
+            {
+                continue;
+            }
+
+            var score = ScoreLabelCandidate(label.text, label.rectTransform, label.fontSize, preferred);
+            if (score > bestScore)
+            {
+                bestScore = score;
+                best = label;
+            }
+        }
+
+        return best;
+    }
+
+    private static Text FindPrimaryLegacyLabel(Text[] labels, string preferredText)
+    {
+        Text best = null;
+        var bestScore = float.MinValue;
+        var preferred = Normalize(preferredText);
+        foreach (var label in labels)
+        {
+            if (label == null)
+            {
+                continue;
+            }
+
+            var score = ScoreLabelCandidate(label.text, label.rectTransform, label.fontSize, preferred);
+            if (score > bestScore)
+            {
+                bestScore = score;
+                best = label;
+            }
+        }
+
+        return best;
+    }
+
+    private static float ScoreLabelCandidate(string text, RectTransform rect, float fontSize, string preferred)
+    {
+        var normalized = Normalize(text);
+        if (string.IsNullOrEmpty(normalized))
+        {
+            return -100000f;
+        }
+
+        var score = 0f;
+        if (!string.IsNullOrEmpty(preferred) && normalized.Contains(preferred))
+        {
+            score += 100000f;
+        }
+
+        if (HasLetterOrDigit(normalized))
+        {
+            score += 1000f + normalized.Length * 25f;
+        }
+        else
+        {
+            score -= 1000f;
+        }
+
+        if (rect != null)
+        {
+            score += Mathf.Max(0f, rect.rect.width) * 0.2f;
+            score += Mathf.Max(0f, rect.rect.height) * 0.1f;
+        }
+
+        score += fontSize;
+        return score;
+    }
+
+    private static bool HasLetterOrDigit(string value)
+    {
+        foreach (var c in value)
+        {
+            if (char.IsLetterOrDigit(c))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string DescribeTmpLabel(TextMeshProUGUI label)
+    {
+        return label == null ? "none" : $"{label.gameObject.name}='{label.text}' rect={label.rectTransform.rect}";
+    }
+
+    private static string DescribeLegacyLabel(Text label)
+    {
+        return label == null ? "none" : $"{label.gameObject.name}='{label.text}' rect={label.rectTransform.rect}";
+    }
+
+    private static string DescribeButtonColors(Button button)
+    {
+        if (button == null)
+        {
+            return "button=null";
+        }
+
+        var colors = button.colors;
+        return $"transition={button.transition}; normal={colors.normalColor}; highlighted={colors.highlightedColor}; selected={colors.selectedColor}; pressed={colors.pressedColor}; disabled={colors.disabledColor}; targetGraphic={button.targetGraphic?.name ?? "null"}";
+    }
+
+    private static string DescribeNavigation(Button button)
+    {
+        if (button == null)
+        {
+            return "button=null";
+        }
+
+        var navigation = button.navigation;
+        return $"mode={navigation.mode}; up={navigation.selectOnUp?.gameObject.name ?? "null"}; down={navigation.selectOnDown?.gameObject.name ?? "null"}";
     }
 
     private static void OpenEditorFromPauseMenu(QuickMenuManager quickMenu)

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.63
+
+- Made the pause-menu `DrawableSuits` row clone the native Resume row style first so it matches surrounding menu buttons.
+- Preserved native pause-menu prefix/arrow text while replacing only the primary row label.
+- Added pause-menu style diagnostics for template selection, preserved labels, navigation, and button colors.
+
 ## 0.5.62
 
 - Reclaimed the empty left-panel space left by the removed editor diagnostics block.

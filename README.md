@@ -2,7 +2,7 @@
 
 DrawableSuits is a Lethal Company v81 BepInEx mod for drawing directly on your currently worn suit. It includes a third-person suit editor, an always-visible UV texture panel, decals, stickers, text, saved designs, and shareable design codes.
 
-Current version: `0.5.62`
+Current version: `0.5.63`
 
 ## What It Does
 
