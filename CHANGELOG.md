@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.66
+
+- Tightened the pause-menu inline prefix spacing so `DrawableSuits` aligns more closely with native menu rows.
+- Added a Ko-Fi support section to the README noting that donations help development and commissions are available.
+
 ## 0.5.65
 
 - Fixed the pause-menu `DrawableSuits` prefix alignment by using an inline `>` fallback when the native row does not expose a prefix child.

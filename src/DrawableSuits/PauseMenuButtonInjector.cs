@@ -10,7 +10,7 @@ internal static class PauseMenuButtonInjector
 {
     private const string ButtonName = "DrawableSuitsButton";
     private const string ButtonText = "DrawableSuits";
-    private const string ButtonTextWithInlinePrefix = ">  DrawableSuits";
+    private const string ButtonTextWithInlinePrefix = "> DrawableSuits";
     private const string PrefixText = ">";
     private const float MinimumRowSpacing = 36f;
     private const float FallbackRowSpacing = 92f;
