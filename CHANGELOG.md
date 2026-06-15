@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.64
+
+- Fixed the pause-menu `DrawableSuits` row so it preserves or synthesizes the native `>` prefix.
+- Adjusted pause-menu insertion to preserve native row spacing instead of reflowing every existing row.
+- Added diagnostics for prefix handling, row placement, target graphic mapping, and navigation.
+
 ## 0.5.63
 
 - Made the pause-menu `DrawableSuits` row clone the native Resume row style first so it matches surrounding menu buttons.
