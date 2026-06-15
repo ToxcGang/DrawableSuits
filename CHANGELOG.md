@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.65
+
+- Fixed the pause-menu `DrawableSuits` prefix alignment by using an inline `>` fallback when the native row does not expose a prefix child.
+- Removed the fragile separately positioned pause-menu prefix text object from the injected row.
+- Added diagnostics for preserved-child versus inline-label prefix handling.
+
 ## 0.5.64
 
 - Fixed the pause-menu `DrawableSuits` row so it preserves or synthesizes the native `>` prefix.

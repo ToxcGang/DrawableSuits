@@ -10,11 +10,10 @@ internal static class PauseMenuButtonInjector
 {
     private const string ButtonName = "DrawableSuitsButton";
     private const string ButtonText = "DrawableSuits";
+    private const string ButtonTextWithInlinePrefix = ">  DrawableSuits";
     private const string PrefixText = ">";
-    private const string SynthesizedPrefixName = "DrawableSuitsPrefix";
     private const float MinimumRowSpacing = 36f;
     private const float FallbackRowSpacing = 92f;
-    private const float PrefixLabelGap = 52f;
 
     public static void EnsureButton(QuickMenuManager quickMenu)
     {
@@ -311,32 +310,37 @@ internal static class PauseMenuButtonInjector
         var existingPrefix = FindPrefixText(buttonObject);
         if (existingPrefix != null)
         {
-            DrawableSuitsDiagnostics.Info($"PauseMenuPrefixPreserved child={existingPrefix.gameObject.name}; text='{existingPrefix.text}'; rect={existingPrefix.rectTransform.rect}; anchored={existingPrefix.rectTransform.anchoredPosition}");
+            var primary = FindPrimaryTmpLabel(buttonObject.GetComponentsInChildren<TextMeshProUGUI>(true), ButtonText);
+            DrawableSuitsDiagnostics.Info($"PauseMenuPrefixMode mode=PreservedChild; prefix={existingPrefix.gameObject.name}; prefixText='{existingPrefix.text}'; primary={DescribeTmpLabel(primary)}; rowRect={DescribeRect(buttonObject.GetComponent<RectTransform>())}; sibling={buttonObject.transform.GetSiblingIndex()}");
             return;
         }
 
         var existingLegacyPrefix = FindPrefixLegacyText(buttonObject);
         if (existingLegacyPrefix != null)
         {
-            DrawableSuitsDiagnostics.Info($"PauseMenuPrefixPreserved child={existingLegacyPrefix.gameObject.name}; text='{existingLegacyPrefix.text}'; rect={existingLegacyPrefix.rectTransform.rect}; anchored={existingLegacyPrefix.rectTransform.anchoredPosition}");
+            var primary = FindPrimaryLegacyLabel(buttonObject.GetComponentsInChildren<Text>(true), ButtonText);
+            DrawableSuitsDiagnostics.Info($"PauseMenuPrefixMode mode=PreservedChild; prefix={existingLegacyPrefix.gameObject.name}; prefixText='{existingLegacyPrefix.text}'; primary={DescribeLegacyLabel(primary)}; rowRect={DescribeRect(buttonObject.GetComponent<RectTransform>())}; sibling={buttonObject.transform.GetSiblingIndex()}");
             return;
         }
 
         var primaryTmp = FindPrimaryTmpLabel(buttonObject.GetComponentsInChildren<TextMeshProUGUI>(true), ButtonText);
         if (primaryTmp != null)
         {
-            CreateTmpPrefix(buttonObject, primaryTmp);
+            primaryTmp.text = ButtonTextWithInlinePrefix;
+            primaryTmp.enableWordWrapping = false;
+            DrawableSuitsDiagnostics.Info($"PauseMenuPrefixMode mode=InlineLabel; displayed='{primaryTmp.text}'; primary={DescribeTmpLabel(primaryTmp)}; rowRect={DescribeRect(buttonObject.GetComponent<RectTransform>())}; sibling={buttonObject.transform.GetSiblingIndex()}");
             return;
         }
 
         var primaryLegacy = FindPrimaryLegacyLabel(buttonObject.GetComponentsInChildren<Text>(true), ButtonText);
         if (primaryLegacy != null)
         {
-            CreateLegacyPrefix(buttonObject, primaryLegacy);
+            primaryLegacy.text = ButtonTextWithInlinePrefix;
+            DrawableSuitsDiagnostics.Info($"PauseMenuPrefixMode mode=InlineLabel; displayed='{primaryLegacy.text}'; primary={DescribeLegacyLabel(primaryLegacy)}; rowRect={DescribeRect(buttonObject.GetComponent<RectTransform>())}; sibling={buttonObject.transform.GetSiblingIndex()}");
             return;
         }
 
-        DrawableSuitsDiagnostics.Warn($"PauseMenuPrefixSynthesized skipped because no primary label was found. template={template?.LabelText ?? "none"}; button={buttonObject.name}");
+        DrawableSuitsDiagnostics.Warn($"PauseMenuPrefixMode mode=SkippedNoPrimaryLabel; template={template?.LabelText ?? "none"}; button={buttonObject.name}; rowRect={DescribeRect(buttonObject.GetComponent<RectTransform>())}; sibling={buttonObject.transform.GetSiblingIndex()}");
     }
 
     private static TextMeshProUGUI FindPrefixText(GameObject buttonObject)
@@ -365,65 +369,6 @@ internal static class PauseMenuButtonInjector
         }
 
         return null;
-    }
-
-    private static void CreateTmpPrefix(GameObject buttonObject, TextMeshProUGUI primary)
-    {
-        var prefixObject = new GameObject(SynthesizedPrefixName, typeof(RectTransform), typeof(TextMeshProUGUI));
-        prefixObject.transform.SetParent(primary.transform.parent, false);
-        prefixObject.transform.SetSiblingIndex(Mathf.Max(0, primary.transform.GetSiblingIndex()));
-
-        var rect = prefixObject.GetComponent<RectTransform>();
-        CopyPrefixRect(primary.rectTransform, rect);
-
-        var label = prefixObject.GetComponent<TextMeshProUGUI>();
-        label.text = PrefixText;
-        label.font = primary.font;
-        label.fontSharedMaterial = primary.fontSharedMaterial;
-        label.fontSize = primary.fontSize;
-        label.fontStyle = primary.fontStyle;
-        label.color = primary.color;
-        label.alignment = primary.alignment;
-        label.enableWordWrapping = false;
-        label.raycastTarget = false;
-
-        DrawableSuitsDiagnostics.Info($"PauseMenuPrefixSynthesized type=TMP; prefixRect={rect.rect}; prefixAnchored={rect.anchoredPosition}; primary={DescribeTmpLabel(primary)}; button={buttonObject.name}");
-    }
-
-    private static void CreateLegacyPrefix(GameObject buttonObject, Text primary)
-    {
-        var prefixObject = new GameObject(SynthesizedPrefixName, typeof(RectTransform), typeof(Text));
-        prefixObject.transform.SetParent(primary.transform.parent, false);
-        prefixObject.transform.SetSiblingIndex(Mathf.Max(0, primary.transform.GetSiblingIndex()));
-
-        var rect = prefixObject.GetComponent<RectTransform>();
-        CopyPrefixRect(primary.rectTransform, rect);
-
-        var label = prefixObject.GetComponent<Text>();
-        label.text = PrefixText;
-        label.font = primary.font;
-        label.fontSize = primary.fontSize;
-        label.fontStyle = primary.fontStyle;
-        label.color = primary.color;
-        label.alignment = primary.alignment;
-        label.horizontalOverflow = primary.horizontalOverflow;
-        label.verticalOverflow = primary.verticalOverflow;
-        label.raycastTarget = false;
-
-        DrawableSuitsDiagnostics.Info($"PauseMenuPrefixSynthesized type=Legacy; prefixRect={rect.rect}; prefixAnchored={rect.anchoredPosition}; primary={DescribeLegacyLabel(primary)}; button={buttonObject.name}");
-    }
-
-    private static void CopyPrefixRect(RectTransform primary, RectTransform prefix)
-    {
-        prefix.anchorMin = primary.anchorMin;
-        prefix.anchorMax = primary.anchorMax;
-        prefix.pivot = primary.pivot;
-        prefix.localScale = primary.localScale;
-        prefix.sizeDelta = new Vector2(Mathf.Max(24f, primary.rect.height), primary.sizeDelta.y);
-
-        var position = primary.anchoredPosition;
-        position.x -= PrefixLabelGap;
-        prefix.anchoredPosition = position;
     }
 
     private static void PlaceButtonAndRows(RectTransform panel, GameObject buttonObject)
@@ -847,6 +792,11 @@ internal static class PauseMenuButtonInjector
     private static string DescribeLegacyLabel(Text label)
     {
         return label == null ? "none" : $"{label.gameObject.name}='{label.text}' rect={label.rectTransform.rect}";
+    }
+
+    private static string DescribeRect(RectTransform rect)
+    {
+        return rect == null ? "rect=null" : $"rect={rect.rect}; anchored={rect.anchoredPosition}; sizeDelta={rect.sizeDelta}";
     }
 
     private static string DescribeButtonColors(Button button)
