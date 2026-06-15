@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.68
+
+- Polished editor layout spacing and button row formatting after the 0.5.67 layout pass.
+- Added clearer UV panel grouping and lighter section cards without changing editor behavior.
+
 ## 0.5.67
 
 - Cleaned up editor layout spacing after the debug HUD removal.
