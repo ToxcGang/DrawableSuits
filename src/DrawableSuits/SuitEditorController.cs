@@ -2596,7 +2596,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         const float texturePanelY = 418f;
         const float texturePanelH = 176f;
         const float designY = 608f;
-        const float undoY = 812f;
+        const float designCardH = 204f;
+        const float undoY = 826f;
         const float footerY = 958f;
         const float buttonGap = 8f;
         const float pairedButtonW = (rightW - buttonGap) * 0.5f;
@@ -2616,7 +2617,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         CreateSectionCard(panel.transform, new Rect(leftX - sectionInset, colorY, leftW + sectionInset * 2f, 264f));
         CreateSectionCard(panel.transform, new Rect(rightX - sectionInset, placementY, rightW + sectionInset * 2f, 228f));
         CreateSectionCard(panel.transform, new Rect(rightX - sectionInset, textureHeaderY, rightW + sectionInset * 2f, texturePanelH + 38f));
-        CreateSectionCard(panel.transform, new Rect(rightX - sectionInset, designY, rightW + sectionInset * 2f, 190f));
+        CreateSectionCard(panel.transform, new Rect(rightX - sectionInset, designY, rightW + sectionInset * 2f, designCardH));
 
         CreateSectionDivider(panel.transform, new Rect(leftX, toolsY, leftW, 1f));
         CreateAnchoredText(panel.transform, "ToolHeader", "Tools", 16, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, toolsY + 8f, 72f, 24f), TerminalTextColor);
@@ -2656,7 +2657,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         _colorHexInput.onValueChanged.AddListener(PreviewHexInput);
         _colorHexInput.onEndEdit.AddListener(ApplyHexInput);
         _recentColorsLabel = CreateAnchoredText(panel.transform, "RecentColorsHeader", "Recent Colors", 14, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(leftX, colorY + 150f, leftW, 22f), TerminalTextColor);
-        BuildRecentColorSwatches(panel.transform, new Rect(leftX, colorY + 176f, leftW, 64f));
+        var recentColorsRect = new Rect(leftX, colorY + 176f, leftW, 68f);
+        BuildRecentColorSwatches(panel.transform, recentColorsRect);
 
         _uvFallbackButton = CreateAnchoredButton(panel.transform, "Use UV Fallback", new Rect(rightX, 54f, 150f, 34f), ToggleUvFallback);
 
@@ -2808,7 +2810,10 @@ internal sealed class SuitEditorController : MonoBehaviour
         RebuildSelectableNavigation();
         LogEditorControlTree(panel.transform);
         DrawableSuitsDiagnostics.Info($"EditorThemeBuilt: theme=ImperiumInspiredTerminal; iconButtons=True; panelColor={panelImage.color}; accent={TerminalAccentColor}; text={TerminalTextColor}");
-        DrawableSuitsDiagnostics.Info($"EditorLayoutBuilt: panel={panelWidth:0}x{panelHeight:0}; left={leftX:0},{toolsY:0},{leftW:0}; right={rightX:0},{placementY:0},{rightW:0}; sections=tools:{toolsY:0},brush:{brushY:0},color:{colorY:0},placement:{placementY:0},uv:{textureHeaderY:0},design:{designY:0},undo:{undoY:0}; textureRect={rightX:0},{texturePanelY:0},{rightW:0},{texturePanelH:0}; pairButtonW={pairedButtonW:0.#}; actionButtonW={actionButtonW:0.#}; footerY={footerY:0}");
+        var designActionBottom = designY + 160f + rowButtonH;
+        var designCardRect = new Rect(rightX - sectionInset, designY, rightW + sectionInset * 2f, designCardH);
+        var undoRect = new Rect(rightX, undoY + 34f, rightW, 120f);
+        DrawableSuitsDiagnostics.Info($"EditorLayoutBuilt: panel={panelWidth:0}x{panelHeight:0}; left={leftX:0},{toolsY:0},{leftW:0}; right={rightX:0},{placementY:0},{rightW:0}; sections=tools:{toolsY:0},brush:{brushY:0},color:{colorY:0},placement:{placementY:0},uv:{textureHeaderY:0},design:{designY:0},undo:{undoY:0}; textureRect={rightX:0},{texturePanelY:0},{rightW:0},{texturePanelH:0}; recentColorsRect={recentColorsRect.x:0},{recentColorsRect.y:0},{recentColorsRect.width:0},{recentColorsRect.height:0}; designCard={designCardRect.x:0},{designCardRect.y:0},{designCardRect.width:0},{designCardRect.height:0}; designActionBottom={designActionBottom:0}; undoRect={undoRect.x:0},{undoRect.y:0},{undoRect.width:0},{undoRect.height:0}; pairButtonW={pairedButtonW:0.#}; actionButtonW={actionButtonW:0.#}; footerY={footerY:0}");
         DrawableSuitsDiagnostics.Info($"BuildEditorCanvas complete. childCount={_editorCanvasObject.transform.childCount}; panelChildren={panel.transform.childCount}; graphicRaycaster={_editorCanvasObject.GetComponent<GraphicRaycaster>() != null}; mode=compactThirdPerson");
     }
 
@@ -3487,14 +3492,18 @@ internal sealed class SuitEditorController : MonoBehaviour
         _recentColorImages.Clear();
         const int columns = 6;
         const float size = 30f;
-        const float gap = 8f;
+        const float rowGap = 8f;
+        var columnGap = columns > 1 ? (rect.width - columns * size) / (columns - 1) : 0f;
+        columnGap = Mathf.Clamp(columnGap, 8f, 20f);
+        var totalWidth = columns * size + (columns - 1) * columnGap;
+        var startX = rect.x + Mathf.Max(0f, (rect.width - totalWidth) * 0.5f);
         for (var i = 0; i < MaxRecentColors; i++)
         {
             var row = i / columns;
             var column = i % columns;
             var slot = i;
-            var x = rect.x + column * (size + gap);
-            var y = rect.y + row * (size + gap);
+            var x = startX + column * (size + columnGap);
+            var y = rect.y + row * (size + rowGap);
             var go = CreateUiObject($"RecentColor{slot + 1}", parent, typeof(RectTransform), typeof(Image), typeof(Button));
             SetAnchoredRect(go.GetComponent<RectTransform>(), new Rect(x, y, size, size));
 

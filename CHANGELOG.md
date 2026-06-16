@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.69
+
+- Fixed the Design action buttons overflowing past their section border.
+- Spread Recent Colors across the available Color section width for a cleaner layout.
+- Added layout diagnostics for the Design, Undo History, and Recent Colors rects.
+
 ## 0.5.68
 
 - Polished editor layout spacing and button row formatting after the 0.5.67 layout pass.
