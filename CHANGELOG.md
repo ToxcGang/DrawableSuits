@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.71
+
+- Fixed multiplayer suit sync reliability by normalizing local owner client IDs before broadcasting applied/saved designs.
+- Added server-side active design caching so late joiners can receive the latest applied player suit textures.
+- Added retry reapplication after sync receive, player spawn/connect, and suit-switch events so remote renderers get synced materials when they appear late.
+- Raised the default/effective legacy multiplayer sync payload limit to 4 MB and added clearer sync skip/apply diagnostics.
+
 ## 0.5.70
 
 - Added view-only UV panel rotation in 90-degree steps with `[` / `]` and controller `LB` / `RB`.

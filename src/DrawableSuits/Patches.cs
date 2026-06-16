@@ -68,7 +68,11 @@ internal static class UnlockableSuitPatches
     [HarmonyPatch(nameof(UnlockableSuit.SwitchSuitForPlayer))]
     private static void SwitchSuitForPlayerPostfix(PlayerControllerB player)
     {
-        RunPatch("UnlockableSuit.SwitchSuitForPlayer", () => DrawableSuitsPlugin.Registry?.ApplyToPlayer(player));
+        RunPatch("UnlockableSuit.SwitchSuitForPlayer", () =>
+        {
+            DrawableSuitsPlugin.Registry?.ApplyToPlayer(player);
+            DrawableSuitsPlugin.Registry?.ScheduleReapplyAll("UnlockableSuit.SwitchSuitForPlayer");
+        });
     }
 
     [HarmonyPostfix]
@@ -192,6 +196,7 @@ internal static class PlayerControllerBPatches
         RunPatch("PlayerControllerB.ConnectClientToPlayerObject", () =>
         {
             DrawableSuitsPlugin.Registry?.ApplyToPlayer(__instance);
+            DrawableSuitsPlugin.Registry?.ScheduleReapplyAll("PlayerControllerB.ConnectClientToPlayerObject");
             SessionSafetyGuard.Run("PlayerControllerB.ConnectClientToPlayerObject", true);
             DrawableSuitsPlugin.Sync?.RequestActiveDesigns();
         });
@@ -204,6 +209,7 @@ internal static class PlayerControllerBPatches
         RunPatch("PlayerControllerB.SpawnPlayerAnimation", () =>
         {
             DrawableSuitsPlugin.Registry?.ApplyToPlayer(__instance);
+            DrawableSuitsPlugin.Registry?.ScheduleReapplyAll("PlayerControllerB.SpawnPlayerAnimation");
             SessionSafetyGuard.Run("PlayerControllerB.SpawnPlayerAnimation", true);
         });
     }

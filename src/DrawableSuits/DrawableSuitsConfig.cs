@@ -30,7 +30,7 @@ internal sealed class DrawableSuitsConfig
         MaxTextureSize = config.Bind("Textures", "MaxTextureSize", 1024, "Maximum width and height for editable and synced suit textures.");
         MaxUndoStates = config.Bind("Editor", "MaxUndoStates", 12, "Maximum undo snapshots kept while editing.");
         EnableNetworkSync = config.Bind("Multiplayer", "EnableNetworkSync", true, "Sync applied and saved suit designs to other DrawableSuits users.");
-        MaxSyncBytes = config.Bind("Multiplayer", "MaxSyncBytes", 1048576, "Maximum PNG payload size allowed for multiplayer sync.");
+        MaxSyncBytes = config.Bind("Multiplayer", "MaxSyncBytes", 4194304, "Maximum PNG payload size allowed for multiplayer sync.");
         SyncChunkBytes = config.Bind("Multiplayer", "SyncChunkBytes", 48000, "Byte size for each Netcode custom-message texture chunk.");
         EnableOsFileDialog = config.Bind("Decals", "EnableOsFileDialog", false, "Legacy setting. The Decals menu Add Decal button now uses an external Windows picker process and this value is ignored.");
         EnableExperimentalModelPreview = config.Bind("Editor", "EnableExperimentalModelPreview", false, "Disabled by default. Uses the old camera/RenderTexture 3D model preview only for diagnostics; third-person world painting is the default.");

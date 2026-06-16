@@ -4184,6 +4184,16 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
     }
 
+    internal void ShowExternalStatus(string message, bool warn)
+    {
+        if (!_isOpen)
+        {
+            return;
+        }
+
+        SetStatus(message, warn);
+    }
+
     private void RestoreCursorState(bool leaveUnlockedForSceneChange)
     {
         if (!_cursorStateCaptured)
