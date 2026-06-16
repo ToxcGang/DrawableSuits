@@ -72,6 +72,46 @@ internal sealed class SuitEditorController : MonoBehaviour
         Shield
     }
 
+    private sealed class RotatedUvRawImage : RawImage
+    {
+        private int _quarterTurns;
+
+        internal void SetUvRotation(int quarterTurns)
+        {
+            var normalized = NormalizeUvPanelRotation(quarterTurns);
+            if (_quarterTurns == normalized)
+            {
+                return;
+            }
+
+            _quarterTurns = normalized;
+            SetVerticesDirty();
+        }
+
+        protected override void OnPopulateMesh(VertexHelper vh)
+        {
+            var rect = GetPixelAdjustedRect();
+            var color32 = color;
+            var view = uvRect;
+            vh.Clear();
+
+            vh.AddVert(new Vector3(rect.xMin, rect.yMin), color32, UvForPanelPoint(new Vector2(0f, 0f), view, _quarterTurns));
+            vh.AddVert(new Vector3(rect.xMin, rect.yMax), color32, UvForPanelPoint(new Vector2(0f, 1f), view, _quarterTurns));
+            vh.AddVert(new Vector3(rect.xMax, rect.yMax), color32, UvForPanelPoint(new Vector2(1f, 1f), view, _quarterTurns));
+            vh.AddVert(new Vector3(rect.xMax, rect.yMin), color32, UvForPanelPoint(new Vector2(1f, 0f), view, _quarterTurns));
+            vh.AddTriangle(0, 1, 2);
+            vh.AddTriangle(2, 3, 0);
+        }
+
+        private static Vector2 UvForPanelPoint(Vector2 panelPoint, Rect view, int quarterTurns)
+        {
+            var viewPoint = PanelNormalizedToViewNormalized(panelPoint, quarterTurns);
+            return new Vector2(
+                view.xMin + viewPoint.x * view.width,
+                view.yMin + viewPoint.y * view.height);
+        }
+    }
+
     private enum PlacementEditTarget
     {
         None,
@@ -265,7 +305,6 @@ internal sealed class SuitEditorController : MonoBehaviour
     private MeshCollider _previewCollider;
     private MeshRenderer _previewRenderer;
     private int _previewLayer = 2;
-    private float _previewYaw;
     private float _previewScale = 0.9f;
     private Texture2D _checkerTexture;
     private bool _usingTexturePreview = true;
@@ -276,6 +315,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private bool _uvFallbackMode;
     private float _uvPanelZoom = 1f;
     private Vector2 _uvPanelCenter = new(0.5f, 0.5f);
+    private int _uvPanelRotationQuarterTurns;
     private int _uvPanelTextureWidth;
     private int _uvPanelTextureHeight;
     private string _lastUvPanelViewLogKey = string.Empty;
@@ -418,7 +458,7 @@ internal sealed class SuitEditorController : MonoBehaviour
     private readonly List<UndoHistoryRow> _undoHistoryRows = new();
     private long _nextUndoHistoryId = 1;
     private long _selectedUndoHistoryId;
-    private RawImage _previewImage;
+    private RotatedUvRawImage _previewImage;
     private Text _suitLabel;
     private Text _statusLabel;
     private Text _activeToolLabel;
@@ -2610,7 +2650,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         _statusLabel = CreateAnchoredText(panel.transform, "StatusLabel", string.Empty, 15, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 86f, leftW, 50f), TerminalStatusColor);
         _statusLabel.color = TerminalStatusColor;
 
-        CreateAnchoredText(panel.transform, "WorldHelp", "Aim at suit or UV panel. RT stamps/samples; hold paint/erase. Wheel/D-pad zooms target. D-pad L/R or ,/. rotates decals/stickers. Right-drag/right stick pans UV.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(rightX, 86f, rightW, 58f), TerminalMutedTextColor);
+        CreateAnchoredText(panel.transform, "WorldHelp", "Aim at suit or UV panel. RT stamps/samples; hold paint/erase. Wheel/D-pad zooms target. D-pad L/R or ,/. rotates decals/stickers. LB/RB or [ ] rotates UV.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(rightX, 86f, rightW, 58f), TerminalMutedTextColor);
 
         CreateSectionCard(panel.transform, new Rect(leftX - sectionInset, toolsY, leftW + sectionInset * 2f, 112f));
         CreateSectionCard(panel.transform, new Rect(leftX - sectionInset, brushY, leftW + sectionInset * 2f, 150f));
@@ -2754,13 +2794,13 @@ internal sealed class SuitEditorController : MonoBehaviour
         previewBackground.raycastTarget = true;
         ApplyTerminalOutline(fallbackPreview, TerminalOutlineColor);
 
-        var previewImageObject = CreateUiObject("TexturePreviewImage", fallbackPreview.transform, typeof(RectTransform), typeof(RawImage));
+        var previewImageObject = CreateUiObject("TexturePreviewImage", fallbackPreview.transform, typeof(RectTransform), typeof(RotatedUvRawImage));
         var previewImageRect = previewImageObject.GetComponent<RectTransform>();
         previewImageRect.anchorMin = Vector2.zero;
         previewImageRect.anchorMax = Vector2.one;
         previewImageRect.offsetMin = Vector2.zero;
         previewImageRect.offsetMax = Vector2.zero;
-        _previewImage = previewImageObject.GetComponent<RawImage>();
+        _previewImage = previewImageObject.GetComponent<RotatedUvRawImage>();
         _previewImage.texture = EnsureCheckerTexture();
         _previewImage.uvRect = new Rect(0f, 0f, 10f, 10f);
         _previewImage.color = Color.white;
@@ -3642,6 +3682,14 @@ internal sealed class SuitEditorController : MonoBehaviour
         return CanUsePlacementRotationShortcut()
             && !IsTypingInInputField()
             && !IsVirtualPointerEditingUi();
+    }
+
+    private bool CanHandleUvPanelRotationShortcuts()
+    {
+        return !IsTypingInInputField()
+            && !IsVirtualPointerEditingUi()
+            && _previewViewportRect != null
+            && _previewImage != null;
     }
 
     private bool IsTypingInInputField()
@@ -9534,6 +9582,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         var canRotatePlacement = CanHandlePlacementRotationShortcuts();
+        var canRotateUvPanel = CanHandleUvPanelRotationShortcuts();
         var gamepad = Gamepad.current;
         if (gamepad != null)
         {
@@ -9550,6 +9599,18 @@ internal sealed class SuitEditorController : MonoBehaviour
                 SaveDesign();
             }
 
+            if (canRotateUvPanel)
+            {
+                if (gamepad.leftShoulder.wasPressedThisFrame)
+                {
+                    RotateUvPanel(-1, "GamepadLeftShoulder");
+                }
+                if (gamepad.rightShoulder.wasPressedThisFrame)
+                {
+                    RotateUvPanel(1, "GamepadRightShoulder");
+                }
+            }
+
             if (canRotatePlacement)
             {
                 if (gamepad.dpad.left.wasPressedThisFrame)
@@ -9560,6 +9621,18 @@ internal sealed class SuitEditorController : MonoBehaviour
                 {
                     ApplyPlacementRotationShortcut(PlacementRotationShortcutStepDegrees, "GamepadDpadRight");
                 }
+            }
+        }
+
+        if (canRotateUvPanel)
+        {
+            if (DrawableSuitsInput.WasKeyPressed(Key.LeftBracket))
+            {
+                RotateUvPanel(-1, "KeyboardLeftBracket");
+            }
+            if (DrawableSuitsInput.WasKeyPressed(Key.RightBracket))
+            {
+                RotateUvPanel(1, "KeyboardRightBracket");
             }
         }
 
@@ -9587,15 +9660,6 @@ internal sealed class SuitEditorController : MonoBehaviour
 
             if (gamepad != null)
             {
-                if (gamepad.leftShoulder.isPressed)
-                {
-                    _worldCameraYaw -= 90f * Time.unscaledDeltaTime;
-                }
-                if (gamepad.rightShoulder.isPressed)
-                {
-                    _worldCameraYaw += 90f * Time.unscaledDeltaTime;
-                }
-
                 var rightStick = gamepad.rightStick.ReadValue();
                 if (rightStick.sqrMagnitude > 0.01f)
                 {
@@ -9633,18 +9697,6 @@ internal sealed class SuitEditorController : MonoBehaviour
             }
 
             return;
-        }
-
-        if (gamepad != null)
-        {
-            if (gamepad.leftShoulder.isPressed)
-            {
-                _previewYaw -= 90f * Time.unscaledDeltaTime;
-            }
-            if (gamepad.rightShoulder.isPressed)
-            {
-                _previewYaw += 90f * Time.unscaledDeltaTime;
-            }
         }
 
         var cursorOverPreview = IsCursorOverPreviewViewport();
@@ -10521,10 +10573,67 @@ internal sealed class SuitEditorController : MonoBehaviour
         return new Rect(x, y, size, size);
     }
 
+    private static int NormalizeUvPanelRotation(int quarterTurns)
+    {
+        var normalized = quarterTurns % 4;
+        return normalized < 0 ? normalized + 4 : normalized;
+    }
+
+    private static int UvPanelRotationDegrees(int quarterTurns)
+    {
+        return NormalizeUvPanelRotation(quarterTurns) * 90;
+    }
+
+    private static Vector2 PanelNormalizedToViewNormalized(Vector2 panelNormalized, int quarterTurns)
+    {
+        switch (NormalizeUvPanelRotation(quarterTurns))
+        {
+            case 1:
+                return new Vector2(panelNormalized.y, 1f - panelNormalized.x);
+            case 2:
+                return new Vector2(1f - panelNormalized.x, 1f - panelNormalized.y);
+            case 3:
+                return new Vector2(1f - panelNormalized.y, panelNormalized.x);
+            default:
+                return panelNormalized;
+        }
+    }
+
+    private static Vector2 ViewNormalizedToPanelNormalized(Vector2 viewNormalized, int quarterTurns)
+    {
+        switch (NormalizeUvPanelRotation(quarterTurns))
+        {
+            case 1:
+                return new Vector2(1f - viewNormalized.y, viewNormalized.x);
+            case 2:
+                return new Vector2(1f - viewNormalized.x, 1f - viewNormalized.y);
+            case 3:
+                return new Vector2(viewNormalized.y, 1f - viewNormalized.x);
+            default:
+                return viewNormalized;
+        }
+    }
+
+    private static Vector2 PanelVectorToViewVector(Vector2 panelVector, int quarterTurns)
+    {
+        switch (NormalizeUvPanelRotation(quarterTurns))
+        {
+            case 1:
+                return new Vector2(panelVector.y, -panelVector.x);
+            case 2:
+                return new Vector2(-panelVector.x, -panelVector.y);
+            case 3:
+                return new Vector2(-panelVector.y, panelVector.x);
+            default:
+                return panelVector;
+        }
+    }
+
     private void ResetUvPanelView(string reason, bool forceLog)
     {
         _uvPanelZoom = UvPanelMinZoom;
         _uvPanelCenter = new Vector2(0.5f, 0.5f);
+        _uvPanelRotationQuarterTurns = 0;
         var texture = _selectedSuitId >= 0 ? DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId) : null;
         ApplyUvPanelViewToPreviewImage(texture);
         LogUvPanelViewChanged("Reset", default, reason, forceLog);
@@ -10559,6 +10668,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         _previewImage.uvRect = texture != null ? GetUvPanelViewRect() : new Rect(0f, 0f, 10f, 10f);
+        _previewImage.SetUvRotation(texture != null ? _uvPanelRotationQuarterTurns : 0);
     }
 
     private void SetUvPanelView(float zoom, Vector2 center, string source, Vector2 anchorUv, string reason, bool forceLog)
@@ -10589,6 +10699,27 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
     }
 
+    private void RotateUvPanel(int deltaQuarterTurns, string source)
+    {
+        if (!CanHandleUvPanelRotationShortcuts())
+        {
+            return;
+        }
+
+        var previous = _uvPanelRotationQuarterTurns;
+        _uvPanelRotationQuarterTurns = NormalizeUvPanelRotation(_uvPanelRotationQuarterTurns + deltaQuarterTurns);
+        if (previous == _uvPanelRotationQuarterTurns)
+        {
+            return;
+        }
+
+        var texture = _selectedSuitId >= 0 ? DrawableSuitsPlugin.Registry.GetEditableTexture(_selectedSuitId) : null;
+        ApplyUvPanelViewToPreviewImage(texture);
+        InvalidateDecalPreview($"uv panel rotation shortcut {source}");
+        SetStatus($"UV panel rotation: {UvPanelRotationDegrees(_uvPanelRotationQuarterTurns)} deg.", false);
+        DrawableSuitsDiagnostics.Info($"UvPanelRotationChanged: source={source}; previous={UvPanelRotationDegrees(previous)}; new={UvPanelRotationDegrees(_uvPanelRotationQuarterTurns)}; zoom={_uvPanelZoom:0.###}; center={_uvPanelCenter}; uvRect={GetUvPanelViewRect()}; pointerSource={_pointerSource}; cursor={_cursor}; previewImageUvRect={(_previewImage != null ? _previewImage.uvRect.ToString() : "null")}");
+    }
+
     private bool ZoomUvPanelAtCursor(float factor, string source, string reason)
     {
         if (!TryGetTexturePreviewNormalized(_cursor, out var panelPoint))
@@ -10607,9 +10738,10 @@ internal sealed class SuitEditorController : MonoBehaviour
             return true;
         }
 
+        var sourcePoint = PanelNormalizedToViewNormalized(panelPoint, _uvPanelRotationQuarterTurns);
         var newViewSize = 1f / newZoom;
-        var newViewX = anchorUv.x - panelPoint.x * newViewSize;
-        var newViewY = anchorUv.y - panelPoint.y * newViewSize;
+        var newViewX = anchorUv.x - sourcePoint.x * newViewSize;
+        var newViewY = anchorUv.y - sourcePoint.y * newViewSize;
         var newCenter = new Vector2(newViewX + newViewSize * 0.5f, newViewY + newViewSize * 0.5f);
         SetUvPanelView(newZoom, newCenter, source, anchorUv, reason, false);
         return true;
@@ -10635,7 +10767,9 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         var view = GetUvPanelViewRect();
-        var deltaUv = new Vector2(delta.x / screenSize.x * view.width, delta.y / screenSize.y * view.height);
+        var panelDelta = new Vector2(delta.x / screenSize.x, delta.y / screenSize.y);
+        var viewDelta = PanelVectorToViewVector(panelDelta, _uvPanelRotationQuarterTurns);
+        var deltaUv = new Vector2(viewDelta.x * view.width, viewDelta.y * view.height);
         SetUvPanelView(_uvPanelZoom, _uvPanelCenter - deltaUv, source, _lastPreviewUvAvailable ? _lastPreviewUv : default, "right mouse pan", false);
         return true;
     }
@@ -10648,9 +10782,9 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         var view = GetUvPanelViewRect();
-        var deltaUv = new Vector2(
-            stick.x * view.width * UvPanelGamepadPanSpeed * Time.unscaledDeltaTime,
-            stick.y * view.height * UvPanelGamepadPanSpeed * Time.unscaledDeltaTime);
+        var panelDelta = stick * (UvPanelGamepadPanSpeed * Time.unscaledDeltaTime);
+        var viewDelta = PanelVectorToViewVector(panelDelta, _uvPanelRotationQuarterTurns);
+        var deltaUv = new Vector2(viewDelta.x * view.width, viewDelta.y * view.height);
         if (deltaUv.sqrMagnitude <= 0.0000001f)
         {
             return false;
@@ -10705,7 +10839,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         _lastUvPanelViewLogTime = Time.unscaledTime;
         _lastUvPanelViewLogKey = key;
-        DrawableSuitsDiagnostics.Info($"UvPanelViewChanged: source={source}; reason={reason}; zoom={_uvPanelZoom:0.###}; center={_uvPanelCenter}; uvRect={view}; anchorUv={(anchorUv == default ? "none" : anchorUv.ToString())}; pointerSource={_pointerSource}; cursor={_cursor}; previewImageUvRect={(_previewImage != null ? _previewImage.uvRect.ToString() : "null")}");
+        DrawableSuitsDiagnostics.Info($"UvPanelViewChanged: source={source}; reason={reason}; zoom={_uvPanelZoom:0.###}; center={_uvPanelCenter}; rotation={UvPanelRotationDegrees(_uvPanelRotationQuarterTurns)}; uvRect={view}; anchorUv={(anchorUv == default ? "none" : anchorUv.ToString())}; pointerSource={_pointerSource}; cursor={_cursor}; previewImageUvRect={(_previewImage != null ? _previewImage.uvRect.ToString() : "null")}");
     }
 
     private bool TryGetTexturePreviewNormalized(Vector2 screenPosition, out Vector2 normalized)
@@ -10753,12 +10887,14 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
-        var normalizedX = Mathf.InverseLerp(view.xMin, view.xMax, uv.x);
-        var normalizedY = Mathf.InverseLerp(view.yMin, view.yMax, uv.y);
+        var viewPoint = new Vector2(
+            Mathf.InverseLerp(view.xMin, view.xMax, uv.x),
+            Mathf.InverseLerp(view.yMin, view.yMax, uv.y));
+        var panelPoint = ViewNormalizedToPanelNormalized(viewPoint, _uvPanelRotationQuarterTurns);
         var rect = _previewViewportRect.rect;
         localPoint = new Vector2(
-            Mathf.Lerp(rect.xMin, rect.xMax, normalizedX),
-            Mathf.Lerp(rect.yMin, rect.yMax, normalizedY));
+            Mathf.Lerp(rect.xMin, rect.xMax, panelPoint.x),
+            Mathf.Lerp(rect.yMin, rect.yMax, panelPoint.y));
         return true;
     }
 
@@ -10772,9 +10908,10 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         var view = GetUvPanelViewRect();
+        var viewPoint = PanelNormalizedToViewNormalized(normalized, _uvPanelRotationQuarterTurns);
         uv = new Vector2(
-            Mathf.Clamp01(view.xMin + normalized.x * view.width),
-            Mathf.Clamp01(view.yMin + normalized.y * view.height));
+            Mathf.Clamp01(view.xMin + viewPoint.x * view.width),
+            Mathf.Clamp01(view.yMin + viewPoint.y * view.height));
         _lastPreviewUv = uv;
         _lastPreviewUvAvailable = true;
         return true;
@@ -15671,7 +15808,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         var panelMode = IsWorldThirdPersonMode ? "TexturePanel" : _previewMode;
         var uvView = GetUvPanelViewRect();
-        var assignment = $"{panelMode}; visible={visible}; assigned={assignedTexture?.name ?? "null"}; editable={DescribeEditableTexture()}; rawImage={DescribePreviewImageTexture()}; uvZoom={_uvPanelZoom:0.###}; uvCenter={_uvPanelCenter}; uvRect={uvView}";
+        var assignment = $"{panelMode}; visible={visible}; assigned={assignedTexture?.name ?? "null"}; editable={DescribeEditableTexture()}; rawImage={DescribePreviewImageTexture()}; uvZoom={_uvPanelZoom:0.###}; uvCenter={_uvPanelCenter}; uvRotation={UvPanelRotationDegrees(_uvPanelRotationQuarterTurns)}; uvRect={uvView}";
         if (forceLog || !string.Equals(_lastPreviewAssignmentLog, assignment, StringComparison.Ordinal))
         {
             DrawableSuitsDiagnostics.Info($"TexturePanel[{context}]: {assignment}; viewport={(_previewViewportRect != null ? _previewViewportRect.rect.ToString() : "null")}; siblingIndex={(_previewViewportRect != null ? _previewViewportRect.GetSiblingIndex().ToString() : "null")}; anchoredPosition={(_previewViewportRect != null ? _previewViewportRect.anchoredPosition.ToString() : "null")}");
@@ -15806,7 +15943,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         var bounds = _previewMesh.bounds;
         var maxSize = Mathf.Max(0.01f, Mathf.Max(bounds.size.x, Mathf.Max(bounds.size.y, bounds.size.z)));
         _previewPivotRoot.transform.localPosition = Vector3.zero;
-        _previewPivotRoot.transform.localRotation = Quaternion.Euler(0f, _previewYaw, 0f);
+        _previewPivotRoot.transform.localRotation = Quaternion.identity;
         _previewPivotRoot.transform.localScale = Vector3.one * _previewScale;
         _previewRoot.transform.localPosition = Vector3.zero;
         _previewRoot.transform.localRotation = Quaternion.identity;
@@ -15957,7 +16094,7 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         var activeModule = EventSystem.current?.currentInputModule;
         var previewUvSummary = TryGetTexturePreviewUv(pointer, out var previewUv) ? previewUv.ToString() : "none";
-        DrawableSuitsDiagnostics.Info($"UiInputDiagnostics: currentEventSystem={EventSystem.current?.name ?? "null"}; activeModule={activeModule?.GetType().Name ?? "null"}; selected={EventSystem.current?.currentSelectedGameObject?.name ?? "null"}; pointerSource={_pointerSource}; pointer={pointer}; usingMousePointer={usingMousePointer}; mouseAvailable={_mousePositionAvailable}; mousePosition={_lastMousePosition}; gamepadStick={_lastGamepadStick}; virtualCursor={_cursor}; cursorVisible={Cursor.visible}; cursorLock={Cursor.lockState}; canvasScale={_editorCanvasObject?.GetComponent<Canvas>()?.scaleFactor.ToString("0.###") ?? "null"}; raycastHits=[{hitNames}]; overPanel={IsCursorOverEditorPanel()}; overPreview={IsCursorOverPreviewViewport()}; previewUv={previewUvSummary}; lastPreviewUv={(_lastPreviewUvAvailable ? _lastPreviewUv.ToString() : "none")}; previewMode={_previewMode}; uvPanelZoom={_uvPanelZoom:0.###}; uvPanelRect={GetUvPanelViewRect()}; editableTexture={DescribeEditableTexture()}; previewImageTexture={DescribePreviewImageTexture()}; previewRect={(_previewViewportRect != null ? _previewViewportRect.rect.ToString() : "null")}; previewCamera={DrawableSuitsPlugin.DescribeUnityObject(_previewCamera)}; previewCameraEnabled={_previewCamera?.enabled.ToString() ?? "null"}; previewLayer={_previewLayer}; renderTexture={_previewTexture?.width.ToString() ?? "null"}x{_previewTexture?.height.ToString() ?? "null"}");
+        DrawableSuitsDiagnostics.Info($"UiInputDiagnostics: currentEventSystem={EventSystem.current?.name ?? "null"}; activeModule={activeModule?.GetType().Name ?? "null"}; selected={EventSystem.current?.currentSelectedGameObject?.name ?? "null"}; pointerSource={_pointerSource}; pointer={pointer}; usingMousePointer={usingMousePointer}; mouseAvailable={_mousePositionAvailable}; mousePosition={_lastMousePosition}; gamepadStick={_lastGamepadStick}; virtualCursor={_cursor}; cursorVisible={Cursor.visible}; cursorLock={Cursor.lockState}; canvasScale={_editorCanvasObject?.GetComponent<Canvas>()?.scaleFactor.ToString("0.###") ?? "null"}; raycastHits=[{hitNames}]; overPanel={IsCursorOverEditorPanel()}; overPreview={IsCursorOverPreviewViewport()}; previewUv={previewUvSummary}; lastPreviewUv={(_lastPreviewUvAvailable ? _lastPreviewUv.ToString() : "none")}; previewMode={_previewMode}; uvPanelZoom={_uvPanelZoom:0.###}; uvPanelRotation={UvPanelRotationDegrees(_uvPanelRotationQuarterTurns)}; uvPanelRect={GetUvPanelViewRect()}; editableTexture={DescribeEditableTexture()}; previewImageTexture={DescribePreviewImageTexture()}; previewRect={(_previewViewportRect != null ? _previewViewportRect.rect.ToString() : "null")}; previewCamera={DrawableSuitsPlugin.DescribeUnityObject(_previewCamera)}; previewCameraEnabled={_previewCamera?.enabled.ToString() ?? "null"}; previewLayer={_previewLayer}; renderTexture={_previewTexture?.width.ToString() ?? "null"}x{_previewTexture?.height.ToString() ?? "null"}");
     }
 
     private static void LogEditorControlTree(Transform root)

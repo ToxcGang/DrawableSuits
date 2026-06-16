@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.70
+
+- Added view-only UV panel rotation in 90-degree steps with `[` / `]` and controller `LB` / `RB`.
+- Updated UV panel pointer mapping, overlays, zoom, and pan to respect the rotated view.
+- Replaced bumper camera rotation with UV panel rotation; right stick remains the camera orbit control.
+
 ## 0.5.69
 
 - Fixed the Design action buttons overflowing past their section border.

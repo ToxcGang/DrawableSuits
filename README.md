@@ -2,7 +2,7 @@
 
 DrawableSuits is a Lethal Company v81 BepInEx mod for drawing directly on your currently worn suit. It includes a third-person suit editor, an always-visible UV texture panel, decals, stickers, text, saved designs, and shareable design codes.
 
-Current version: `0.5.69`
+Current version: `0.5.70`
 
 ## What It Does
 
@@ -38,6 +38,7 @@ Decals and stickers can be temporarily edited before placement with crop, stretc
 - Mouse wheel: zoom the third-person camera, or zoom the UV panel when over the panel.
 - Ctrl + mouse wheel: change brush size.
 - `,` / `.`: rotate Decal or Sticker placement left/right by 5 degrees.
+- `[` / `]`: rotate the UV panel left/right by 90 degrees.
 - `Escape` or `Close`: close the editor.
 
 ### Controller
@@ -46,7 +47,8 @@ Decals and stickers can be temporarily edited before placement with crop, stretc
 - Left stick: move the editor cursor.
 - `A`: click the UI control under the cursor.
 - Right trigger: paint/erase, fill once, sample, or stamp once depending on the active tool.
-- Right stick or bumpers: orbit the third-person camera, or pan the UV panel when over it.
+- Right stick: orbit the third-person camera, or pan the UV panel when over it.
+- `LB` / `RB`: rotate the UV panel left/right by 90 degrees.
 - D-pad up/down: zoom the third-person camera, or zoom the UV panel when over it.
 - D-pad left/right: rotate Decal or Sticker placement by 5 degrees.
 - `Y`: cycles Paint, Erase, and Decal.
