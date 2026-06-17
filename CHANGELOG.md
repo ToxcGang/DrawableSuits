@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.72
+
+- Fixed multiplayer sync chunk receiving so incoming texture chunks read into an allocated buffer instead of failing with a null destination.
+- Added player-slot identity to sync payloads and active-design caching so received suit textures apply to the correct player more reliably.
+- Improved sync diagnostics for owner resolution, payload matching, chunk read failures, and player identity snapshots.
+
 ## 0.5.71
 
 - Fixed multiplayer suit sync reliability by normalizing local owner client IDs before broadcasting applied/saved designs.

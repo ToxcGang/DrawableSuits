@@ -2,7 +2,7 @@
 
 DrawableSuits is a Lethal Company v81 BepInEx mod for drawing directly on your currently worn suit. It includes a third-person suit editor, an always-visible UV texture panel, decals, stickers, text, saved designs, and shareable design codes.
 
-Current version: `0.5.71`
+Current version: `0.5.72`
 
 ## What It Does
 
@@ -95,7 +95,7 @@ DrawableSuits is not compatible with ModelReplacementAPI. Replacement models can
 
 Players without DrawableSuits can join normally, but they will see original suit textures.
 
-Multiplayer sync is explicit: press `Apply` or `Save` after editing. If a design is too large to sync, DrawableSuits shows a status message and logs the byte size and configured limit.
+Multiplayer sync is explicit: press `Apply` or `Save` after editing. If a design is too large to sync, DrawableSuits shows a status message and logs the byte size and configured limit. All players who should see edited suits need DrawableSuits installed, updated to the same current version, and network sync enabled.
 
 ## Support
 

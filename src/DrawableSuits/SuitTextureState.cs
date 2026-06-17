@@ -6,6 +6,7 @@ internal sealed class SuitTextureState
 {
     public int SuitId;
     public ulong OwnerClientId;
+    public int OwnerPlayerSlot = -1;
     public bool IsPlayerSpecific;
     public bool IsLocalPlayerState;
     public string SuitName;

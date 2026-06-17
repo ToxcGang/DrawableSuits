@@ -16,6 +16,7 @@ internal sealed class SuitSyncManager : MonoBehaviour
     private const int MessageKindChunk = 1;
     private const int MessageKindRequestAll = 2;
     private const int MessageKindChunkV2 = 3;
+    private const int MessageKindChunkV3 = 4;
     private const int LegacyDefaultMaxSyncBytes = 1048576;
     private const int RaisedDefaultMaxSyncBytes = 4194304;
 
@@ -72,13 +73,15 @@ internal sealed class SuitSyncManager : MonoBehaviour
 
         var recipients = manager.IsServer ? OtherClientIds(manager) : new List<ulong> { NetworkManager.ServerClientId };
         var ownerClientId = state.IsPlayerSpecific ? (state.IsLocalPlayerState ? SuitTextureRegistry.ResolveLocalClientId() : state.OwnerClientId) : manager.LocalClientId;
-        DrawableSuitsDiagnostics.Info($"SyncBroadcastQueued: ownerClientId={ownerClientId}; localClientId={manager.LocalClientId}; suitId={state.SuitId}; designName={state.ActiveDesignName}; bytes={bytes.Length}; recipients=[{string.Join(",", recipients)}]; isServer={manager.IsServer}; chunkBytes={DrawableSuitsPlugin.ModConfig.SyncChunkBytes.Value}");
+        var ownerPlayerSlot = state.IsPlayerSpecific ? ResolveStatePlayerSlot(state, ownerClientId) : SuitTextureRegistry.UnknownPlayerSlot;
+        DrawableSuitsDiagnostics.Info($"SyncOwnerResolved: context=BroadcastDesign; ownerClientId={ownerClientId}; ownerPlayerSlot={ownerPlayerSlot}; localClientId={manager.LocalClientId}; localPlayerSlot={SuitTextureRegistry.ResolveLocalPlayerSlot()}; suitId={state.SuitId}; identities=[{DescribePlayerIdentities()}]");
+        DrawableSuitsDiagnostics.Info($"SyncBroadcastQueued: ownerClientId={ownerClientId}; ownerPlayerSlot={ownerPlayerSlot}; localClientId={manager.LocalClientId}; suitId={state.SuitId}; designName={state.ActiveDesignName}; bytes={bytes.Length}; recipients=[{string.Join(",", recipients)}]; isServer={manager.IsServer}; chunkBytes={DrawableSuitsPlugin.ModConfig.SyncChunkBytes.Value}");
         if (manager.IsServer)
         {
-            CacheActivePayload(ownerClientId, state.SuitId, state.ActiveDesignName, state.EditableTexture.width, state.EditableTexture.height, bytes, "host-broadcast");
+            CacheActivePayload(ownerClientId, ownerPlayerSlot, state.SuitId, state.ActiveDesignName, state.EditableTexture.width, state.EditableTexture.height, bytes, "host-broadcast");
         }
 
-        SendTextureChunks(manager, recipients, ownerClientId, state.SuitId, state.ActiveDesignName, state.EditableTexture.width, state.EditableTexture.height, bytes);
+        SendTextureChunks(manager, recipients, ownerClientId, ownerPlayerSlot, state.SuitId, state.ActiveDesignName, state.EditableTexture.width, state.EditableTexture.height, bytes);
     }
 
     public void RequestActiveDesigns()
@@ -140,6 +143,7 @@ internal sealed class SuitSyncManager : MonoBehaviour
         _registered = true;
         _registeredManager = manager;
         DrawableSuitsDiagnostics.Info($"SyncRegistered: manager={DrawableSuitsPlugin.DescribeUnityObject(manager)}; localClientId={manager.LocalClientId}; isClient={manager.IsClient}; isServer={manager.IsServer}; connectedClients={manager.ConnectedClientsIds?.Count ?? 0}");
+        DrawableSuitsDiagnostics.Info($"SyncPlayerIdentitySnapshot: context=Register; localClientId={manager.LocalClientId}; localPlayerSlot={SuitTextureRegistry.ResolveLocalPlayerSlot()}; identities=[{DescribePlayerIdentities()}]");
     }
 
     private void HandleMessage(ulong senderClientId, FastBufferReader reader)
@@ -155,18 +159,25 @@ internal sealed class SuitSyncManager : MonoBehaviour
 
             if (kind == MessageKindChunk)
             {
-                HandleChunk(senderClientId, reader, false);
+                HandleChunk(senderClientId, reader, 1);
                 return;
             }
 
             if (kind == MessageKindChunkV2)
             {
-                HandleChunk(senderClientId, reader, true);
+                HandleChunk(senderClientId, reader, 2);
+                return;
+            }
+
+            if (kind == MessageKindChunkV3)
+            {
+                HandleChunk(senderClientId, reader, 3);
             }
         }
         catch (Exception ex)
         {
-            DrawableSuitsPlugin.ModLogger.LogWarning($"Failed to read sync message: {ex.Message}");
+            DrawableSuitsPlugin.ModLogger.LogWarning($"Failed to read sync message from {senderClientId}: {ex.Message}");
+            DrawableSuitsDiagnostics.Warn($"SyncChunkReadFailed: senderClientId={senderClientId}; stage=HandleMessage; reason={ex.GetType().Name}: {ex.Message}");
         }
     }
 
@@ -189,12 +200,12 @@ internal sealed class SuitSyncManager : MonoBehaviour
 
             if (!IsOwnerConnected(manager, payload.OwnerClientId))
             {
-                DrawableSuitsDiagnostics.Info($"SyncRequestPayloadSkipped: requesterClientId={senderClientId}; ownerClientId={payload.OwnerClientId}; suitId={payload.SuitId}; reason=owner-not-connected");
+                DrawableSuitsDiagnostics.Info($"SyncRequestPayloadSkipped: requesterClientId={senderClientId}; ownerClientId={payload.OwnerClientId}; ownerPlayerSlot={payload.OwnerPlayerSlot}; suitId={payload.SuitId}; reason=owner-not-connected");
                 continue;
             }
 
-            sent.Add(ActivePayloadKey(payload.OwnerClientId, payload.SuitId));
-            SendTextureChunks(manager, new List<ulong> { senderClientId }, payload.OwnerClientId, payload.SuitId, payload.DesignName, payload.Width, payload.Height, payload.Bytes);
+            sent.Add(ActivePayloadKey(payload.OwnerClientId, payload.OwnerPlayerSlot, payload.SuitId));
+            SendTextureChunks(manager, new List<ulong> { senderClientId }, payload.OwnerClientId, payload.OwnerPlayerSlot, payload.SuitId, payload.DesignName, payload.Width, payload.Height, payload.Bytes);
             sentCount++;
         }
 
@@ -206,13 +217,14 @@ internal sealed class SuitSyncManager : MonoBehaviour
             }
 
             var ownerClientId = state.IsLocalPlayerState ? SuitTextureRegistry.ResolveLocalClientId() : state.OwnerClientId;
+            var ownerPlayerSlot = ResolveStatePlayerSlot(state, ownerClientId);
             if (!IsOwnerConnected(manager, ownerClientId))
             {
-                DrawableSuitsDiagnostics.Info($"SyncRequestPayloadSkipped: requesterClientId={senderClientId}; ownerClientId={ownerClientId}; suitId={state.SuitId}; reason=owner-not-connected");
+                DrawableSuitsDiagnostics.Info($"SyncRequestPayloadSkipped: requesterClientId={senderClientId}; ownerClientId={ownerClientId}; ownerPlayerSlot={ownerPlayerSlot}; suitId={state.SuitId}; reason=owner-not-connected");
                 continue;
             }
 
-            var key = ActivePayloadKey(ownerClientId, state.SuitId);
+            var key = ActivePayloadKey(ownerClientId, ownerPlayerSlot, state.SuitId);
             if (sent.Contains(key))
             {
                 continue;
@@ -221,50 +233,84 @@ internal sealed class SuitSyncManager : MonoBehaviour
             var bytes = ImageConversion.EncodeToPNG(state.EditableTexture);
             if (bytes == null || bytes.Length == 0 || bytes.Length > EffectiveMaxSyncBytes())
             {
-                DrawableSuitsDiagnostics.Warn($"SyncRequestPayloadSkipped: requesterClientId={senderClientId}; ownerClientId={ownerClientId}; suitId={state.SuitId}; reason=empty-or-too-large; bytes={bytes?.Length ?? 0}; maxSyncBytes={EffectiveMaxSyncBytes()}");
+                DrawableSuitsDiagnostics.Warn($"SyncRequestPayloadSkipped: requesterClientId={senderClientId}; ownerClientId={ownerClientId}; ownerPlayerSlot={ownerPlayerSlot}; suitId={state.SuitId}; reason=empty-or-too-large; bytes={bytes?.Length ?? 0}; maxSyncBytes={EffectiveMaxSyncBytes()}");
                 continue;
             }
 
-            CacheActivePayload(ownerClientId, state.SuitId, state.ActiveDesignName, state.EditableTexture.width, state.EditableTexture.height, bytes, "request-fallback-registry");
-            SendTextureChunks(manager, new List<ulong> { senderClientId }, ownerClientId, state.SuitId, state.ActiveDesignName, state.EditableTexture.width, state.EditableTexture.height, bytes);
+            CacheActivePayload(ownerClientId, ownerPlayerSlot, state.SuitId, state.ActiveDesignName, state.EditableTexture.width, state.EditableTexture.height, bytes, "request-fallback-registry");
+            SendTextureChunks(manager, new List<ulong> { senderClientId }, ownerClientId, ownerPlayerSlot, state.SuitId, state.ActiveDesignName, state.EditableTexture.width, state.EditableTexture.height, bytes);
             sentCount++;
         }
 
         DrawableSuitsDiagnostics.Info($"SyncRequestHandled: requesterClientId={senderClientId}; cachedPayloads={_activePayloads.Count}; sentPayloads={sentCount}");
     }
 
-    private void HandleChunk(ulong senderClientId, FastBufferReader reader, bool v2)
+    private void HandleChunk(ulong senderClientId, FastBufferReader reader, int version)
     {
         var ownerClientId = senderClientId;
-        if (v2)
+        var ownerPlayerSlot = SuitTextureRegistry.UnknownPlayerSlot;
+        var suitId = -1;
+        var width = 0;
+        var height = 0;
+        var chunkIndex = -1;
+        var chunkCount = 0;
+        var totalBytes = 0;
+        var designName = string.Empty;
+        var hash = string.Empty;
+        var chunkLength = 0;
+        var stage = "owner";
+        byte[] chunk;
+
+        try
         {
-            reader.ReadValueSafe(out ownerClientId);
+            if (version >= 2)
+            {
+                reader.ReadValueSafe(out ownerClientId);
+            }
+
+            if (version >= 3)
+            {
+                stage = "ownerPlayerSlot";
+                reader.ReadValueSafe(out ownerPlayerSlot);
+            }
+            else
+            {
+                ownerPlayerSlot = SuitTextureRegistry.ResolvePlayerSlotForClient(ownerClientId);
+            }
+
+            stage = "metadata";
+            reader.ReadValueSafe(out suitId);
+            reader.ReadValueSafe(out width);
+            reader.ReadValueSafe(out height);
+            reader.ReadValueSafe(out chunkIndex);
+            reader.ReadValueSafe(out chunkCount);
+            reader.ReadValueSafe(out totalBytes);
+            reader.ReadValueSafe(out designName, false);
+            reader.ReadValueSafe(out hash, false);
+            reader.ReadValueSafe(out chunkLength);
+
+            var maxSyncBytes = EffectiveMaxSyncBytes();
+            var invalidReason = ValidateChunkMetadata(width, height, chunkIndex, chunkCount, totalBytes, chunkLength, maxSyncBytes);
+            if (!string.IsNullOrEmpty(invalidReason))
+            {
+                DrawableSuitsDiagnostics.Warn($"SyncPayloadReceived: status=rejected; reason={invalidReason}; senderClientId={senderClientId}; ownerClientId={ownerClientId}; ownerPlayerSlot={ownerPlayerSlot}; suitId={suitId}; chunkIndex={chunkIndex}; chunkCount={chunkCount}; chunkLength={chunkLength}; totalBytes={totalBytes}; maxSyncBytes={maxSyncBytes}; version=v{version}");
+                return;
+            }
+
+            stage = "chunk-bytes";
+            chunk = new byte[chunkLength];
+            reader.ReadBytesSafe(ref chunk, chunkLength, 0);
         }
-
-        reader.ReadValueSafe(out int suitId);
-        reader.ReadValueSafe(out int width);
-        reader.ReadValueSafe(out int height);
-        reader.ReadValueSafe(out int chunkIndex);
-        reader.ReadValueSafe(out int chunkCount);
-        reader.ReadValueSafe(out int totalBytes);
-        reader.ReadValueSafe(out string designName, false);
-        reader.ReadValueSafe(out string hash, false);
-        reader.ReadValueSafe(out int chunkLength);
-
-        var maxSyncBytes = EffectiveMaxSyncBytes();
-        if (chunkLength <= 0 || totalBytes <= 0 || totalBytes > maxSyncBytes)
+        catch (Exception ex)
         {
-            DrawableSuitsDiagnostics.Warn($"SyncPayloadReceived: status=rejected; reason=invalid-size; senderClientId={senderClientId}; ownerClientId={ownerClientId}; suitId={suitId}; chunkLength={chunkLength}; totalBytes={totalBytes}; maxSyncBytes={maxSyncBytes}");
+            DrawableSuitsDiagnostics.Warn($"SyncChunkReadFailed: senderClientId={senderClientId}; ownerClientId={ownerClientId}; ownerPlayerSlot={ownerPlayerSlot}; suitId={suitId}; chunkIndex={chunkIndex}; chunkCount={chunkCount}; chunkLength={chunkLength}; totalBytes={totalBytes}; version=v{version}; stage={stage}; reason={ex.GetType().Name}: {ex.Message}");
             return;
         }
 
-        byte[] chunk = null;
-        reader.ReadBytesSafe(ref chunk, chunkLength, 0);
-
-        var key = $"{senderClientId}:{ownerClientId}:{suitId}:{hash}";
+        var key = $"{senderClientId}:{ownerClientId}:{ownerPlayerSlot}:{suitId}:{hash}";
         if (!_incoming.TryGetValue(key, out var payload))
         {
-            payload = new IncomingPayload(ownerClientId, suitId, width, height, designName, hash, totalBytes, chunkCount);
+            payload = new IncomingPayload(ownerClientId, ownerPlayerSlot, suitId, width, height, designName, hash, totalBytes, chunkCount);
             _incoming[key] = payload;
         }
 
@@ -276,11 +322,11 @@ internal sealed class SuitSyncManager : MonoBehaviour
 
         _incoming.Remove(key);
         var bytes = payload.Combine();
-        DrawableSuitsDiagnostics.Info($"SyncPayloadReceived: status=complete; ownerClientId={ownerClientId}; senderClientId={senderClientId}; suitId={suitId}; designName={designName}; bytes={bytes.Length}; chunks={chunkCount}; version={(v2 ? "v2" : "legacy")}");
+        DrawableSuitsDiagnostics.Info($"SyncPayloadReceived: status=complete; ownerClientId={ownerClientId}; ownerPlayerSlot={ownerPlayerSlot}; senderClientId={senderClientId}; suitId={suitId}; designName={designName}; bytes={bytes.Length}; chunks={chunkCount}; version=v{version}");
         if (!string.Equals(hash, Hash(bytes), StringComparison.OrdinalIgnoreCase))
         {
             DrawableSuitsPlugin.ModLogger.LogWarning($"Rejected synced suit {suitId} for client {ownerClientId}: hash mismatch.");
-            DrawableSuitsDiagnostics.Warn($"SyncPayloadReceived: status=rejected; reason=hash-mismatch; ownerClientId={ownerClientId}; senderClientId={senderClientId}; suitId={suitId}; bytes={bytes.Length}");
+            DrawableSuitsDiagnostics.Warn($"SyncPayloadReceived: status=rejected; reason=hash-mismatch; ownerClientId={ownerClientId}; ownerPlayerSlot={ownerPlayerSlot}; senderClientId={senderClientId}; suitId={suitId}; bytes={bytes.Length}");
             return;
         }
 
@@ -291,27 +337,53 @@ internal sealed class SuitSyncManager : MonoBehaviour
             return;
         }
 
-        DrawableSuitsPlugin.Registry.ApplyReceivedTexture(ownerClientId, suitId, designName, texture);
+        DrawableSuitsDiagnostics.Info($"SyncPayloadMatchedPlayer: ownerClientId={ownerClientId}; ownerPlayerSlot={ownerPlayerSlot}; suitId={suitId}; target={FindPlayerIdentity(ownerClientId, ownerPlayerSlot)}");
+        DrawableSuitsPlugin.Registry.ApplyReceivedTexture(ownerClientId, ownerPlayerSlot, suitId, designName, texture);
         Destroy(texture);
 
         var manager = NetworkManager.Singleton;
         if (manager != null && manager.IsServer)
         {
-            CacheActivePayload(ownerClientId, suitId, designName, width, height, bytes, "server-received");
+            CacheActivePayload(ownerClientId, ownerPlayerSlot, suitId, designName, width, height, bytes, "server-received");
         }
 
         if (manager != null && manager.IsServer && senderClientId != manager.LocalClientId)
         {
             var recipients = OtherClientIds(manager).Where(id => id != senderClientId).ToList();
-            SendTextureChunks(manager, recipients, ownerClientId, suitId, designName, width, height, bytes);
+            SendTextureChunks(manager, recipients, ownerClientId, ownerPlayerSlot, suitId, designName, width, height, bytes);
         }
     }
 
-    private static void SendTextureChunks(NetworkManager manager, IReadOnlyList<ulong> recipients, ulong ownerClientId, int suitId, string designName, int width, int height, byte[] bytes)
+    private static string ValidateChunkMetadata(int width, int height, int chunkIndex, int chunkCount, int totalBytes, int chunkLength, int maxSyncBytes)
+    {
+        if (width <= 0 || height <= 0)
+        {
+            return "invalid-texture-size";
+        }
+
+        if (chunkCount <= 0 || chunkIndex < 0 || chunkIndex >= chunkCount)
+        {
+            return "invalid-chunk-index";
+        }
+
+        if (chunkLength <= 0 || totalBytes <= 0 || totalBytes > maxSyncBytes)
+        {
+            return "invalid-size";
+        }
+
+        if (chunkLength > totalBytes || chunkLength > maxSyncBytes)
+        {
+            return "invalid-chunk-length";
+        }
+
+        return string.Empty;
+    }
+
+    private static void SendTextureChunks(NetworkManager manager, IReadOnlyList<ulong> recipients, ulong ownerClientId, int ownerPlayerSlot, int suitId, string designName, int width, int height, byte[] bytes)
     {
         if (manager?.CustomMessagingManager == null || recipients == null || recipients.Count == 0)
         {
-            DrawableSuitsDiagnostics.Info($"SyncChunkSent: status=skipped; reason=no-recipients-or-messaging; ownerClientId={ownerClientId}; localClientId={manager?.LocalClientId.ToString() ?? "null"}; suitId={suitId}; recipients={recipients?.Count ?? 0}; bytes={bytes?.Length ?? 0}");
+            DrawableSuitsDiagnostics.Info($"SyncChunkSent: status=skipped; reason=no-recipients-or-messaging; ownerClientId={ownerClientId}; ownerPlayerSlot={ownerPlayerSlot}; localClientId={manager?.LocalClientId.ToString() ?? "null"}; suitId={suitId}; recipients={recipients?.Count ?? 0}; bytes={bytes?.Length ?? 0}");
             return;
         }
 
@@ -329,8 +401,9 @@ internal sealed class SuitSyncManager : MonoBehaviour
 
             var writerSize = length + 1024 + Encoding.UTF8.GetByteCount(designName) + Encoding.UTF8.GetByteCount(hash);
             using var writer = new FastBufferWriter(writerSize, Allocator.Temp, writerSize);
-            writer.WriteValueSafe(MessageKindChunkV2);
+            writer.WriteValueSafe(MessageKindChunkV3);
             writer.WriteValueSafe(ownerClientId);
+            writer.WriteValueSafe(ownerPlayerSlot);
             writer.WriteValueSafe(suitId);
             writer.WriteValueSafe(width);
             writer.WriteValueSafe(height);
@@ -348,7 +421,7 @@ internal sealed class SuitSyncManager : MonoBehaviour
             }
         }
 
-        DrawableSuitsDiagnostics.Info($"SyncChunkSent: status=sent; ownerClientId={ownerClientId}; localClientId={manager.LocalClientId}; suitId={suitId}; designName={designName}; bytes={bytes.Length}; chunkSize={chunkSize}; chunkCount={chunkCount}; recipients=[{string.Join(",", recipients)}]");
+        DrawableSuitsDiagnostics.Info($"SyncChunkSent: status=sent; ownerClientId={ownerClientId}; ownerPlayerSlot={ownerPlayerSlot}; localClientId={manager.LocalClientId}; suitId={suitId}; designName={designName}; bytes={bytes.Length}; chunkSize={chunkSize}; chunkCount={chunkCount}; recipients=[{string.Join(",", recipients)}]");
     }
 
     private static List<ulong> OtherClientIds(NetworkManager manager)
@@ -410,35 +483,111 @@ internal sealed class SuitSyncManager : MonoBehaviour
         return configured;
     }
 
-    private void CacheActivePayload(ulong ownerClientId, int suitId, string designName, int width, int height, byte[] bytes, string reason)
+    private void CacheActivePayload(ulong ownerClientId, int ownerPlayerSlot, int suitId, string designName, int width, int height, byte[] bytes, string reason)
     {
         if (bytes == null || bytes.Length == 0)
         {
             return;
         }
 
-        var key = ActivePayloadKey(ownerClientId, suitId);
-        _activePayloads[key] = new CachedDesignPayload(ownerClientId, suitId, width, height, designName ?? string.Empty, bytes);
-        DrawableSuitsDiagnostics.Info($"SyncPayloadCached: reason={reason}; ownerClientId={ownerClientId}; suitId={suitId}; designName={designName}; texture={width}x{height}; bytes={bytes.Length}; cachedPayloads={_activePayloads.Count}");
+        var normalizedSlot = NormalizePlayerSlot(ownerPlayerSlot);
+        var key = ActivePayloadKey(ownerClientId, normalizedSlot, suitId);
+        _activePayloads[key] = new CachedDesignPayload(ownerClientId, normalizedSlot, suitId, width, height, designName ?? string.Empty, bytes);
+        DrawableSuitsDiagnostics.Info($"SyncPayloadCached: reason={reason}; ownerClientId={ownerClientId}; ownerPlayerSlot={normalizedSlot}; suitId={suitId}; designName={designName}; texture={width}x{height}; bytes={bytes.Length}; cachedPayloads={_activePayloads.Count}");
     }
 
-    private static string ActivePayloadKey(ulong ownerClientId, int suitId)
+    private static string ActivePayloadKey(ulong ownerClientId, int ownerPlayerSlot, int suitId)
     {
-        return $"{ownerClientId}:{suitId}";
+        return ownerPlayerSlot >= 0
+            ? $"slot:{ownerPlayerSlot}:{suitId}"
+            : $"client:{ownerClientId}:{suitId}";
+    }
+
+    private static int ResolveStatePlayerSlot(SuitTextureState state, ulong ownerClientId)
+    {
+        if (state != null && state.OwnerPlayerSlot >= 0)
+        {
+            return state.OwnerPlayerSlot;
+        }
+
+        var resolved = SuitTextureRegistry.ResolvePlayerSlotForClient(ownerClientId);
+        if (resolved >= 0)
+        {
+            return resolved;
+        }
+
+        return state?.IsLocalPlayerState == true
+            ? SuitTextureRegistry.ResolveLocalPlayerSlot()
+            : SuitTextureRegistry.UnknownPlayerSlot;
+    }
+
+    private static int NormalizePlayerSlot(int playerSlot)
+    {
+        return playerSlot >= 0 && playerSlot < 64 ? playerSlot : SuitTextureRegistry.UnknownPlayerSlot;
+    }
+
+    private static string DescribePlayerIdentities()
+    {
+        var players = StartOfRound.Instance?.allPlayerScripts;
+        if (players == null || players.Length == 0)
+        {
+            return "players=none";
+        }
+
+        var entries = new List<string>();
+        for (var i = 0; i < players.Length; i++)
+        {
+            if (players[i] == null)
+            {
+                continue;
+            }
+
+            entries.Add(SuitTextureRegistry.DescribePlayerIdentity(players[i]));
+        }
+
+        return entries.Count > 0 ? string.Join(" | ", entries) : "players=none";
+    }
+
+    private static string FindPlayerIdentity(ulong ownerClientId, int ownerPlayerSlot)
+    {
+        var players = StartOfRound.Instance?.allPlayerScripts;
+        if (players == null || players.Length == 0)
+        {
+            DrawableSuitsDiagnostics.Warn($"SyncPayloadNoPlayerMatch: ownerClientId={ownerClientId}; ownerPlayerSlot={ownerPlayerSlot}; reason=players-not-ready");
+            return "players-not-ready";
+        }
+
+        if (ownerPlayerSlot >= 0 && ownerPlayerSlot < players.Length && players[ownerPlayerSlot] != null)
+        {
+            return SuitTextureRegistry.DescribePlayerIdentity(players[ownerPlayerSlot]);
+        }
+
+        foreach (var player in players)
+        {
+            if (player != null && SuitTextureRegistry.GetPlayerClientId(player) == ownerClientId)
+            {
+                return SuitTextureRegistry.DescribePlayerIdentity(player);
+            }
+        }
+
+        DrawableSuitsDiagnostics.Warn($"SyncPayloadNoPlayerMatch: ownerClientId={ownerClientId}; ownerPlayerSlot={ownerPlayerSlot}; identities=[{DescribePlayerIdentities()}]");
+        return "no-match";
     }
 
     private sealed class CachedDesignPayload
     {
         public ulong OwnerClientId { get; }
+        public int OwnerPlayerSlot { get; }
         public int SuitId { get; }
         public int Width { get; }
         public int Height { get; }
         public string DesignName { get; }
         public byte[] Bytes { get; }
 
-        public CachedDesignPayload(ulong ownerClientId, int suitId, int width, int height, string designName, byte[] bytes)
+        public CachedDesignPayload(ulong ownerClientId, int ownerPlayerSlot, int suitId, int width, int height, string designName, byte[] bytes)
         {
             OwnerClientId = ownerClientId;
+            OwnerPlayerSlot = ownerPlayerSlot;
             SuitId = suitId;
             Width = width;
             Height = height;
@@ -454,6 +603,7 @@ internal sealed class SuitSyncManager : MonoBehaviour
 
         public int SuitId { get; }
         public ulong OwnerClientId { get; }
+        public int OwnerPlayerSlot { get; }
         public int Width { get; }
         public int Height { get; }
         public string DesignName { get; }
@@ -461,9 +611,10 @@ internal sealed class SuitSyncManager : MonoBehaviour
         public int TotalBytes { get; }
         public bool IsComplete => _received == _chunks.Length;
 
-        public IncomingPayload(ulong ownerClientId, int suitId, int width, int height, string designName, string hash, int totalBytes, int chunkCount)
+        public IncomingPayload(ulong ownerClientId, int ownerPlayerSlot, int suitId, int width, int height, string designName, string hash, int totalBytes, int chunkCount)
         {
             OwnerClientId = ownerClientId;
+            OwnerPlayerSlot = ownerPlayerSlot;
             SuitId = suitId;
             Width = width;
             Height = height;
