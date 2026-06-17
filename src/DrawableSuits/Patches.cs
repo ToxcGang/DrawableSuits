@@ -214,6 +214,34 @@ internal static class PlayerControllerBPatches
         });
     }
 
+    [HarmonyPostfix]
+    [HarmonyPatch(nameof(PlayerControllerB.SpawnDeadBody), new Type[] { typeof(int), typeof(Vector3), typeof(int), typeof(PlayerControllerB), typeof(int), typeof(Transform), typeof(Transform), typeof(Vector3), typeof(bool) })]
+    private static void SpawnDeadBodyPostfix(int playerId)
+    {
+        RunPatch("PlayerControllerB.SpawnDeadBody", () =>
+        {
+            var bodies = UnityEngine.Object.FindObjectsOfType<DeadBodyInfo>();
+            var matched = 0;
+            if (bodies != null)
+            {
+                for (var i = 0; i < bodies.Length; i++)
+                {
+                    var body = bodies[i];
+                    if (body == null || body.playerObjectId != playerId)
+                    {
+                        continue;
+                    }
+
+                    DrawableSuitsPlugin.Registry?.ApplyToDeadBody(body, "PlayerControllerB.SpawnDeadBody");
+                    DrawableSuitsPlugin.Registry?.ScheduleDeadBodyReapply(body, "PlayerControllerB.SpawnDeadBody");
+                    matched++;
+                }
+            }
+
+            DrawableSuitsDiagnostics.Info($"DeadBodySuitSpawnPatch: playerId={playerId}; matchedBodies={matched}");
+        });
+    }
+
     [HarmonyPrefix]
     [HarmonyPatch("Jump_performed")]
     private static bool JumpPerformedPrefix(PlayerControllerB __instance)
@@ -277,6 +305,38 @@ internal static class PlayerControllerBPatches
         }
 
         return false;
+    }
+}
+
+[HarmonyPatch(typeof(DeadBodyInfo))]
+internal static class DeadBodyInfoPatches
+{
+    [HarmonyPostfix]
+    [HarmonyPatch("Start")]
+    private static void StartPostfix(DeadBodyInfo __instance)
+    {
+        RunPatch("DeadBodyInfo.Start", __instance);
+    }
+
+    [HarmonyPostfix]
+    [HarmonyPatch(nameof(DeadBodyInfo.ChangeMesh))]
+    private static void ChangeMeshPostfix(DeadBodyInfo __instance)
+    {
+        RunPatch("DeadBodyInfo.ChangeMesh", __instance);
+    }
+
+    private static void RunPatch(string context, DeadBodyInfo body)
+    {
+        try
+        {
+            DrawableSuitsPlugin.EnsureRuntimeReady(context);
+            DrawableSuitsPlugin.Registry?.ApplyToDeadBody(body, context);
+            DrawableSuitsPlugin.Registry?.ScheduleDeadBodyReapply(body, context);
+        }
+        catch (Exception ex)
+        {
+            DrawableSuitsDiagnostics.Exception($"Patch failed: {context}", ex);
+        }
     }
 }
 

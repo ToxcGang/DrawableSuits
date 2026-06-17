@@ -11777,7 +11777,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
-        return CompositePlacementStamp(target, stampTexture, uv, _decalSize, mirrored ? -_decalRotation : _decalRotation, _brushOpacity, mirrored, touchedPixels);
+        return CompositePlacementStamp(target, stampTexture, uv, _decalSize, CurrentUvPanelPlacementRotation(mirrored), _brushOpacity, mirrored, touchedPixels);
     }
 
     private bool ApplyTextStamp(Texture2D target, Vector2 uv, bool mirrored = false, HashSet<int> touchedPixels = null)
@@ -11788,7 +11788,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
-        return CompositePlacementStamp(target, stampTexture, uv, _textSize, mirrored ? -_textRotation : _textRotation, _brushOpacity, mirrored, touchedPixels, true);
+        return CompositePlacementStamp(target, stampTexture, uv, _textSize, CurrentUvPanelPlacementRotation(mirrored), _brushOpacity, mirrored, touchedPixels, true);
     }
 
     private bool ApplyStickerStamp(Texture2D target, Vector2 uv, bool mirrored = false, HashSet<int> touchedPixels = null)
@@ -11799,7 +11799,16 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
-        return CompositePlacementStamp(target, stampTexture, uv, _stickerSize, mirrored ? -_stickerRotation : _stickerRotation, _brushOpacity, mirrored, touchedPixels, false);
+        return CompositePlacementStamp(target, stampTexture, uv, _stickerSize, CurrentUvPanelPlacementRotation(mirrored), _brushOpacity, mirrored, touchedPixels, false);
+    }
+
+    private float CurrentUvPanelPlacementRotation(bool mirrored)
+    {
+        var userRotation = mirrored ? -CurrentPlacementRotation() : CurrentPlacementRotation();
+        var panelRotation = UvPanelRotationDegrees(_uvPanelRotationQuarterTurns);
+        var effectiveRotation = NormalizePlacementRotation(userRotation - panelRotation);
+        DrawableSuitsDiagnostics.Info($"UvPlacementRotationResolved: tool={_tool}; mirrored={mirrored}; userRotation={userRotation:0.##}; panelRotation={panelRotation}; effectiveRotation={effectiveRotation:0.##}; uvQuarterTurns={NormalizeUvPanelRotation(_uvPanelRotationQuarterTurns)}; suit={_selectedSuitId}; source={CurrentPlacementName()}");
+        return effectiveRotation;
     }
 
     private bool CompositeTextSurfaceStamp(Texture2D target, Texture2D stamp, Vector3 center, Vector3 normal, float rotation, bool mirrored, float opacity, HashSet<int> touchedPixels, out TextSurfaceStampStats stats)

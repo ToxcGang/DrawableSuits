@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.73
+
+- Fixed Decal, Sticker, and Text stamping in the rotated UV panel so the final stamp keeps the same visible rotation as the preview.
+- Applied synced/current suit textures to dead bodies and ragdolls, with short retry passes for late body renderers.
+- Added diagnostics for UV placement rotation resolution and dead-body suit application.
+
 ## 0.5.72
 
 - Fixed multiplayer sync chunk receiving so incoming texture chunks read into an allocated buffer instead of failing with a null destination.

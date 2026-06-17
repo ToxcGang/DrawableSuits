@@ -19,11 +19,26 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
     private int _pendingReapplyAllAttempts;
     private float _nextPendingReapplyAllTime;
     private string _pendingReapplyAllContext = string.Empty;
+    private readonly List<DeadBodyReapplyRequest> _pendingDeadBodyReapplications = new();
+
+    private sealed class DeadBodyReapplyRequest
+    {
+        public DeadBodyInfo Body;
+        public int Attempts;
+        public float NextTime;
+        public string Context;
+    }
 
     public IReadOnlyDictionary<int, SuitTextureState> States => _states;
     public IEnumerable<SuitTextureState> ActivePlayerStates => _playerStates.Values;
 
     private void Update()
+    {
+        ProcessPendingReapplyAll();
+        ProcessPendingDeadBodyReapplications();
+    }
+
+    private void ProcessPendingReapplyAll()
     {
         if (_pendingReapplyAllAttempts <= 0 || Time.unscaledTime < _nextPendingReapplyAllTime)
         {
@@ -40,6 +55,39 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
 
         ReapplyAll();
         DrawableSuitsDiagnostics.Info($"SyncReapplyApplied: context={_pendingReapplyAllContext}; attemptsRemaining={_pendingReapplyAllAttempts}; playerStates={_playerStates.Count}; sharedStates={_states.Count}");
+    }
+
+    private void ProcessPendingDeadBodyReapplications()
+    {
+        if (_pendingDeadBodyReapplications.Count == 0)
+        {
+            return;
+        }
+
+        for (var i = _pendingDeadBodyReapplications.Count - 1; i >= 0; i--)
+        {
+            var request = _pendingDeadBodyReapplications[i];
+            if (request == null || request.Body == null)
+            {
+                _pendingDeadBodyReapplications.RemoveAt(i);
+                continue;
+            }
+
+            if (Time.unscaledTime < request.NextTime)
+            {
+                continue;
+            }
+
+            request.Attempts--;
+            ApplyToDeadBody(request.Body, $"retry:{request.Context}");
+            if (request.Attempts <= 0)
+            {
+                _pendingDeadBodyReapplications.RemoveAt(i);
+                continue;
+            }
+
+            request.NextTime = Time.unscaledTime + ReapplyRetryIntervalSeconds;
+        }
     }
 
     public SuitTextureState GetOrCreateState(int suitId)
@@ -225,6 +273,7 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
         state.RuntimeMaterial.mainTexture = state.EditableTexture;
         state.ActiveDesignName = designName ?? string.Empty;
         ApplyStateToOwner(state);
+        ReapplyDeadBodies($"ApplyEditedTexture suit={suitId}");
 
         if (broadcast)
         {
@@ -255,6 +304,7 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
         state.RuntimeMaterial.mainTexture = state.EditableTexture;
         state.ActiveDesignName = designName ?? "Received design";
         ApplyStateToOwner(state);
+        ReapplyDeadBodies($"ApplyReceivedTexture owner={ownerClientId} suit={suitId}");
         ScheduleReapplyAll($"ApplyReceivedTexture owner={ownerClientId} suit={suitId}");
         DrawableSuitsDiagnostics.Info($"SyncPayloadApplied: ownerClientId={ownerClientId}; ownerPlayerSlot={normalizedSlot}; suitId={suitId}; designName={state.ActiveDesignName}; texture={state.EditableTexture.width}x{state.EditableTexture.height}; localPlayerState={state.IsLocalPlayerState}");
     }
@@ -270,6 +320,7 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
         TextureTools.CopyInto(state.EditableTexture, state.BaseTexture);
         state.ActiveDesignName = string.Empty;
         ApplyStateToOwner(state);
+        ReapplyDeadBodies($"ResetSuit suit={suitId}");
     }
 
     public void ReapplyAll()
@@ -284,6 +335,8 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
         {
             ApplyToPlayer(player);
         }
+
+        ReapplyDeadBodies("ReapplyAll", false);
     }
 
     public void ReapplyAllIfReady(string context)
@@ -547,6 +600,267 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
         }
 
         ApplyToPlayer(player, state);
+    }
+
+    public void ApplyToDeadBody(DeadBodyInfo body, string context)
+    {
+        if (body == null)
+        {
+            DrawableSuitsDiagnostics.Info($"DeadBodySuitApplySkipped: context={context}; reason=body-null");
+            return;
+        }
+
+        var player = ResolveDeadBodyPlayer(body, out var playerSlot, out var resolveReason);
+        if (player == null)
+        {
+            DrawableSuitsDiagnostics.Info($"DeadBodySuitApplySkipped: context={context}; reason=no-player; playerObjectId={body.playerObjectId}; resolvedSlot={playerSlot}; resolveReason={resolveReason}; body={body.name}");
+            return;
+        }
+
+        var suitId = player.currentSuitID;
+        if (suitId < 0)
+        {
+            DrawableSuitsDiagnostics.Info($"DeadBodySuitApplySkipped: context={context}; reason=invalid-suit; {DescribePlayerIdentity(player)}; playerObjectId={body.playerObjectId}; resolvedSlot={playerSlot}; body={body.name}");
+            return;
+        }
+
+        var state = FindStateForPlayer(player, suitId);
+        if (state?.RuntimeMaterial == null)
+        {
+            DrawableSuitsDiagnostics.Info($"DeadBodySuitApplySkipped: context={context}; reason=no-state; {DescribePlayerIdentity(player)}; playerObjectId={body.playerObjectId}; resolvedSlot={playerSlot}; body={body.name}");
+            return;
+        }
+
+        state.RuntimeMaterial.mainTexture = state.EditableTexture;
+        var rendererCount = ApplyMaterialToDeadBodyRenderers(body, state.RuntimeMaterial, out var candidateCount, out var rendererSummary);
+        if (rendererCount <= 0)
+        {
+            DrawableSuitsDiagnostics.Info($"DeadBodySuitApplySkipped: context={context}; reason=no-compatible-renderers; {DescribePlayerIdentity(player)}; playerObjectId={body.playerObjectId}; resolvedSlot={playerSlot}; candidates={candidateCount}; material={state.RuntimeMaterial.name}; body={body.name}; renderers=[{rendererSummary}]");
+            return;
+        }
+
+        DrawableSuitsDiagnostics.Info($"DeadBodySuitApplied: context={context}; {DescribePlayerIdentity(player)}; ownerClientId={state.OwnerClientId}; ownerPlayerSlot={state.OwnerPlayerSlot}; playerObjectId={body.playerObjectId}; resolvedSlot={playerSlot}; suitId={suitId}; renderers={rendererCount}; candidates={candidateCount}; material={state.RuntimeMaterial.name}; designName={state.ActiveDesignName}; body={body.name}; renderers=[{rendererSummary}]");
+    }
+
+    public void ScheduleDeadBodyReapply(DeadBodyInfo body, string context)
+    {
+        if (body == null)
+        {
+            DrawableSuitsDiagnostics.Info($"DeadBodySuitReapplySkipped: context={context}; reason=body-null");
+            return;
+        }
+
+        DeadBodyReapplyRequest request = null;
+        for (var i = 0; i < _pendingDeadBodyReapplications.Count; i++)
+        {
+            if (_pendingDeadBodyReapplications[i]?.Body == body)
+            {
+                request = _pendingDeadBodyReapplications[i];
+                break;
+            }
+        }
+
+        if (request == null)
+        {
+            request = new DeadBodyReapplyRequest { Body = body };
+            _pendingDeadBodyReapplications.Add(request);
+        }
+
+        request.Attempts = Mathf.Max(request.Attempts, ReapplyRetryAttempts);
+        request.NextTime = Time.unscaledTime + 0.05f;
+        request.Context = context ?? string.Empty;
+        DrawableSuitsDiagnostics.Info($"DeadBodySuitReapplyScheduled: context={request.Context}; attempts={request.Attempts}; nextIn={Mathf.Max(0f, request.NextTime - Time.unscaledTime):0.###}; playerObjectId={body.playerObjectId}; body={body.name}");
+    }
+
+    public void ReapplyDeadBodies(string context, bool scheduleRetries = true)
+    {
+        var bodies = UnityEngine.Object.FindObjectsOfType<DeadBodyInfo>();
+        var found = bodies?.Length ?? 0;
+        var scheduled = 0;
+        if (bodies != null)
+        {
+            for (var i = 0; i < bodies.Length; i++)
+            {
+                var body = bodies[i];
+                if (body == null)
+                {
+                    continue;
+                }
+
+                ApplyToDeadBody(body, context);
+                if (scheduleRetries)
+                {
+                    ScheduleDeadBodyReapply(body, context);
+                    scheduled++;
+                }
+            }
+        }
+
+        if (found > 0)
+        {
+            DrawableSuitsDiagnostics.Info($"DeadBodySuitReapplyExisting: context={context}; found={found}; scheduled={scheduled}; scheduleRetries={scheduleRetries}");
+        }
+    }
+
+    private SuitTextureState FindStateForPlayer(PlayerControllerB player, int suitId)
+    {
+        if (player == null)
+        {
+            return _states.TryGetValue(suitId, out var sharedState) ? sharedState : null;
+        }
+
+        var slotKey = PlayerStateKey(GetPlayerClientId(player), GetPlayerSlot(player), suitId);
+        if (_playerStates.TryGetValue(slotKey, out var state))
+        {
+            return state;
+        }
+
+        var clientKey = PlayerStateKey(GetPlayerClientId(player), UnknownPlayerSlot, suitId);
+        if (_playerStates.TryGetValue(clientKey, out state))
+        {
+            return state;
+        }
+
+        if (_states.TryGetValue(suitId, out state))
+        {
+            return state;
+        }
+
+        return GetOrCreateStateForPlayer(player, suitId);
+    }
+
+    private static PlayerControllerB ResolveDeadBodyPlayer(DeadBodyInfo body, out int playerSlot, out string reason)
+    {
+        playerSlot = UnknownPlayerSlot;
+        if (body == null)
+        {
+            reason = "body-null";
+            return null;
+        }
+
+        if (body.playerScript != null)
+        {
+            playerSlot = GetPlayerSlot(body.playerScript);
+            reason = "playerScript";
+            return body.playerScript;
+        }
+
+        var round = StartOfRound.Instance;
+        var players = round?.allPlayerScripts;
+        if (players != null && body.playerObjectId >= 0 && body.playerObjectId < players.Length && players[body.playerObjectId] != null)
+        {
+            playerSlot = body.playerObjectId;
+            reason = "playerObjectId";
+            return players[body.playerObjectId];
+        }
+
+        var ragdoll = body.GetComponentInParent<RagdollGrabbableObject>();
+        if (players != null && ragdoll != null && ragdoll.bodyID >= 0 && ragdoll.bodyID < players.Length && players[ragdoll.bodyID] != null)
+        {
+            playerSlot = ragdoll.bodyID;
+            reason = "ragdoll.bodyID";
+            return players[ragdoll.bodyID];
+        }
+
+        reason = $"no-match playerObjectId={body.playerObjectId}; ragdollBodyId={(ragdoll != null ? ragdoll.bodyID.ToString() : "none")}";
+        return null;
+    }
+
+    private static int ApplyMaterialToDeadBodyRenderers(DeadBodyInfo body, Material material, out int candidateCount, out string rendererSummary)
+    {
+        candidateCount = 0;
+        rendererSummary = string.Empty;
+        if (body == null || material == null)
+        {
+            return 0;
+        }
+
+        var unique = new HashSet<Renderer>();
+        var renderers = body.GetComponentsInChildren<Renderer>(true);
+        if (renderers != null)
+        {
+            for (var i = 0; i < renderers.Length; i++)
+            {
+                AddDeadBodyRenderer(renderers[i], unique);
+            }
+        }
+
+        var ragdoll = body.GetComponentInParent<RagdollGrabbableObject>();
+        AddDeadBodyRenderer(ragdoll?.mainObjectRenderer, unique);
+
+        candidateCount = unique.Count;
+        var applied = 0;
+        var summary = new List<string>();
+        foreach (var renderer in unique)
+        {
+            if (renderer == null)
+            {
+                continue;
+            }
+
+            var materials = renderer.sharedMaterials;
+            if (materials == null || materials.Length == 0)
+            {
+                renderer.sharedMaterial = material;
+            }
+            else
+            {
+                for (var i = 0; i < materials.Length; i++)
+                {
+                    if (materials[i] != null)
+                    {
+                        materials[i] = material;
+                    }
+                }
+
+                renderer.sharedMaterials = materials;
+            }
+
+            applied++;
+            if (summary.Count < 8)
+            {
+                summary.Add($"{renderer.GetType().Name}:{GetTransformPath(renderer.transform)}");
+            }
+        }
+
+        rendererSummary = string.Join(", ", summary);
+        if (candidateCount > summary.Count)
+        {
+            rendererSummary += $", +{candidateCount - summary.Count} more";
+        }
+
+        return applied;
+    }
+
+    private static void AddDeadBodyRenderer(Renderer renderer, HashSet<Renderer> renderers)
+    {
+        if (renderer == null || renderers == null)
+        {
+            return;
+        }
+
+        if (renderer is MeshRenderer || renderer is SkinnedMeshRenderer)
+        {
+            renderers.Add(renderer);
+        }
+    }
+
+    private static string GetTransformPath(Transform transform)
+    {
+        if (transform == null)
+        {
+            return "null";
+        }
+
+        var parts = new Stack<string>();
+        var current = transform;
+        while (current != null && parts.Count < 12)
+        {
+            parts.Push(current.name);
+            current = current.parent;
+        }
+
+        return string.Join("/", parts);
     }
 
     private void ApplyToPlayer(PlayerControllerB player, SuitTextureState state)
