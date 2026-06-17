@@ -11804,10 +11804,18 @@ internal sealed class SuitEditorController : MonoBehaviour
 
     private float CurrentUvPanelPlacementRotation(bool mirrored)
     {
-        var userRotation = mirrored ? -CurrentPlacementRotation() : CurrentPlacementRotation();
+        var visibleRotation = mirrored ? -CurrentPlacementRotation() : CurrentPlacementRotation();
         var panelRotation = UvPanelRotationDegrees(_uvPanelRotationQuarterTurns);
-        var effectiveRotation = NormalizePlacementRotation(userRotation - panelRotation);
-        DrawableSuitsDiagnostics.Info($"UvPlacementRotationResolved: tool={_tool}; mirrored={mirrored}; userRotation={userRotation:0.##}; panelRotation={panelRotation}; effectiveRotation={effectiveRotation:0.##}; uvQuarterTurns={NormalizeUvPanelRotation(_uvPanelRotationQuarterTurns)}; suit={_selectedSuitId}; source={CurrentPlacementName()}");
+        var radians = visibleRotation * Mathf.Deg2Rad;
+        var panelDirection = new Vector2(Mathf.Cos(radians), Mathf.Sin(radians));
+        var textureDirection = PanelVectorToViewVector(panelDirection, _uvPanelRotationQuarterTurns);
+        if (textureDirection.sqrMagnitude < 0.000001f)
+        {
+            textureDirection = panelDirection;
+        }
+
+        var effectiveRotation = NormalizePlacementRotation(Mathf.Atan2(textureDirection.y, textureDirection.x) * Mathf.Rad2Deg);
+        DrawableSuitsDiagnostics.Info($"UvPlacementRotationResolved: tool={_tool}; mirrored={mirrored}; visibleRotation={visibleRotation:0.##}; panelRotation={panelRotation}; effectiveRotation={effectiveRotation:0.##}; uvQuarterTurns={NormalizeUvPanelRotation(_uvPanelRotationQuarterTurns)}; panelDirection={panelDirection}; textureDirection={textureDirection}; suit={_selectedSuitId}; source={CurrentPlacementName()}; mode=TexturePanel");
         return effectiveRotation;
     }
 

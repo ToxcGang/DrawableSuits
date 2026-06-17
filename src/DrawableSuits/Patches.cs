@@ -70,6 +70,7 @@ internal static class UnlockableSuitPatches
     {
         RunPatch("UnlockableSuit.SwitchSuitForPlayer", () =>
         {
+            DrawableSuitsPlugin.Registry?.RecordPlayerSuitSnapshot(player, "UnlockableSuit.SwitchSuitForPlayer");
             DrawableSuitsPlugin.Registry?.ApplyToPlayer(player);
             DrawableSuitsPlugin.Registry?.ScheduleReapplyAll("UnlockableSuit.SwitchSuitForPlayer");
         });
@@ -195,6 +196,7 @@ internal static class PlayerControllerBPatches
     {
         RunPatch("PlayerControllerB.ConnectClientToPlayerObject", () =>
         {
+            DrawableSuitsPlugin.Registry?.RecordPlayerSuitSnapshot(__instance, "PlayerControllerB.ConnectClientToPlayerObject");
             DrawableSuitsPlugin.Registry?.ApplyToPlayer(__instance);
             DrawableSuitsPlugin.Registry?.ScheduleReapplyAll("PlayerControllerB.ConnectClientToPlayerObject");
             SessionSafetyGuard.Run("PlayerControllerB.ConnectClientToPlayerObject", true);
@@ -208,6 +210,7 @@ internal static class PlayerControllerBPatches
     {
         RunPatch("PlayerControllerB.SpawnPlayerAnimation", () =>
         {
+            DrawableSuitsPlugin.Registry?.RecordPlayerSuitSnapshot(__instance, "PlayerControllerB.SpawnPlayerAnimation");
             DrawableSuitsPlugin.Registry?.ApplyToPlayer(__instance);
             DrawableSuitsPlugin.Registry?.ScheduleReapplyAll("PlayerControllerB.SpawnPlayerAnimation");
             SessionSafetyGuard.Run("PlayerControllerB.SpawnPlayerAnimation", true);
@@ -215,11 +218,22 @@ internal static class PlayerControllerBPatches
     }
 
     [HarmonyPostfix]
-    [HarmonyPatch(nameof(PlayerControllerB.SpawnDeadBody), new Type[] { typeof(int), typeof(Vector3), typeof(int), typeof(PlayerControllerB), typeof(int), typeof(Transform), typeof(Transform), typeof(Vector3), typeof(bool) })]
-    private static void SpawnDeadBodyPostfix(int playerId)
+    [HarmonyPatch(nameof(PlayerControllerB.SpawnDeadBody), new Type[] { typeof(int), typeof(Vector3), typeof(int), typeof(PlayerControllerB), typeof(int), typeof(Transform), typeof(Transform), typeof(Vector3) })]
+    private static void SpawnDeadBodyPostfix(int playerId, PlayerControllerB deadPlayerController)
     {
         RunPatch("PlayerControllerB.SpawnDeadBody", () =>
         {
+            DrawableSuitsPlugin.Registry?.RecordPlayerSuitSnapshot(deadPlayerController, "PlayerControllerB.SpawnDeadBody");
+
+            var exactBody = deadPlayerController?.deadBody;
+            if (exactBody != null)
+            {
+                DrawableSuitsPlugin.Registry?.ApplyToDeadBody(exactBody, "PlayerControllerB.SpawnDeadBody:deadPlayerController.deadBody");
+                DrawableSuitsPlugin.Registry?.ScheduleDeadBodyReapply(exactBody, "PlayerControllerB.SpawnDeadBody:deadPlayerController.deadBody");
+                DrawableSuitsDiagnostics.Info($"DeadBodySuitSpawnPatch: playerId={playerId}; exactBody={exactBody.name}; deadPlayer={DrawableSuitsPlugin.DescribeUnityObject(deadPlayerController)}");
+                return;
+            }
+
             var bodies = UnityEngine.Object.FindObjectsOfType<DeadBodyInfo>();
             var matched = 0;
             if (bodies != null)
@@ -238,7 +252,7 @@ internal static class PlayerControllerBPatches
                 }
             }
 
-            DrawableSuitsDiagnostics.Info($"DeadBodySuitSpawnPatch: playerId={playerId}; matchedBodies={matched}");
+            DrawableSuitsDiagnostics.Info($"DeadBodySuitSpawnPatch: playerId={playerId}; matchedBodies={matched}; deadPlayer={DrawableSuitsPlugin.DescribeUnityObject(deadPlayerController)}");
         });
     }
 
@@ -311,6 +325,27 @@ internal static class PlayerControllerBPatches
 [HarmonyPatch(typeof(DeadBodyInfo))]
 internal static class DeadBodyInfoPatches
 {
+    [HarmonyPrefix]
+    [HarmonyPatch(nameof(DeadBodyInfo.ChangeMesh))]
+    private static void ChangeMeshPrefix(DeadBodyInfo __instance, ref Material changeMaterial)
+    {
+        try
+        {
+            DrawableSuitsPlugin.EnsureRuntimeReady("DeadBodyInfo.ChangeMesh.prefix");
+            if (DrawableSuitsPlugin.Registry != null
+                && DrawableSuitsPlugin.Registry.TryGetDeadBodyRuntimeMaterial(__instance, "DeadBodyInfo.ChangeMesh.prefix", out var material, out var reason))
+            {
+                var before = changeMaterial != null ? changeMaterial.name : "null";
+                changeMaterial = material;
+                DrawableSuitsDiagnostics.Info($"DeadBodySuitMaterialSubstituted: context=DeadBodyInfo.ChangeMesh.prefix; previousMaterial={before}; newMaterial={material.name}; reason={reason}; body={DrawableSuitsPlugin.DescribeUnityObject(__instance)}");
+            }
+        }
+        catch (Exception ex)
+        {
+            DrawableSuitsDiagnostics.Exception("Patch failed: DeadBodyInfo.ChangeMesh.prefix", ex);
+        }
+    }
+
     [HarmonyPostfix]
     [HarmonyPatch("Start")]
     private static void StartPostfix(DeadBodyInfo __instance)

@@ -20,6 +20,8 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
     private float _nextPendingReapplyAllTime;
     private string _pendingReapplyAllContext = string.Empty;
     private readonly List<DeadBodyReapplyRequest> _pendingDeadBodyReapplications = new();
+    private readonly Dictionary<int, int> _lastKnownSuitIdByPlayerSlot = new();
+    private readonly Dictionary<ulong, int> _lastKnownSuitIdByClientId = new();
 
     private sealed class DeadBodyReapplyRequest
     {
@@ -303,6 +305,7 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
         TextureTools.CopyInto(state.EditableTexture, texture);
         state.RuntimeMaterial.mainTexture = state.EditableTexture;
         state.ActiveDesignName = designName ?? "Received design";
+        RecordSuitSnapshot(ownerClientId, normalizedSlot, suitId, "ApplyReceivedTexture", $"ownerClientId={ownerClientId}; ownerPlayerSlot={normalizedSlot}; suitId={suitId}");
         ApplyStateToOwner(state);
         ReapplyDeadBodies($"ApplyReceivedTexture owner={ownerClientId} suit={suitId}");
         ScheduleReapplyAll($"ApplyReceivedTexture owner={ownerClientId} suit={suitId}");
@@ -567,6 +570,8 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
             return;
         }
 
+        RecordStateSuitSnapshot(state, "ApplyStateToOwner");
+
         var round = StartOfRound.Instance;
         if (round?.allPlayerScripts != null)
         {
@@ -589,6 +594,8 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
             return;
         }
 
+        RecordPlayerSuitSnapshot(player, "ApplyToPlayer");
+
         var slotKey = PlayerStateKey(GetPlayerClientId(player), GetPlayerSlot(player), player.currentSuitID);
         if (!_playerStates.TryGetValue(slotKey, out var state))
         {
@@ -602,32 +609,58 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
         ApplyToPlayer(player, state);
     }
 
-    public void ApplyToDeadBody(DeadBodyInfo body, string context)
+    public void RecordPlayerSuitSnapshot(PlayerControllerB player, string context)
     {
-        if (body == null)
-        {
-            DrawableSuitsDiagnostics.Info($"DeadBodySuitApplySkipped: context={context}; reason=body-null");
-            return;
-        }
-
-        var player = ResolveDeadBodyPlayer(body, out var playerSlot, out var resolveReason);
         if (player == null)
         {
-            DrawableSuitsDiagnostics.Info($"DeadBodySuitApplySkipped: context={context}; reason=no-player; playerObjectId={body.playerObjectId}; resolvedSlot={playerSlot}; resolveReason={resolveReason}; body={body.name}");
             return;
         }
 
-        var suitId = player.currentSuitID;
+        RecordSuitSnapshot(GetPlayerClientId(player), GetPlayerSlot(player), player.currentSuitID, context, DescribePlayerIdentity(player));
+    }
+
+    private void RecordStateSuitSnapshot(SuitTextureState state, string context)
+    {
+        if (state == null)
+        {
+            return;
+        }
+
+        RecordSuitSnapshot(state.OwnerClientId, state.OwnerPlayerSlot, state.SuitId, context, $"ownerClientId={state.OwnerClientId}; ownerPlayerSlot={state.OwnerPlayerSlot}; suitId={state.SuitId}; state={state.ActiveDesignName}");
+    }
+
+    private void RecordSuitSnapshot(ulong ownerClientId, int ownerPlayerSlot, int suitId, string context, string identity)
+    {
         if (suitId < 0)
         {
-            DrawableSuitsDiagnostics.Info($"DeadBodySuitApplySkipped: context={context}; reason=invalid-suit; {DescribePlayerIdentity(player)}; playerObjectId={body.playerObjectId}; resolvedSlot={playerSlot}; body={body.name}");
             return;
         }
 
-        var state = FindStateForPlayer(player, suitId);
-        if (state?.RuntimeMaterial == null)
+        var normalizedSlot = NormalizePlayerSlot(ownerPlayerSlot);
+        var changed = false;
+        if (normalizedSlot >= 0
+            && (!_lastKnownSuitIdByPlayerSlot.TryGetValue(normalizedSlot, out var previousSlotSuit) || previousSlotSuit != suitId))
         {
-            DrawableSuitsDiagnostics.Info($"DeadBodySuitApplySkipped: context={context}; reason=no-state; {DescribePlayerIdentity(player)}; playerObjectId={body.playerObjectId}; resolvedSlot={playerSlot}; body={body.name}");
+            _lastKnownSuitIdByPlayerSlot[normalizedSlot] = suitId;
+            changed = true;
+        }
+
+        if (!_lastKnownSuitIdByClientId.TryGetValue(ownerClientId, out var previousClientSuit) || previousClientSuit != suitId)
+        {
+            _lastKnownSuitIdByClientId[ownerClientId] = suitId;
+            changed = true;
+        }
+
+        if (changed)
+        {
+            DrawableSuitsDiagnostics.Info($"DeadBodySuitIdSnapshot: context={context}; ownerClientId={ownerClientId}; ownerPlayerSlot={normalizedSlot}; suitId={suitId}; identity={identity}");
+        }
+    }
+
+    public void ApplyToDeadBody(DeadBodyInfo body, string context)
+    {
+        if (!TryResolveDeadBodyState(body, context, out var player, out var playerSlot, out var suitId, out var state, out var resolveSummary))
+        {
             return;
         }
 
@@ -635,11 +668,24 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
         var rendererCount = ApplyMaterialToDeadBodyRenderers(body, state.RuntimeMaterial, out var candidateCount, out var rendererSummary);
         if (rendererCount <= 0)
         {
-            DrawableSuitsDiagnostics.Info($"DeadBodySuitApplySkipped: context={context}; reason=no-compatible-renderers; {DescribePlayerIdentity(player)}; playerObjectId={body.playerObjectId}; resolvedSlot={playerSlot}; candidates={candidateCount}; material={state.RuntimeMaterial.name}; body={body.name}; renderers=[{rendererSummary}]");
+            DrawableSuitsDiagnostics.Info($"DeadBodySuitApplySkipped: context={context}; reason=no-compatible-renderers; {DescribePlayerIdentity(player)}; playerObjectId={body.playerObjectId}; resolvedSlot={playerSlot}; suitId={suitId}; resolve={resolveSummary}; candidates={candidateCount}; material={state.RuntimeMaterial.name}; body={body.name}; renderers=[{rendererSummary}]");
             return;
         }
 
-        DrawableSuitsDiagnostics.Info($"DeadBodySuitApplied: context={context}; {DescribePlayerIdentity(player)}; ownerClientId={state.OwnerClientId}; ownerPlayerSlot={state.OwnerPlayerSlot}; playerObjectId={body.playerObjectId}; resolvedSlot={playerSlot}; suitId={suitId}; renderers={rendererCount}; candidates={candidateCount}; material={state.RuntimeMaterial.name}; designName={state.ActiveDesignName}; body={body.name}; renderers=[{rendererSummary}]");
+        DrawableSuitsDiagnostics.Info($"DeadBodySuitApplied: context={context}; {DescribePlayerIdentity(player)}; ownerClientId={state.OwnerClientId}; ownerPlayerSlot={state.OwnerPlayerSlot}; playerObjectId={body.playerObjectId}; resolvedSlot={playerSlot}; suitId={suitId}; resolve={resolveSummary}; renderers={rendererCount}; candidates={candidateCount}; material={state.RuntimeMaterial.name}; designName={state.ActiveDesignName}; body={body.name}; renderers=[{rendererSummary}]");
+    }
+
+    public bool TryGetDeadBodyRuntimeMaterial(DeadBodyInfo body, string context, out Material material, out string reason)
+    {
+        material = null;
+        if (!TryResolveDeadBodyState(body, context, out _, out _, out _, out var state, out reason))
+        {
+            return false;
+        }
+
+        material = state.RuntimeMaterial;
+        material.mainTexture = state.EditableTexture;
+        return material != null;
     }
 
     public void ScheduleDeadBodyReapply(DeadBodyInfo body, string context)
@@ -729,6 +775,73 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
         return GetOrCreateStateForPlayer(player, suitId);
     }
 
+    private bool TryResolveDeadBodyState(DeadBodyInfo body, string context, out PlayerControllerB player, out int playerSlot, out int suitId, out SuitTextureState state, out string resolveSummary)
+    {
+        player = null;
+        playerSlot = UnknownPlayerSlot;
+        suitId = -1;
+        state = null;
+        resolveSummary = string.Empty;
+
+        if (body == null)
+        {
+            resolveSummary = "body-null";
+            DrawableSuitsDiagnostics.Info($"DeadBodySuitApplySkipped: context={context}; reason=body-null");
+            return false;
+        }
+
+        player = ResolveDeadBodyPlayer(body, out playerSlot, out var playerResolveReason);
+        if (player == null)
+        {
+            resolveSummary = $"playerResolve={playerResolveReason}";
+            DrawableSuitsDiagnostics.Info($"DeadBodySuitApplySkipped: context={context}; reason=no-player; playerObjectId={body.playerObjectId}; resolvedSlot={playerSlot}; resolve={resolveSummary}; body={body.name}");
+            return false;
+        }
+
+        suitId = ResolveDeadBodySuitId(player, playerSlot, out var suitResolveReason);
+        resolveSummary = $"playerResolve={playerResolveReason}; suitResolve={suitResolveReason}";
+        if (suitId < 0)
+        {
+            DrawableSuitsDiagnostics.Info($"DeadBodySuitApplySkipped: context={context}; reason=invalid-suit; {DescribePlayerIdentity(player)}; playerObjectId={body.playerObjectId}; resolvedSlot={playerSlot}; resolve={resolveSummary}; body={body.name}");
+            return false;
+        }
+
+        state = FindStateForPlayer(player, suitId);
+        if (state?.RuntimeMaterial == null)
+        {
+            DrawableSuitsDiagnostics.Info($"DeadBodySuitApplySkipped: context={context}; reason=no-state; {DescribePlayerIdentity(player)}; playerObjectId={body.playerObjectId}; resolvedSlot={playerSlot}; suitId={suitId}; resolve={resolveSummary}; body={body.name}");
+            return false;
+        }
+
+        return true;
+    }
+
+    private int ResolveDeadBodySuitId(PlayerControllerB player, int playerSlot, out string source)
+    {
+        var normalizedSlot = NormalizePlayerSlot(playerSlot);
+        if (normalizedSlot >= 0 && _lastKnownSuitIdByPlayerSlot.TryGetValue(normalizedSlot, out var suitId) && suitId >= 0)
+        {
+            source = $"slot-snapshot:{normalizedSlot}";
+            return suitId;
+        }
+
+        var clientId = GetPlayerClientId(player);
+        if (_lastKnownSuitIdByClientId.TryGetValue(clientId, out suitId) && suitId >= 0)
+        {
+            source = $"client-snapshot:{clientId}";
+            return suitId;
+        }
+
+        if (player != null && player.currentSuitID >= 0)
+        {
+            source = "player.currentSuitID";
+            return player.currentSuitID;
+        }
+
+        source = "none";
+        return -1;
+    }
+
     private static PlayerControllerB ResolveDeadBodyPlayer(DeadBodyInfo body, out int playerSlot, out string reason)
     {
         playerSlot = UnknownPlayerSlot;
@@ -787,6 +900,33 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
 
         var ragdoll = body.GetComponentInParent<RagdollGrabbableObject>();
         AddDeadBodyRenderer(ragdoll?.mainObjectRenderer, unique);
+        AddDeadBodyRenderer(body.GetComponent<RagdollGrabbableObject>()?.mainObjectRenderer, unique);
+
+        if (body.grabBodyObject != null)
+        {
+            var grabbedRagdoll = body.grabBodyObject as RagdollGrabbableObject;
+            AddDeadBodyRenderer(grabbedRagdoll?.mainObjectRenderer, unique);
+            var grabbedRenderers = body.grabBodyObject.GetComponentsInChildren<Renderer>(true);
+            if (grabbedRenderers != null)
+            {
+                for (var i = 0; i < grabbedRenderers.Length; i++)
+                {
+                    AddDeadBodyRenderer(grabbedRenderers[i], unique);
+                }
+            }
+        }
+
+        if (body.detachedHeadObject != null)
+        {
+            var detachedHeadRenderers = body.detachedHeadObject.GetComponentsInChildren<Renderer>(true);
+            if (detachedHeadRenderers != null)
+            {
+                for (var i = 0; i < detachedHeadRenderers.Length; i++)
+                {
+                    AddDeadBodyRenderer(detachedHeadRenderers[i], unique);
+                }
+            }
+        }
 
         candidateCount = unique.Count;
         var applied = 0;
@@ -798,28 +938,13 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
                 continue;
             }
 
-            var materials = renderer.sharedMaterials;
-            if (materials == null || materials.Length == 0)
-            {
-                renderer.sharedMaterial = material;
-            }
-            else
-            {
-                for (var i = 0; i < materials.Length; i++)
-                {
-                    if (materials[i] != null)
-                    {
-                        materials[i] = material;
-                    }
-                }
-
-                renderer.sharedMaterials = materials;
-            }
+            var beforeMaterials = DescribeRendererMaterials(renderer);
+            SetDeadBodyRendererMaterial(renderer, material);
 
             applied++;
             if (summary.Count < 8)
             {
-                summary.Add($"{renderer.GetType().Name}:{GetTransformPath(renderer.transform)}");
+                summary.Add($"{renderer.GetType().Name}:{GetTransformPath(renderer.transform)} before=[{beforeMaterials}] after=[{DescribeRendererMaterials(renderer)}]");
             }
         }
 
@@ -830,6 +955,74 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
         }
 
         return applied;
+    }
+
+    private static void SetDeadBodyRendererMaterial(Renderer renderer, Material material)
+    {
+        if (renderer == null || material == null)
+        {
+            return;
+        }
+
+        var shared = renderer.sharedMaterials;
+        if (shared == null || shared.Length == 0)
+        {
+            renderer.sharedMaterial = material;
+        }
+        else
+        {
+            for (var i = 0; i < shared.Length; i++)
+            {
+                shared[i] = material;
+            }
+
+            renderer.sharedMaterials = shared;
+        }
+
+        try
+        {
+            var instanceMaterials = renderer.materials;
+            if (instanceMaterials != null && instanceMaterials.Length > 0)
+            {
+                for (var i = 0; i < instanceMaterials.Length; i++)
+                {
+                    instanceMaterials[i] = material;
+                }
+
+                renderer.materials = instanceMaterials;
+            }
+        }
+        catch (Exception ex)
+        {
+            DrawableSuitsDiagnostics.Warn($"DeadBodySuitRendererMaterialInstanceSkipped: renderer={GetTransformPath(renderer.transform)}; reason={ex.GetType().Name}:{ex.Message}");
+        }
+    }
+
+    private static string DescribeRendererMaterials(Renderer renderer)
+    {
+        if (renderer == null)
+        {
+            return "renderer-null";
+        }
+
+        var materials = renderer.sharedMaterials;
+        if (materials == null || materials.Length == 0)
+        {
+            return renderer.sharedMaterial != null ? renderer.sharedMaterial.name : "none";
+        }
+
+        var names = new List<string>();
+        for (var i = 0; i < materials.Length && i < 4; i++)
+        {
+            names.Add(materials[i] != null ? materials[i].name : "null");
+        }
+
+        if (materials.Length > names.Count)
+        {
+            names.Add($"+{materials.Length - names.Count} more");
+        }
+
+        return string.Join("|", names);
     }
 
     private static void AddDeadBodyRenderer(Renderer renderer, HashSet<Renderer> renderers)
@@ -865,6 +1058,7 @@ internal sealed class SuitTextureRegistry : MonoBehaviour
 
     private void ApplyToPlayer(PlayerControllerB player, SuitTextureState state)
     {
+        RecordPlayerSuitSnapshot(player, "ApplyToPlayer(state)");
         if (player == null || state == null || player.currentSuitID != state.SuitId)
         {
             return;

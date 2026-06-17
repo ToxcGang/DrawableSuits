@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.74
+
+- Fixed rotated UV-panel Decal, Sticker, and Text placement so the final stamp uses the same visible orientation as the preview.
+- Corrected the dead-body spawn patch signature and added suit-ID snapshots so corpses/ragdolls can inherit the player's applied DrawableSuits texture more reliably.
+- Improved diagnostics for UV placement rotation and dead-body suit material application.
+
 ## 0.5.73
 
 - Fixed Decal, Sticker, and Text stamping in the rotated UV panel so the final stamp keeps the same visible rotation as the preview.
