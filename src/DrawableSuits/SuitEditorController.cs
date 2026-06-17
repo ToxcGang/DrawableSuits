@@ -2650,7 +2650,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         _statusLabel = CreateAnchoredText(panel.transform, "StatusLabel", string.Empty, 15, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(leftX, 86f, leftW, 50f), TerminalStatusColor);
         _statusLabel.color = TerminalStatusColor;
 
-        CreateAnchoredText(panel.transform, "WorldHelp", "Aim at suit or UV panel. RT stamps/samples; hold paint/erase. Wheel/D-pad zooms target. D-pad L/R or ,/. rotates decals/stickers. LB/RB or [ ] rotates UV.", 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(rightX, 86f, rightW, 58f), TerminalMutedTextColor);
+        CreateAnchoredText(panel.transform, "WorldHelp", "Aim suit/UV. RT use; hold paint/erase.\nWheel/D-pad zoom. D-pad L/R or ,/. rotate stamps.\nLB/RB or [ ] rotate UV.", 12, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(rightX, 86f, rightW, 62f), TerminalMutedTextColor);
 
         CreateSectionCard(panel.transform, new Rect(leftX - sectionInset, toolsY, leftW + sectionInset * 2f, 112f));
         CreateSectionCard(panel.transform, new Rect(leftX - sectionInset, brushY, leftW + sectionInset * 2f, 150f));
@@ -7174,10 +7174,8 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
-        var view = GetUvPanelViewRect();
-        var stampSize = GetPlacementStampPixelSize(stampTexture);
-        var displayWidth = Mathf.Clamp(stampSize.x / Mathf.Max(1f, sourceTexture.width * view.width) * rect.width, 4f, rect.width * 1.5f);
-        var displayHeight = Mathf.Clamp(stampSize.y / Mathf.Max(1f, sourceTexture.height * view.height) * rect.height, 4f, rect.height * 1.5f);
+        var visibleRotation = mirrored ? -CurrentPlacementRotation() : CurrentPlacementRotation();
+        var displaySize = ResolveUvPanelPlacementDisplaySize(sourceTexture, stampTexture, visibleRotation, rect);
 
         previewImage.texture = stampTexture;
         previewImage.color = _tool == EditorTool.Text
@@ -7186,10 +7184,36 @@ internal sealed class SuitEditorController : MonoBehaviour
         previewImage.raycastTarget = false;
         previewImage.uvRect = mirrored ? new Rect(1f, 0f, -1f, 1f) : new Rect(0f, 0f, 1f, 1f);
         previewRect.anchoredPosition = localPoint;
-        previewRect.sizeDelta = new Vector2(displayWidth, displayHeight);
-        previewRect.localRotation = Quaternion.Euler(0f, 0f, mirrored ? -CurrentPlacementRotation() : CurrentPlacementRotation());
+        previewRect.sizeDelta = displaySize;
+        previewRect.localRotation = Quaternion.Euler(0f, 0f, visibleRotation);
         previewRect.gameObject.SetActive(true);
         return true;
+    }
+
+    private Vector2 ResolveUvPanelPlacementDisplaySize(Texture2D sourceTexture, Texture2D stampTexture, float visibleRotation, Rect rect)
+    {
+        var view = GetUvPanelViewRect();
+        var stampSize = GetPlacementStampPixelSize(stampTexture);
+        var fallbackWidth = Mathf.Clamp(stampSize.x / Mathf.Max(1f, sourceTexture.width * view.width) * rect.width, 4f, rect.width * 1.5f);
+        var fallbackHeight = Mathf.Clamp(stampSize.y / Mathf.Max(1f, sourceTexture.height * view.height) * rect.height, 4f, rect.height * 1.5f);
+        if (!TryResolveUvPanelPlacementFrame(sourceTexture, stampTexture, CurrentPlacementSize(), visibleRotation, false, false, out var frame))
+        {
+            return new Vector2(fallbackWidth, fallbackHeight);
+        }
+
+        var rightViewDelta = new Vector2(
+            frame.RightAxis.x * frame.Width / Mathf.Max(1f, sourceTexture.width * view.width),
+            frame.RightAxis.y * frame.Width / Mathf.Max(1f, sourceTexture.height * view.height));
+        var upViewDelta = new Vector2(
+            frame.UpAxis.x * frame.Height / Mathf.Max(1f, sourceTexture.width * view.width),
+            frame.UpAxis.y * frame.Height / Mathf.Max(1f, sourceTexture.height * view.height));
+        var rightPanelDelta = ViewVectorToPanelVector(rightViewDelta, _uvPanelRotationQuarterTurns);
+        var upPanelDelta = ViewVectorToPanelVector(upViewDelta, _uvPanelRotationQuarterTurns);
+        var displayRight = new Vector2(rightPanelDelta.x * rect.width, rightPanelDelta.y * rect.height);
+        var displayUp = new Vector2(upPanelDelta.x * rect.width, upPanelDelta.y * rect.height);
+        var displayWidth = Mathf.Clamp(displayRight.magnitude, 4f, rect.width * 1.5f);
+        var displayHeight = Mathf.Clamp(displayUp.magnitude, 4f, rect.height * 1.5f);
+        return new Vector2(displayWidth, displayHeight);
     }
 
     private bool EnsureDecalPreviewTexture(Texture2D sourceTexture)
@@ -10639,6 +10663,21 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
     }
 
+    private static Vector2 ViewVectorToPanelVector(Vector2 viewVector, int quarterTurns)
+    {
+        switch (NormalizeUvPanelRotation(quarterTurns))
+        {
+            case 1:
+                return new Vector2(-viewVector.y, viewVector.x);
+            case 2:
+                return new Vector2(-viewVector.x, -viewVector.y);
+            case 3:
+                return new Vector2(viewVector.y, -viewVector.x);
+            default:
+                return viewVector;
+        }
+    }
+
     private void ResetUvPanelView(string reason, bool forceLog)
     {
         _uvPanelZoom = UvPanelMinZoom;
@@ -11777,7 +11816,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
-        return CompositePlacementStamp(target, stampTexture, uv, _decalSize, CurrentUvPanelPlacementRotation(mirrored), _brushOpacity, mirrored, touchedPixels);
+        return CompositePlacementStamp(target, stampTexture, uv, _decalSize, CurrentVisiblePlacementRotation(mirrored), _brushOpacity, mirrored, touchedPixels);
     }
 
     private bool ApplyTextStamp(Texture2D target, Vector2 uv, bool mirrored = false, HashSet<int> touchedPixels = null)
@@ -11788,7 +11827,7 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
-        return CompositePlacementStamp(target, stampTexture, uv, _textSize, CurrentUvPanelPlacementRotation(mirrored), _brushOpacity, mirrored, touchedPixels, true);
+        return CompositePlacementStamp(target, stampTexture, uv, _textSize, CurrentVisiblePlacementRotation(mirrored), _brushOpacity, mirrored, touchedPixels, true);
     }
 
     private bool ApplyStickerStamp(Texture2D target, Vector2 uv, bool mirrored = false, HashSet<int> touchedPixels = null)
@@ -11799,24 +11838,12 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
-        return CompositePlacementStamp(target, stampTexture, uv, _stickerSize, CurrentUvPanelPlacementRotation(mirrored), _brushOpacity, mirrored, touchedPixels, false);
+        return CompositePlacementStamp(target, stampTexture, uv, _stickerSize, CurrentVisiblePlacementRotation(mirrored), _brushOpacity, mirrored, touchedPixels, false);
     }
 
-    private float CurrentUvPanelPlacementRotation(bool mirrored)
+    private float CurrentVisiblePlacementRotation(bool mirrored)
     {
-        var visibleRotation = mirrored ? -CurrentPlacementRotation() : CurrentPlacementRotation();
-        var panelRotation = UvPanelRotationDegrees(_uvPanelRotationQuarterTurns);
-        var radians = visibleRotation * Mathf.Deg2Rad;
-        var panelDirection = new Vector2(Mathf.Cos(radians), Mathf.Sin(radians));
-        var textureDirection = PanelVectorToViewVector(panelDirection, _uvPanelRotationQuarterTurns);
-        if (textureDirection.sqrMagnitude < 0.000001f)
-        {
-            textureDirection = panelDirection;
-        }
-
-        var effectiveRotation = NormalizePlacementRotation(Mathf.Atan2(textureDirection.y, textureDirection.x) * Mathf.Rad2Deg);
-        DrawableSuitsDiagnostics.Info($"UvPlacementRotationResolved: tool={_tool}; mirrored={mirrored}; visibleRotation={visibleRotation:0.##}; panelRotation={panelRotation}; effectiveRotation={effectiveRotation:0.##}; uvQuarterTurns={NormalizeUvPanelRotation(_uvPanelRotationQuarterTurns)}; panelDirection={panelDirection}; textureDirection={textureDirection}; suit={_selectedSuitId}; source={CurrentPlacementName()}; mode=TexturePanel");
-        return effectiveRotation;
+        return mirrored ? -CurrentPlacementRotation() : CurrentPlacementRotation();
     }
 
     private bool CompositeTextSurfaceStamp(Texture2D target, Texture2D stamp, Vector3 center, Vector3 normal, float rotation, bool mirrored, float opacity, HashSet<int> touchedPixels, out TextSurfaceStampStats stats)
@@ -12326,24 +12353,22 @@ internal sealed class SuitEditorController : MonoBehaviour
             return false;
         }
 
+        if (!TryResolveUvPanelPlacementFrame(target, stamp, stampHeight, stampRotation, flipHorizontal, true, out var frame))
+        {
+            return false;
+        }
+
         var centerX = Mathf.RoundToInt(uv.x * (target.width - 1));
         var centerY = Mathf.RoundToInt(uv.y * (target.height - 1));
-        var stampSize = GetPlacementStampPixelSize(stamp);
-        var width = Mathf.Max(1f, stampSize.x);
-        var height = Mathf.Max(1f, _tool == EditorTool.Text ? stampSize.y : stampHeight);
-        var halfWidth = Mathf.Max(1, Mathf.CeilToInt(width * 0.5f));
-        var halfHeight = Mathf.Max(1, Mathf.CeilToInt(height * 0.5f));
-        var radians = stampRotation * Mathf.Deg2Rad;
-        var cos = Mathf.Cos(radians);
-        var sin = Mathf.Sin(radians);
         var changed = false;
 
-        for (var y = -halfHeight; y <= halfHeight; y++)
+        for (var y = -frame.HalfExtentY; y <= frame.HalfExtentY; y++)
         {
-            for (var x = -halfWidth; x <= halfWidth; x++)
+            for (var x = -frame.HalfExtentX; x <= frame.HalfExtentX; x++)
             {
-                var u = (x * cos - y * sin) / width + 0.5f;
-                var v = (x * sin + y * cos) / height + 0.5f;
+                var delta = new Vector2(x, y);
+                var u = Vector2.Dot(delta, frame.RightAxis) / frame.Width + 0.5f;
+                var v = Vector2.Dot(delta, frame.UpAxis) / frame.Height + 0.5f;
                 if (u < 0f || u > 1f || v < 0f || v > 1f)
                 {
                     continue;
@@ -12387,6 +12412,73 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
 
         return changed;
+    }
+
+    private struct UvPanelPlacementFrame
+    {
+        public Vector2 RightAxis;
+        public Vector2 UpAxis;
+        public float Width;
+        public float Height;
+        public int HalfExtentX;
+        public int HalfExtentY;
+        public float EffectiveRotation;
+    }
+
+    private bool TryResolveUvPanelPlacementFrame(Texture2D target, Texture2D stamp, float stampHeight, float visibleRotation, bool mirrored, bool logDiagnostics, out UvPanelPlacementFrame frame)
+    {
+        frame = default;
+        if (target == null || stamp == null)
+        {
+            return false;
+        }
+
+        var stampSize = GetPlacementStampPixelSize(stamp);
+        var width = Mathf.Max(1f, stampSize.x);
+        var height = Mathf.Max(1f, _tool == EditorTool.Text ? stampSize.y : stampHeight);
+        var radians = visibleRotation * Mathf.Deg2Rad;
+        var panelRight = new Vector2(Mathf.Cos(radians), -Mathf.Sin(radians));
+        var panelUp = new Vector2(Mathf.Sin(radians), Mathf.Cos(radians));
+        var viewRight = PanelVectorToViewVector(panelRight, _uvPanelRotationQuarterTurns);
+        var viewUp = PanelVectorToViewVector(panelUp, _uvPanelRotationQuarterTurns);
+        var textureRight = new Vector2(viewRight.x * target.width, viewRight.y * target.height);
+        var textureUp = new Vector2(viewUp.x * target.width, viewUp.y * target.height);
+        if (textureRight.sqrMagnitude < 0.000001f || textureUp.sqrMagnitude < 0.000001f)
+        {
+            return false;
+        }
+
+        var rightAxis = textureRight.normalized;
+        var upAxis = textureUp.normalized;
+        var halfRight = rightAxis * (width * 0.5f);
+        var halfUp = upAxis * (height * 0.5f);
+        var c0 = halfRight + halfUp;
+        var c1 = halfRight - halfUp;
+        var c2 = -halfRight + halfUp;
+        var c3 = -halfRight - halfUp;
+        var maxAbsX = Mathf.Max(Mathf.Max(Mathf.Abs(c0.x), Mathf.Abs(c1.x)), Mathf.Max(Mathf.Abs(c2.x), Mathf.Abs(c3.x)));
+        var maxAbsY = Mathf.Max(Mathf.Max(Mathf.Abs(c0.y), Mathf.Abs(c1.y)), Mathf.Max(Mathf.Abs(c2.y), Mathf.Abs(c3.y)));
+        var halfExtentX = Mathf.Max(1, Mathf.CeilToInt(maxAbsX) + 1);
+        var halfExtentY = Mathf.Max(1, Mathf.CeilToInt(maxAbsY) + 1);
+        var effectiveRotation = NormalizePlacementRotation(Mathf.Atan2(-rightAxis.y, rightAxis.x) * Mathf.Rad2Deg);
+
+        frame = new UvPanelPlacementFrame
+        {
+            RightAxis = rightAxis,
+            UpAxis = upAxis,
+            Width = width,
+            Height = height,
+            HalfExtentX = halfExtentX,
+            HalfExtentY = halfExtentY,
+            EffectiveRotation = effectiveRotation
+        };
+
+        if (logDiagnostics)
+        {
+            DrawableSuitsDiagnostics.Info($"UvPlacementFrameResolved: tool={_tool}; source={CurrentPlacementName()}; suit={_selectedSuitId}; userRotation={CurrentPlacementRotation():0.##}; visibleRotation={visibleRotation:0.##}; mirrored={mirrored}; panelRotation={UvPanelRotationDegrees(_uvPanelRotationQuarterTurns)}; effectiveRotation={effectiveRotation:0.##}; rightAxis={rightAxis}; upAxis={upAxis}; stampSize={width:0.#}x{height:0.#}; extents={halfExtentX}x{halfExtentY}; texture={target.width}x{target.height}; mode=TexturePanel");
+        }
+
+        return true;
     }
 
     private static bool TryMarkTouchedPixel(Texture2D texture, int x, int y, HashSet<int> touchedPixels)

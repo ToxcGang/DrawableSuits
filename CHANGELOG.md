@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.75
+
+- Fixed UV-panel Decal, Sticker, and Text placement at 90/270 degree panel rotations by transforming the full placement frame instead of only the angle.
+- Reflowed the editor shortcut help text so the UV rotation and placement shortcut instructions no longer clip.
+
 ## 0.5.74
 
 - Fixed rotated UV-panel Decal, Sticker, and Text placement so the final stamp uses the same visible orientation as the preview.
