@@ -1,4 +1,3 @@
-```yml
 name: Bug Report
 description: Report a reproducible DrawableSuits bug
 title: "[Bug]: "
@@ -229,4 +228,3 @@ body:
       placeholder: "Example: It only happens after switching suits, after joining late, after importing a code, etc."
     validations:
       required: false
-```
