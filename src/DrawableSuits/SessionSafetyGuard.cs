@@ -10,15 +10,6 @@ namespace DrawableSuits;
 
 internal static class SessionSafetyGuard
 {
-    private static readonly string[] StrayObjectNames =
-    {
-        "DrawableSuitsThirdPersonCamera",
-        "DrawableSuitsPreviewCamera",
-        "DrawableSuitsWorldAvatarProxy",
-        "DrawableSuitsWorldPaintProxy",
-        "DrawableSuitsWorldBrushMarker"
-    };
-
     private static float _lastFullLogTime;
 
     internal static void Run(string reason, bool forceLog = false)
@@ -30,8 +21,6 @@ internal static class SessionSafetyGuard
 
             if (!editorOpen)
             {
-                repaired += RepairStrayObjects();
-
                 if (DrawableSuitsPlugin.Editor != null)
                 {
                     repaired += DrawableSuitsPlugin.Editor.RepairClosedEditorState(reason);
@@ -84,48 +73,9 @@ internal static class SessionSafetyGuard
         }
     }
 
-    private static int RepairStrayObjects()
-    {
-        var repaired = 0;
-        var objects = Resources.FindObjectsOfTypeAll<GameObject>();
-        for (var i = 0; i < objects.Length; i++)
-        {
-            var gameObject = objects[i];
-            if (gameObject == null || !IsStrayDrawableSuitsObject(gameObject.name))
-            {
-                continue;
-            }
-
-            var camera = gameObject.GetComponent<Camera>();
-            if (camera != null && camera.enabled)
-            {
-                camera.enabled = false;
-            }
-
-            DrawableSuitsDiagnostics.Warn($"SessionSafetyCheck destroying stray closed-editor object: name={gameObject.name}; active={gameObject.activeSelf}; scene={gameObject.scene.name}; cameraEnabled={camera?.enabled.ToString() ?? "null"}; targetTexture={camera?.targetTexture?.name ?? "null"}");
-            UnityEngine.Object.Destroy(gameObject);
-            repaired++;
-        }
-
-        return repaired;
-    }
-
-    private static bool IsStrayDrawableSuitsObject(string name)
-    {
-        for (var i = 0; i < StrayObjectNames.Length; i++)
-        {
-            if (string.Equals(name, StrayObjectNames[i], StringComparison.Ordinal))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     private static string DescribeCameras()
     {
-        var cameras = Resources.FindObjectsOfTypeAll<Camera>();
+        var cameras = Camera.allCameras;
         if (cameras == null || cameras.Length == 0)
         {
             return "none";

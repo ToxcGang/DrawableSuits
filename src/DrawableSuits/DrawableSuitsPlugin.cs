@@ -19,9 +19,8 @@ public sealed class DrawableSuitsPlugin : BaseUnityPlugin
     internal static SuitSyncManager Sync { get; private set; }
     internal static bool IsEditorOpen => Editor != null && Editor.IsOpenForDiagnostics;
 
+    private static GameObject _runtimeRoot;
     private Harmony _harmony;
-    private static int _startupSafetyChecksRemaining;
-    private static float _lastStartupSafetyCheckTime;
 
     private void Awake()
     {
@@ -31,17 +30,7 @@ public sealed class DrawableSuitsPlugin : BaseUnityPlugin
         DrawableSuitsPaths.EnsureCreated();
         DrawableSuitsDiagnostics.Initialize();
         DrawableSuitsDiagnostics.Info($"Plugin Awake. pluginInstance={DescribeUnityObject(this)}; pluginGameObject={DescribeUnityObject(gameObject)}; scene={SceneManager.GetActiveScene().name}");
-        DrawableSuitsDiagnostics.Info($"Config OpenEditorKey={ModConfig.OpenEditorKey.Value}; EmergencyOpenKey={ModConfig.EmergencyOpenKey.Value}; ControllerCursorSpeed={ModConfig.ControllerCursorSpeed.Value}; MaxTextureSize={ModConfig.MaxTextureSize.Value}; MaxUndoStates={ModConfig.MaxUndoStates.Value}; NetworkSync={ModConfig.EnableNetworkSync.Value}; MaxSyncBytes={ModConfig.MaxSyncBytes.Value}; SyncChunkBytes={ModConfig.SyncChunkBytes.Value}; OsFileDialog={ModConfig.EnableOsFileDialog.Value}; ExperimentalModelPreview={ModConfig.EnableExperimentalModelPreview.Value}; StartInUvFallbackMode={ModConfig.StartInUvFallbackMode.Value}; ThirdPersonCameraDistance={ModConfig.ThirdPersonCameraDistance.Value}; ApplyLocalFirstPersonArms={ModConfig.ApplyLocalFirstPersonArms.Value}; AutoDisableBrokenJetpackWarningLateUpdatePatch={ModConfig.AutoDisableBrokenJetpackWarningLateUpdatePatch.Value}");
-
-        try
-        {
-            DontDestroyOnLoad(gameObject);
-            DrawableSuitsDiagnostics.Info("Marked BepInEx plugin gameObject as DontDestroyOnLoad.");
-        }
-        catch (System.Exception ex)
-        {
-            DrawableSuitsDiagnostics.Exception("Failed to mark plugin gameObject DontDestroyOnLoad", ex);
-        }
+        DrawableSuitsDiagnostics.Info($"Config OpenEditorKey={ModConfig.OpenEditorKey.Value}; EmergencyOpenKey={ModConfig.EmergencyOpenKey.Value}; ControllerCursorSpeed={ModConfig.ControllerCursorSpeed.Value}; MaxTextureSize={ModConfig.MaxTextureSize.Value}; MaxUndoStates={ModConfig.MaxUndoStates.Value}; NetworkSync={ModConfig.EnableNetworkSync.Value}; MaxSyncBytes={ModConfig.MaxSyncBytes.Value}; SyncChunkBytes={ModConfig.SyncChunkBytes.Value}; ExperimentalModelPreview={ModConfig.EnableExperimentalModelPreview.Value}; StartInUvFallbackMode={ModConfig.StartInUvFallbackMode.Value}; ThirdPersonCameraDistance={ModConfig.ThirdPersonCameraDistance.Value}; ApplyLocalFirstPersonArms={ModConfig.ApplyLocalFirstPersonArms.Value}; AutoDisableBrokenJetpackWarningLateUpdatePatch={ModConfig.AutoDisableBrokenJetpackWarningLateUpdatePatch.Value}");
 
         _harmony = new Harmony(PluginInfo.Guid);
         try
@@ -59,7 +48,6 @@ public sealed class DrawableSuitsPlugin : BaseUnityPlugin
 
         SceneManager.sceneLoaded += OnSceneLoaded;
         EnsureRuntimeReady("Plugin.Awake");
-        ResetStartupSafetyChecks("Plugin.Awake");
 
         DrawableSuitsDiagnostics.Info($"{PluginInfo.Name} {PluginInfo.Version} loaded with GUID {PluginInfo.Guid}.");
     }
@@ -69,13 +57,11 @@ public sealed class DrawableSuitsPlugin : BaseUnityPlugin
         DrawableSuitsDiagnostics.Info($"Plugin Start. plugin={DescribeUnityObject(this)}; host={DescribeUnityObject(RuntimeHost)}; editor={DescribeUnityObject(Editor)}");
         EnsureRuntimeReady("Plugin.Start");
         SessionSafetyGuard.Run("Plugin.Start", true);
-        ResetStartupSafetyChecks("Plugin.Start");
     }
 
     private void Update()
     {
         EnsureRuntimeReady("Plugin.Update");
-        RunStartupSafetyChecksIfNeeded();
     }
 
     private void OnDestroy()
@@ -87,6 +73,20 @@ public sealed class DrawableSuitsPlugin : BaseUnityPlugin
         }
         SceneManager.sceneLoaded -= OnSceneLoaded;
         _harmony?.UnpatchSelf();
+        Registry = null;
+        Sync = null;
+        Editor = null;
+        RuntimeHost = null;
+        if (_runtimeRoot != null)
+        {
+            Destroy(_runtimeRoot);
+            _runtimeRoot = null;
+        }
+
+        if (ReferenceEquals(Instance, this))
+        {
+            Instance = null;
+        }
     }
 
     private static void OnSceneLoaded(Scene scene, LoadSceneMode mode)
@@ -102,37 +102,6 @@ public sealed class DrawableSuitsPlugin : BaseUnityPlugin
 
         Registry?.ReapplyAllIfReady($"SceneLoaded:{scene.name}");
         SessionSafetyGuard.Run($"SceneLoaded:{scene.name}", true);
-        ResetStartupSafetyChecks($"SceneLoaded:{scene.name}");
-    }
-
-
-    private static void ResetStartupSafetyChecks(string reason)
-    {
-        _startupSafetyChecksRemaining = 12;
-        _lastStartupSafetyCheckTime = 0f;
-        DrawableSuitsDiagnostics.Info($"Startup session safety checks armed. reason={reason}; remaining={_startupSafetyChecksRemaining}");
-    }
-
-    private static void RunStartupSafetyChecksIfNeeded()
-    {
-        if (_startupSafetyChecksRemaining <= 0 || IsEditorOpen)
-        {
-            return;
-        }
-
-        if (!HasSessionSafetyContext())
-        {
-            return;
-        }
-
-        if (Time.unscaledTime - _lastStartupSafetyCheckTime < 0.35f)
-        {
-            return;
-        }
-
-        _lastStartupSafetyCheckTime = Time.unscaledTime;
-        _startupSafetyChecksRemaining--;
-        SessionSafetyGuard.Run($"Plugin.UpdateStartup:{_startupSafetyChecksRemaining}", _startupSafetyChecksRemaining == 11 || _startupSafetyChecksRemaining == 0);
     }
 
     internal static bool HasSessionSafetyContext()
@@ -168,10 +137,10 @@ public sealed class DrawableSuitsPlugin : BaseUnityPlugin
             return false;
         }
 
-        var hostObject = Instance.gameObject;
+        var hostObject = GetOrCreateRuntimeRoot(reason);
         if (hostObject == null)
         {
-            DrawableSuitsDiagnostics.Warn($"EnsureRuntimeReady({reason}) failed: plugin gameObject is null.");
+            DrawableSuitsDiagnostics.Warn($"EnsureRuntimeReady({reason}) failed: runtime root is null.");
             return false;
         }
 
@@ -187,6 +156,20 @@ public sealed class DrawableSuitsPlugin : BaseUnityPlugin
         }
 
         return ready;
+    }
+
+    private static GameObject GetOrCreateRuntimeRoot(string reason)
+    {
+        if (_runtimeRoot != null)
+        {
+            return _runtimeRoot;
+        }
+
+        _runtimeRoot = new GameObject("DrawableSuitsRuntimeRoot");
+        _runtimeRoot.hideFlags = HideFlags.HideAndDontSave;
+        DontDestroyOnLoad(_runtimeRoot);
+        DrawableSuitsDiagnostics.Info($"Runtime root created. reason={reason}; root={DescribeUnityObject(_runtimeRoot)}");
+        return _runtimeRoot;
     }
 
     internal static bool RequestOpenEditor(string source)

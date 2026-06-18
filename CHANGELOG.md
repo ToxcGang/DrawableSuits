@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.76
+
+- Removed the external decal picker path. The Decals menu now copies the Decals folder path and relies on manual PNG/JPG placement plus `Refresh`.
+- Moved runtime components onto a dedicated hidden `DrawableSuitsRuntimeRoot` instead of the BepInEx plugin GameObject.
+- Removed the old full-scene closed-editor stray-object repair scan and repeated startup repair loop.
+- Rewrote the README with safer decal instructions, clearer multiplayer sync notes, and Thunderstore review guidance.
+
 ## 0.5.75
 
 - Fixed UV-panel Decal, Sticker, and Text placement at 90/270 degree panel rotations by transforming the full placement frame instead of only the angle.
@@ -161,15 +168,15 @@
 
 ## 0.5.48
 
-- Replaced the in-process Windows common dialog used by `Add Decal` with an isolated external PowerShell picker process to prevent game crashes.
-- `Add Decal` now waits asynchronously for image selection, handles cancel/failure/timeout without changing the decal list, and keeps manual Decals-folder placement plus `Refresh` as the fallback.
-- Added picker start/completion/cancel/failure diagnostics while keeping decal validation, safe filename copying, row refresh, and auto-selection behavior.
+- Retired the previous in-process file-selection approach after it proved unsafe in-game.
+- Kept manual Decals-folder placement plus `Refresh` as the fallback.
+- Added import-path diagnostics while preserving decal validation, row refresh, and selection behavior.
 
 ## 0.5.47
 
-- Added `Add Decal` in the Decals menu, using a guarded Windows file picker to copy PNG/JPG/JPEG files into the DrawableSuits Decals folder.
-- Imported decals are validated, copied under a safe unique filename, refreshed, and selected automatically.
-- Added decal import diagnostics and kept manual folder placement plus `Refresh` as the fallback path.
+- Added an earlier decal image import workflow in the Decals menu.
+- Imported decals were validated, copied under a safe unique filename, refreshed, and selected automatically.
+- Kept manual folder placement plus `Refresh` as the fallback path.
 
 ## 0.5.46
 

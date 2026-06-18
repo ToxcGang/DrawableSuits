@@ -3,7 +3,6 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.Text;
 using GameNetcodeStuff;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -11,8 +10,6 @@ using UnityEngine.InputSystem;
 using UnityEngine.InputSystem.Controls;
 using UnityEngine.InputSystem.UI;
 using UnityEngine.UI;
-using DiagnosticsProcess = System.Diagnostics.Process;
-using DiagnosticsProcessStartInfo = System.Diagnostics.ProcessStartInfo;
 
 namespace DrawableSuits;
 
@@ -153,7 +150,6 @@ internal sealed class SuitEditorController : MonoBehaviour
     private const float WorldPlacementPreviewMoveThresholdPixels = 2f;
     private const int PlacementEditPreviewMaxTextureSize = 160;
     private const float SliderHandleVisualSize = 14f;
-    private const float DecalImportPickerTimeoutSeconds = 300f;
     private const float UvPanelMinZoom = 1f;
     private const float UvPanelMaxZoom = 8f;
     private const float UvPanelWheelZoomFactor = 1.18f;
@@ -556,9 +552,6 @@ internal sealed class SuitEditorController : MonoBehaviour
     private string _lastPlacementSourcePixelsLogKey = string.Empty;
     private float _lastPlacementSourcePixelsLogTime;
     private Color32[] _editedDecalPreviewPixelBuffer;
-    private DiagnosticsProcess _pendingDecalImportProcess;
-    private float _pendingDecalImportStartedAt;
-    private int _pendingDecalImportId;
     private string _pendingDeleteDesignPath = string.Empty;
     private string _pendingDeleteDecalPath = string.Empty;
     private GameObject _editorEventSystemObject;
@@ -2200,8 +2193,6 @@ internal sealed class SuitEditorController : MonoBehaviour
             }
         }
         _stickerStampTextures.Clear();
-        CancelPendingDecalImport("plugin destroy");
-
         if (_editorCanvasObject != null)
         {
             Destroy(_editorCanvasObject);
@@ -2242,7 +2233,6 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         ReapplyPlayerInputLock();
         EnsureCursorUnlockedWhileOpen();
-        PollPendingDecalImport();
         HandleControllerCursor();
         UpdateCanvasCursor(false, "update");
         if (IsWorldThirdPersonMode)
@@ -2429,7 +2419,6 @@ internal sealed class SuitEditorController : MonoBehaviour
 
         DrawableSuitsDiagnostics.Info($"Closing DrawableSuits editor. reason={reason}");
         _isOpen = false;
-        CancelPendingDecalImport($"close {reason}");
         CloseDesignCodePanel();
         CloseSavedDesignsPanel();
         CloseDecalsPanel();
@@ -2965,12 +2954,12 @@ internal sealed class SuitEditorController : MonoBehaviour
         ApplyTerminalOutline(dialog, TerminalOutlineColor);
 
         CreateAnchoredText(dialog.transform, "DecalsTitle", "Decals", 22, FontStyle.Bold, TextAnchor.MiddleLeft, new Rect(18f, 14f, 360f, 34f), TerminalStatusColor);
-        CreateAnchoredText(dialog.transform, "DecalsHelp", "Select a decal to load it into the current tool. PNG and JPG files are read from the DrawableSuits Decals folder.", 14, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(18f, 54f, 484f, 42f), TerminalTextColor);
+        CreateAnchoredText(dialog.transform, "DecalsHelp", "Select a decal from the folder. Use Copy Folder Path, add PNG/JPG files manually, then Refresh.", 14, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(18f, 54f, 484f, 42f), TerminalTextColor);
         _decalListContent = CreateAnchoredScrollList(dialog.transform, "DecalList", new Rect(18f, 104f, 484f, 276f));
 
         _deleteSelectedDecalButton = CreateAnchoredButton(dialog.transform, "Delete Selected", new Rect(18f, 394f, 124f, 34f), DeleteSelectedDecal);
-        _addDecalButton = CreateAnchoredButton(dialog.transform, "Add Decal", new Rect(150f, 394f, 102f, 34f), ImportDecalFromDialog);
-        CreateAnchoredButton(dialog.transform, "Refresh", new Rect(260f, 394f, 94f, 34f), RefreshDecalsPanel);
+        _addDecalButton = CreateAnchoredButton(dialog.transform, "Copy Folder Path", new Rect(150f, 394f, 142f, 34f), CopyDecalsFolderPath);
+        CreateAnchoredButton(dialog.transform, "Refresh", new Rect(300f, 394f, 82f, 34f), RefreshDecalsPanel);
         CreateAnchoredButton(dialog.transform, "Close", new Rect(404f, 394f, 98f, 34f), CloseDecalsPanel);
         _decalsStatusLabel = CreateAnchoredText(dialog.transform, "DecalsStatus", string.Empty, 13, FontStyle.Normal, TextAnchor.UpperLeft, new Rect(18f, 442f, 484f, 48f), TerminalStatusColor);
 
@@ -13311,8 +13300,8 @@ internal sealed class SuitEditorController : MonoBehaviour
         RefreshFileLists();
         _decalsPanelObject.SetActive(true);
         SetDecalsStatus(_decalFiles.Count == 0
-            ? "No decals found. Add a PNG/JPG file or place one in the Decals folder."
-            : "Select a decal to load it, or add a PNG/JPG file.");
+            ? "No decals found. Copy the folder path, add PNG/JPG files, then Refresh."
+            : "Select a decal to load it. Copy Folder Path helps add more files manually.");
         UpdateUiState();
         RebuildSelectableNavigation();
         DrawableSuitsDiagnostics.Info($"DecalsPanelOpened: decalCount={_decalFiles.Count}; selectedDecalIndex={_selectedDecalIndex}; selectedDecal={GetSelectedFilePath(_decalFiles, _selectedDecalIndex) ?? "none"}");
@@ -13321,7 +13310,6 @@ internal sealed class SuitEditorController : MonoBehaviour
     private void CloseDecalsPanel()
     {
         var wasOpen = IsDecalsPanelOpen();
-        CancelPendingDecalImport("close decals panel");
         CancelPendingDecalDelete("close decals panel");
         if (_decalsPanelObject != null)
         {
@@ -14107,7 +14095,7 @@ internal sealed class SuitEditorController : MonoBehaviour
         var pending = !string.IsNullOrWhiteSpace(selectedPath)
             && string.Equals(_pendingDeleteDecalPath, SafeFullPathOrEmpty(selectedPath), StringComparison.OrdinalIgnoreCase);
         SetButtonLabel(_deleteSelectedDecalButton, pending ? "Confirm Delete" : "Delete Selected");
-        SetInteractable(_deleteSelectedDecalButton, _pendingDecalImportProcess == null && _selectedDecalIndex >= 0 && _selectedDecalIndex < _decalFiles.Count);
+        SetInteractable(_deleteSelectedDecalButton, _selectedDecalIndex >= 0 && _selectedDecalIndex < _decalFiles.Count);
     }
 
     private void UpdateAddDecalButton()
@@ -14117,9 +14105,8 @@ internal sealed class SuitEditorController : MonoBehaviour
             return;
         }
 
-        var pending = _pendingDecalImportProcess != null;
-        SetButtonLabel(_addDecalButton, pending ? "Waiting..." : "Add Decal");
-        SetInteractable(_addDecalButton, !pending && _decalsPanelObject != null && _decalsPanelObject.activeSelf);
+        SetButtonLabel(_addDecalButton, "Copy Folder Path");
+        SetInteractable(_addDecalButton, _decalsPanelObject != null && _decalsPanelObject.activeSelf);
     }
 
     private void CancelPendingFileDeletes(string reason)
@@ -14327,406 +14314,25 @@ internal sealed class SuitEditorController : MonoBehaviour
         }
     }
 
-    private void ImportDecalFromDialog()
+    private void CopyDecalsFolderPath()
     {
-        CancelPendingDecalDelete("add decal");
-        if (_pendingDecalImportProcess != null)
-        {
-            SetDecalsStatus("Waiting for image selection...");
-            SetStatus("Waiting for image selection...", false);
-            return;
-        }
-
-        if (!TryStartExternalDecalImportPicker(out var failureReason))
-        {
-            SetDecalsStatus(failureReason);
-            SetStatus(failureReason, false);
-        }
-    }
-
-    private void CompleteDecalImportFromPicker(string selectedPath)
-    {
-        if (!TryImportDecalImage(selectedPath, out var importedPath, out var copied, out var importFailure))
-        {
-            SetDecalsStatus(importFailure);
-            SetStatus(importFailure, false);
-            DrawableSuitsDiagnostics.Warn($"DecalImportFailed: stage=import; source={selectedPath}; reason={importFailure}; decalsPath={DrawableSuitsPaths.Decals}");
-            return;
-        }
-
-        RefreshFileLists();
-        var importedIndex = FindFileIndex(_decalFiles, importedPath);
-        if (importedIndex < 0)
-        {
-            SetDecalsStatus("Imported decal, but it was not found after refresh.");
-            SetStatus("Imported decal, but it was not found after refresh.", false);
-            DrawableSuitsDiagnostics.Warn($"DecalImportFailed: stage=refresh-select; source={selectedPath}; target={importedPath}; copied={copied}; decalCount={_decalFiles.Count}");
-            return;
-        }
-
-        DrawableSuitsDiagnostics.Info($"DecalImported: source={selectedPath}; target={importedPath}; copied={copied}; selectedIndex={importedIndex}; decalCount={_decalFiles.Count}");
-        SelectDecal(importedIndex);
-        SetStatus($"Imported decal: {Path.GetFileName(importedPath)}.", false);
-    }
-
-    private bool TryStartExternalDecalImportPicker(out string failureReason)
-    {
-        failureReason = string.Empty;
-        if (Application.platform != RuntimePlatform.WindowsPlayer && Application.platform != RuntimePlatform.WindowsEditor)
-        {
-            failureReason = "File picker is only available on Windows. Add PNG/JPG files to the Decals folder and press Refresh.";
-            DrawableSuitsDiagnostics.Warn($"DecalImportPickerFailed: stage=start; reason=non-windows-platform; platform={Application.platform}; decalsPath={DrawableSuitsPaths.Decals}");
-            return false;
-        }
-
-        try
-        {
-            var script = string.Join("\r\n", new[]
-            {
-                "try {",
-                "Add-Type -AssemblyName System.Windows.Forms",
-                "$dialog = New-Object System.Windows.Forms.OpenFileDialog",
-                "$dialog.Title = 'Add DrawableSuits Decal'",
-                "$dialog.Filter = 'Image Files (*.png;*.jpg;*.jpeg)|*.png;*.jpg;*.jpeg|PNG Files (*.png)|*.png|JPEG Files (*.jpg;*.jpeg)|*.jpg;*.jpeg'",
-                "$dialog.CheckFileExists = $true",
-                "$dialog.CheckPathExists = $true",
-                "$dialog.Multiselect = $false",
-                "$pictures = [Environment]::GetFolderPath('MyPictures')",
-                "if ([System.IO.Directory]::Exists($pictures)) { $dialog.InitialDirectory = $pictures }",
-                "$result = $dialog.ShowDialog()",
-                "if ($result -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.WriteLine($dialog.FileName) }",
-                "exit 0",
-                "} catch {",
-                "[Console]::Error.WriteLine($_.Exception.Message)",
-                "exit 2",
-                "}"
-            });
-            var encodedScript = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
-            var startInfo = new DiagnosticsProcessStartInfo
-            {
-                FileName = ResolveWindowsPowerShellPath(),
-                Arguments = $"-NoProfile -STA -ExecutionPolicy Bypass -EncodedCommand {encodedScript}",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
-
-            var process = DiagnosticsProcess.Start(startInfo);
-            if (process == null)
-            {
-                failureReason = "File picker failed. Add PNG/JPG files to the Decals folder and press Refresh.";
-                DrawableSuitsDiagnostics.Warn($"DecalImportPickerFailed: stage=start; reason=process-null; picker={Path.GetFileName(startInfo.FileName)}; decalsPath={DrawableSuitsPaths.Decals}");
-                return false;
-            }
-
-            _pendingDecalImportProcess = process;
-            _pendingDecalImportStartedAt = Time.realtimeSinceStartup;
-            _pendingDecalImportId++;
-            SetDecalsStatus("Waiting for image selection...");
-            SetStatus("Waiting for image selection...", false);
-            UpdateAddDecalButton();
-            DrawableSuitsDiagnostics.Info($"DecalImportPickerStarted: id={_pendingDecalImportId}; picker={Path.GetFileName(startInfo.FileName)}; decalsPath={DrawableSuitsPaths.Decals}; selectedDecalIndex={_selectedDecalIndex}; decalCount={_decalFiles.Count}; maxTextureSize={DrawableSuitsPlugin.ModConfig.MaxTextureSize.Value}");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            failureReason = "File picker failed. Add PNG/JPG files to the Decals folder and press Refresh.";
-            DrawableSuitsDiagnostics.Exception("DecalImportPickerFailed: stage=start; reason=exception", ex);
-            return false;
-        }
-    }
-
-    private void PollPendingDecalImport()
-    {
-        var process = _pendingDecalImportProcess;
-        if (process == null)
-        {
-            return;
-        }
-
-        var id = _pendingDecalImportId;
-        try
-        {
-            if (!process.HasExited)
-            {
-                if (Time.realtimeSinceStartup - _pendingDecalImportStartedAt > DecalImportPickerTimeoutSeconds)
-                {
-                    ClearPendingDecalImportProcess(killProcess: true, out _);
-                    var timeoutStatus = "File picker timed out. Add PNG/JPG files to the Decals folder and press Refresh.";
-                    SetDecalsStatus(timeoutStatus);
-                    SetStatus(timeoutStatus, false);
-                    UpdateAddDecalButton();
-                    DrawableSuitsDiagnostics.Warn($"DecalImportPickerFailed: id={id}; stage=poll; reason=timeout; timeoutSeconds={DecalImportPickerTimeoutSeconds:0.#}; decalsPath={DrawableSuitsPaths.Decals}");
-                }
-
-                return;
-            }
-
-            var exitCode = process.ExitCode;
-            var stdout = SafeReadProcessStream(process, standardOutput: true);
-            var stderr = SafeReadProcessStream(process, standardOutput: false);
-            ClearPendingDecalImportProcess(killProcess: false, out _);
-            UpdateAddDecalButton();
-
-            var selectedPath = ExtractFirstOutputLine(stdout);
-            var stderrSummary = SummarizeProcessText(stderr);
-            if (exitCode != 0)
-            {
-                var failure = "File picker failed. Add PNG/JPG files to the Decals folder and press Refresh.";
-                SetDecalsStatus(failure);
-                SetStatus(failure, false);
-                DrawableSuitsDiagnostics.Warn($"DecalImportPickerFailed: id={id}; stage=completed; exitCode={exitCode}; stderr={stderrSummary}; decalsPath={DrawableSuitsPaths.Decals}");
-                return;
-            }
-
-            if (string.IsNullOrWhiteSpace(selectedPath))
-            {
-                SetDecalsStatus("File selection canceled.");
-                SetStatus("File selection canceled.", false);
-                DrawableSuitsDiagnostics.Info($"DecalImportPickerCanceled: id={id}; reason=user-canceled; exitCode={exitCode}; stderr={stderrSummary}; decalsPath={DrawableSuitsPaths.Decals}");
-                return;
-            }
-
-            DrawableSuitsDiagnostics.Info($"DecalImportPickerCompleted: id={id}; exitCode={exitCode}; selectedPath={selectedPath}; selectedFile={Path.GetFileName(selectedPath)}; stderr={stderrSummary}");
-            CompleteDecalImportFromPicker(selectedPath);
-        }
-        catch (Exception ex)
-        {
-            ClearPendingDecalImportProcess(killProcess: true, out _);
-            var failure = "File picker failed. Add PNG/JPG files to the Decals folder and press Refresh.";
-            SetDecalsStatus(failure);
-            SetStatus(failure, false);
-            UpdateAddDecalButton();
-            DrawableSuitsDiagnostics.Exception($"DecalImportPickerFailed: id={id}; stage=poll; reason=exception", ex);
-        }
-    }
-
-    private void CancelPendingDecalImport(string reason)
-    {
-        if (_pendingDecalImportProcess == null)
-        {
-            return;
-        }
-
-        var id = _pendingDecalImportId;
-        ClearPendingDecalImportProcess(killProcess: true, out var killed);
-        UpdateAddDecalButton();
-        DrawableSuitsDiagnostics.Info($"DecalImportPickerCanceled: id={id}; reason={reason}; killed={killed}; decalsPath={DrawableSuitsPaths.Decals}");
-    }
-
-    private void ClearPendingDecalImportProcess(bool killProcess, out bool killed)
-    {
-        killed = false;
-        var process = _pendingDecalImportProcess;
-        _pendingDecalImportProcess = null;
-        _pendingDecalImportStartedAt = 0f;
-        if (process == null)
-        {
-            return;
-        }
-
-        try
-        {
-            if (killProcess && !process.HasExited)
-            {
-                process.Kill();
-                killed = true;
-            }
-        }
-        catch (Exception ex)
-        {
-            DrawableSuitsDiagnostics.Exception("DecalImportPickerFailed: stage=cleanup; reason=kill-or-exit-check-exception", ex);
-        }
-
-        try
-        {
-            process.Dispose();
-        }
-        catch (Exception ex)
-        {
-            DrawableSuitsDiagnostics.Exception("DecalImportPickerFailed: stage=cleanup; reason=dispose-exception", ex);
-        }
-    }
-
-    private static string ResolveWindowsPowerShellPath()
-    {
-        try
-        {
-            var systemDirectory = Environment.GetFolderPath(Environment.SpecialFolder.System);
-            var powerShellPath = Path.Combine(systemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
-            if (File.Exists(powerShellPath))
-            {
-                return powerShellPath;
-            }
-        }
-        catch
-        {
-        }
-
-        return "powershell.exe";
-    }
-
-    private static string SafeReadProcessStream(DiagnosticsProcess process, bool standardOutput)
-    {
-        try
-        {
-            return standardOutput
-                ? process.StandardOutput.ReadToEnd()
-                : process.StandardError.ReadToEnd();
-        }
-        catch (Exception ex)
-        {
-            DrawableSuitsDiagnostics.Exception($"DecalImportPickerFailed: stage=stream-read; stream={(standardOutput ? "stdout" : "stderr")}", ex);
-            return string.Empty;
-        }
-    }
-
-    private static string ExtractFirstOutputLine(string output)
-    {
-        if (string.IsNullOrWhiteSpace(output))
-        {
-            return string.Empty;
-        }
-
-        var lines = output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-        return lines.Length == 0 ? string.Empty : lines[0].Trim();
-    }
-
-    private static string SummarizeProcessText(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return "none";
-        }
-
-        var summary = text.Replace('\r', ' ').Replace('\n', ' ').Trim();
-        return summary.Length <= 180 ? summary : summary.Substring(0, 180) + "...";
-    }
-
-    private bool TryImportDecalImage(string sourcePath, out string importedPath, out bool copied, out string failureReason)
-    {
-        importedPath = null;
-        copied = false;
-        failureReason = string.Empty;
-        if (string.IsNullOrWhiteSpace(sourcePath))
-        {
-            failureReason = "No image file was selected.";
-            return false;
-        }
-
-        string sourceFullPath;
-        try
-        {
-            sourceFullPath = Path.GetFullPath(sourcePath);
-        }
-        catch (Exception ex)
-        {
-            failureReason = "Selected decal path is invalid.";
-            DrawableSuitsDiagnostics.Exception($"DecalImportFailed path validation exception. source={sourcePath}", ex);
-            return false;
-        }
-
-        if (!File.Exists(sourceFullPath) || Directory.Exists(sourceFullPath))
-        {
-            failureReason = "Selected decal file does not exist.";
-            return false;
-        }
-
-        if (!TextureTools.IsImagePath(sourceFullPath))
-        {
-            failureReason = "Selected file must be PNG, JPG, or JPEG.";
-            return false;
-        }
-
-        Texture2D validationTexture = null;
-        try
-        {
-            validationTexture = TextureTools.LoadImageFile(sourceFullPath, DrawableSuitsPlugin.ModConfig.MaxTextureSize.Value);
-            if (validationTexture == null)
-            {
-                failureReason = "Selected image could not be decoded.";
-                return false;
-            }
-        }
-        catch (Exception ex)
-        {
-            failureReason = "Selected image could not be decoded.";
-            DrawableSuitsDiagnostics.Exception($"DecalImportFailed image decode exception. source={sourceFullPath}", ex);
-            return false;
-        }
-        finally
-        {
-            if (validationTexture != null)
-            {
-                Destroy(validationTexture);
-            }
-        }
-
+        CancelPendingDecalDelete("copy decals folder path");
         try
         {
             DrawableSuitsPaths.EnsureCreated();
-            importedPath = CreateUniqueDecalImportPath(sourceFullPath);
-            if (!string.Equals(sourceFullPath, importedPath, StringComparison.OrdinalIgnoreCase))
-            {
-                File.Copy(sourceFullPath, importedPath, false);
-                copied = true;
-            }
-
-            return true;
+            var decalsPath = Path.GetFullPath(DrawableSuitsPaths.Decals);
+            GUIUtility.systemCopyBuffer = decalsPath;
+            const string message = "Decals folder path copied. Add PNG/JPG files there, then press Refresh.";
+            SetDecalsStatus(message);
+            SetStatus("Decals folder path copied.", false);
+            DrawableSuitsDiagnostics.Info($"DecalsFolderPathCopied: decalsPath={decalsPath}; decalCount={_decalFiles.Count}; selectedDecalIndex={_selectedDecalIndex}");
         }
         catch (Exception ex)
         {
-            failureReason = "Selected image could not be copied into the Decals folder.";
-            DrawableSuitsDiagnostics.Exception($"DecalImportFailed copy exception. source={sourceFullPath}; target={importedPath ?? "null"}; decalsPath={DrawableSuitsPaths.Decals}", ex);
-            return false;
-        }
-    }
-
-    private static string CreateUniqueDecalImportPath(string sourceFullPath)
-    {
-        var decalsRoot = Path.GetFullPath(DrawableSuitsPaths.Decals);
-        var extension = Path.GetExtension(sourceFullPath).ToLowerInvariant();
-        var baseName = TextureTools.SanitizeFileName(Path.GetFileNameWithoutExtension(sourceFullPath));
-        if (string.IsNullOrWhiteSpace(baseName))
-        {
-            baseName = "Decal";
-        }
-
-        var sameFolderTarget = Path.GetFullPath(Path.Combine(decalsRoot, baseName + extension));
-        if (IsPathUnderRoot(sourceFullPath, decalsRoot)
-            && string.Equals(sourceFullPath, sameFolderTarget, StringComparison.OrdinalIgnoreCase))
-        {
-            return sourceFullPath;
-        }
-
-        var candidate = sameFolderTarget;
-        var suffix = 1;
-        while (File.Exists(candidate))
-        {
-            candidate = Path.GetFullPath(Path.Combine(decalsRoot, $"{baseName}_{suffix}{extension}"));
-            suffix++;
-        }
-
-        return candidate;
-    }
-
-    private static bool IsPathUnderRoot(string path, string rootDirectory)
-    {
-        try
-        {
-            var fullPath = Path.GetFullPath(path);
-            var rootPath = Path.GetFullPath(rootDirectory);
-            if (!rootPath.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal))
-            {
-                rootPath += Path.DirectorySeparatorChar;
-            }
-
-            return fullPath.StartsWith(rootPath, StringComparison.OrdinalIgnoreCase);
-        }
-        catch
-        {
-            return false;
+            const string message = "Could not copy the Decals folder path.";
+            SetDecalsStatus(message);
+            SetStatus(message, false);
+            DrawableSuitsDiagnostics.Exception("DecalsFolderPathCopyFailed", ex);
         }
     }
 

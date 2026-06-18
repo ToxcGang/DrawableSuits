@@ -1,102 +1,74 @@
 # DrawableSuits
 
-DrawableSuits is a Lethal Company v81 BepInEx mod for drawing directly on your currently worn suit. It includes a third-person suit editor, an always-visible UV texture panel, decals, stickers, text, saved designs, and shareable design codes.
+DrawableSuits is a Lethal Company BepInEx mod for drawing on your currently worn suit from inside the game.
 
-Current version: `0.5.75`
+Current version: `0.5.76`
 
-## What It Does
+## Features
 
-- Edits only the local player's currently worn suit.
-- Shows a frozen third-person editor avatar so idle breathing does not move the paint target.
-- Keeps the UV texture panel visible beside the third-person view for direct texture editing.
-- Applies full-suit texture edits; there is no part picker.
-- Supports player-specific multiplayer Apply/Save sync for other players using DrawableSuits.
-- Keeps applied designs on matching dead bodies/ragdolls when players die.
-- Saves designs as local files and exports/imports portable `DSUIT2:` share codes.
+- Third-person suit editor with a frozen avatar pose for stable painting.
+- Always-visible UV texture panel for direct texture editing.
+- Paint, Erase, Fill, Decal, Sticker, Text, Eyedropper, and Mirror tools.
+- Brush shapes, recent colors, undo history, saved designs, and shareable `DSUIT2:` design codes.
+- Decal and sticker temporary edits for crop, stretch, flip, and filters.
+- Multiplayer Apply/Save sync for other players who also have DrawableSuits installed.
+- Applied designs can be reused on matching dead bodies/ragdolls.
+
+## Basic Controls
+
+- Pause menu `DrawableSuits`, `F8`, or `F10`: open the editor.
+- Left mouse / right trigger: paint, erase, fill, sample, or stamp depending on the active tool.
+- Right mouse drag / right stick: orbit the editor camera, or pan the UV panel when over it.
+- Mouse wheel / D-pad up/down: zoom the camera, or zoom the UV panel when over it.
+- `[` / `]` or controller `LB` / `RB`: rotate the UV panel.
+- `,` / `.` or D-pad left/right: rotate Decal or Sticker placement.
+- `Escape` or `Close`: close the editor.
+
+Most advanced tools are UI-only so controller and keyboard shortcuts stay limited.
 
 ## Tools
 
-- `Paint`: draw on the suit or UV panel.
+- `Paint`: draw with the current brush color, opacity, and brush shape.
 - `Erase`: restore pixels toward the base suit texture.
 - `Fill`: flood-fill a contiguous matching color region.
-- `Decal`: place PNG/JPG decals from the Decals menu.
-- `Sticker`: place built-in shapes such as stars, hearts, arrows, rings, and shields.
+- `Decal`: stamp user PNG/JPG images from the Decals folder.
+- `Sticker`: stamp built-in shapes such as stars, hearts, arrows, rings, and shields.
 - `Text`: stamp one line of Arial text using the brush color and opacity.
-- `Eyedropper`: sample a color from the suit, then return to the previous tool.
-- `Mirror`: UI toggle that mirrors Paint, Erase, Fill, Decal, Sticker, and Text onto the opposite suit surface when possible.
+- `Eyedropper`: sample a color from the suit or UV panel.
+- `Mirror`: mirror supported edits to the opposite suit surface when a target is found.
 
-Paint and Erase support brush shapes: Circle, Square, Pixel, Spray Paint, Soft Airbrush, and Noise/Scatter.
+## Decals
 
-Decals and stickers can be temporarily edited before placement with crop, stretch, flip, and filter controls. These edits affect previews and future stamps only; original decal files and built-in sticker sources are not changed.
+Decals are loaded from:
 
-## Editor Controls
+`BepInEx/config/DrawableSuits/Decals`
 
-### Keyboard And Mouse
+Use the Decals menu button `Copy Folder Path`, place `.png`, `.jpg`, or `.jpeg` files in that folder manually, then press `Refresh`.
 
-- Pause menu `DrawableSuits`, `F8`, or `F10`: open the editor.
-- Left mouse: paint/erase continuously, fill once, or stamp Decal/Text/Sticker once.
-- Right mouse drag: orbit the third-person camera, or pan the UV panel when over the panel.
-- Mouse wheel: zoom the third-person camera, or zoom the UV panel when over the panel.
-- Ctrl + mouse wheel: change brush size.
-- `,` / `.`: rotate Decal or Sticker placement left/right by 5 degrees.
-- `[` / `]`: rotate the UV panel left/right by 90 degrees. Decal, Sticker, and Text placement stays visually aligned with the rotated panel.
-- `Escape` or `Close`: close the editor.
+DrawableSuits does not launch an OS file picker, shell, Explorer window, or external helper process for decals.
 
-### Controller
-
-- `View/Back + Y`: open or close the editor.
-- Left stick: move the editor cursor.
-- `A`: click the UI control under the cursor.
-- Right trigger: paint/erase, fill once, sample, or stamp once depending on the active tool.
-- Right stick: orbit the third-person camera, or pan the UV panel when over it.
-- `LB` / `RB`: rotate the UV panel left/right by 90 degrees.
-- D-pad up/down: zoom the third-person camera, or zoom the UV panel when over it.
-- D-pad left/right: rotate Decal or Sticker placement by 5 degrees.
-- `Y`: cycles Paint, Erase, and Decal.
-- `X`: undo.
-- Start: save.
-
-Most newer tools and modifiers are UI-only to avoid shortcut clutter.
-
-## Decals, Stickers, And Text
-
-- Open `Decals` to select, add, refresh, or delete decal image files.
-- `Add Decal` copies a selected PNG/JPG/JPEG into the DrawableSuits Decals folder using an external Windows picker process.
-- Open `Stickers` to choose a built-in shape.
-- Decal and Sticker world previews wait until the cursor stops moving before rebuilding, which keeps movement smooth.
-- Text, Decal, and Sticker stamps are baked into the suit texture after placement. They are not editable layers afterward.
-
-## Designs, Codes, And History
+## Designs And Codes
 
 - `Save` writes the current design to disk.
-- `Designs` opens saved designs for the current suit editor.
-- `Apply` syncs the current edited texture to other DrawableSuits users.
-- `Export Code` copies a compact lossless `DSUIT2:` code.
-- `Import Code` loads a `DSUIT2:` or legacy `DSUIT1:` code into the current suit without auto-saving or auto-applying.
-- Undo History labels actions such as Brush stroke, Erase, Decal placed, Sticker placed, Text placed, Color fill, Reset, Load design, and Import code.
-- `Undo Selected` removes only the selected history action where the snapshot diff can be isolated.
+- `Designs` opens saved designs for the current suit.
+- `Apply` updates the visible runtime suit and broadcasts the design in multiplayer.
+- `Export Code` copies a portable `DSUIT2:` share code.
+- `Import Code` loads a code locally; it does not broadcast until `Apply` or `Save`.
 - `Clear History` clears undo/redo history without changing the current texture.
 
-## Folders
+## Multiplayer
 
-DrawableSuits creates these folders under `BepInEx/config/DrawableSuits`:
+Multiplayer sync uses Unity Netcode named messages.
 
-- `Saves`: saved design metadata.
-- `Textures`: saved design PNG textures.
-- `Decals`: user decal images.
-- `Logs`: diagnostics logs.
+Designs sync only when you press `Apply` or `Save`; live brush strokes are not sent. The edited texture is encoded as PNG bytes, chunked, sent reliably, rebuilt by other clients, and applied to the matching player/suit.
 
-Manual decal placement still works: copy images into `Decals`, open the Decals menu, and press `Refresh`.
+All players who should see edited suits need DrawableSuits installed, network sync enabled, and compatible versions. Players without DrawableSuits can still join, but they will see original suit textures.
 
-## Compatibility Notes
+## Compatibility
 
-DrawableSuits works best with vanilla-style suits and modded suits that expose a normal `suitMaterial`. Designs can be loaded across suits, but different UV layouts may stretch or misplace drawings.
+DrawableSuits works best with vanilla-style suits and suit mods that expose the normal suit material/texture layout.
 
-DrawableSuits is not compatible with ModelReplacementAPI. Replacement models can use separate renderers and materials that DrawableSuits cannot safely map to the current suit texture, so the editor may show incorrect geometry, duplicate helmets, or uneditable surfaces. Use the UV panel where possible or disable the replacement while editing.
-
-Players without DrawableSuits can join normally, but they will see original suit textures.
-
-Multiplayer sync is explicit: press `Apply` or `Save` after editing. If a design is too large to sync, DrawableSuits shows a status message and logs the byte size and configured limit. All players who should see edited suits need DrawableSuits installed, updated to the same current version, and network sync enabled.
+DrawableSuits is not compatible with ModelReplacementAPI. Replacement models can use separate meshes, renderers, or materials that DrawableSuits cannot safely map to the suit texture, which can cause duplicate helmets, incorrect geometry, or uneditable surfaces.
 
 ## Support
 
@@ -104,10 +76,14 @@ Multiplayer sync is explicit: press `Apply` or `Save` after editing. If a design
 
 Donations help support continued DrawableSuits development, and commissions are available.
 
+## Development Note
+
+DrawableSuits has used AI-assisted development for implementation, text, debugging, and error fixing. Please select Thunderstore's `AI Generated` tag when uploading the package.
+
 ## Troubleshooting
 
-- Check `BepInEx/config/DrawableSuits/Logs/diagnostics.log` for DrawableSuits editor, input, painting, decal, sticker, sync, and import/export details.
-- In Gale, also check the active profile's `BepInEx/LogOutput.log` and search for `DrawableSuits`.
-- If `Add Decal` is unavailable or canceled, place the image in the Decals folder manually and press `Refresh`.
-- If Mirror cannot find the opposite surface, DrawableSuits applies the primary edit only and logs the skipped mirror target.
-- If a modded or replacement suit displays incorrectly, use the UV panel fallback; ModelReplacementAPI is not supported.
+- DrawableSuits logs to `BepInEx/config/DrawableSuits/Logs/diagnostics.log`.
+- Gale/BepInEx also writes the profile log at `BepInEx/LogOutput.log`.
+- If decals do not appear, copy images into the Decals folder and press `Refresh`.
+- If multiplayer designs do not appear, confirm all players have DrawableSuits installed and press `Apply` or `Save`.
+- If a modded or replacement suit displays incorrectly, use the UV panel where possible; ModelReplacementAPI is unsupported.
