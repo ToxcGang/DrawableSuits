@@ -78,7 +78,7 @@ Donations help support continued DrawableSuits development, and commissions are 
 
 ## Development Note
 
-DrawableSuits has used AI-assisted development for implementation, text, debugging, and error fixing. Please select Thunderstore's `AI Generated` tag when uploading the package.
+DrawableSuits has used AI-assisted development for implementation, text, debugging, and error fixing.
 
 ## Troubleshooting
 
