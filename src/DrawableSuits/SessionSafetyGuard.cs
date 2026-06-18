@@ -32,8 +32,6 @@ internal static class SessionSafetyGuard
                 }
             }
 
-            JetpackWarningCompatibilityGuard.CheckAndRepair(reason, forceLog || repaired > 0);
-
             var shouldLog = forceLog || repaired > 0 || Time.unscaledTime - _lastFullLogTime >= 2.5f;
             if (!shouldLog)
             {
@@ -47,7 +45,7 @@ internal static class SessionSafetyGuard
                 $"SessionSafetyCheck reason={reason}; scene={scene.name}; editorOpen={editorOpen}; repaired={repaired}; " +
                 $"mainCamera={DescribeCamera(Camera.main)}; activeCameras=[{DescribeCameras()}]; " +
                 $"localPlayer=[{DescribeLocalPlayer(localPlayer)}]; prompt=[{DescribePrompt(localPlayer)}]; " +
-                $"localRenderers=[{DescribeLocalRenderers(localPlayer)}]; jetpackWarningGuard={JetpackWarningCompatibilityGuard.Status}");
+                $"localRenderers=[{DescribeLocalRenderers(localPlayer)}]");
         }
         catch (Exception ex)
         {

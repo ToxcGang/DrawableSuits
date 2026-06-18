@@ -2,7 +2,7 @@
 
 DrawableSuits is a Lethal Company BepInEx mod for drawing on your currently worn suit from inside the game.
 
-Current version: `0.5.76`
+Current version: `0.5.77`
 
 ## Features
 

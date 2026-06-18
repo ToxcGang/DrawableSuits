@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.77
+
+- Removed the JetpackWarning compatibility guard, including its log scanning, Harmony unpatching, config entry, and session-safety diagnostics.
+
 ## 0.5.76
 
 - Removed the external decal picker path. The Decals menu now copies the Decals folder path and relies on manual PNG/JPG placement plus `Refresh`.

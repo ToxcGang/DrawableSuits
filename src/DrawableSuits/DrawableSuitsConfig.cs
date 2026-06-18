@@ -20,7 +20,6 @@ internal sealed class DrawableSuitsConfig
     
     public ConfigEntry<bool> ApplyLocalFirstPersonArms { get; }
     
-    public ConfigEntry<bool> AutoDisableBrokenJetpackWarningLateUpdatePatch { get; }
     public DrawableSuitsConfig(ConfigFile config)
     {
         OpenEditorKey = config.Bind("Input", "OpenEditorKey", KeyCode.F8, "Keyboard key that opens or closes the suit editor.");
@@ -36,6 +35,5 @@ internal sealed class DrawableSuitsConfig
         ThirdPersonCameraDistance = config.Bind("Editor", "ThirdPersonCameraDistance", 3.4f, "Default third-person editor camera orbit distance.");
         RecentColors = config.Bind("Editor", "RecentColors", string.Empty, "Recent brush colors as comma-separated #RRGGBB values. Colors are added only after Paint, Fill, or Text writes to the suit.");
         ApplyLocalFirstPersonArms = config.Bind("Compatibility", "ApplyLocalFirstPersonArms", false, "Experimental. When false, DrawableSuits does not apply edited materials to the local first-person arms/body outside the editor.");
-        AutoDisableBrokenJetpackWarningLateUpdatePatch = config.Bind("Compatibility", "AutoDisableBrokenJetpackWarningLateUpdatePatch", true, "Automatically disable JetpackWarning.Patches.PlayerControllerB_LateUpdate_Postfix if it repeatedly throws NullReferenceException and breaks session startup.");
     }
 }
