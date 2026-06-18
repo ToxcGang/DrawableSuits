@@ -1,0 +1,135 @@
+name: Feature Request
+description: Suggest an idea or improvement for DrawableSuits
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a DrawableSuits feature.
+
+        Please explain what problem this feature solves and how you imagine it working.
+        Clear examples, screenshots, mockups, or references are helpful.
+
+  - type: checkboxes
+    id: pre-checks
+    attributes:
+      label: Before Requesting
+      description: Please confirm these before submitting.
+      options:
+        - label: I searched existing issues and did not find the same feature request.
+          required: true
+        - label: I checked the README/troubleshooting notes to make sure this does not already exist.
+          required: true
+        - label: This request is related to DrawableSuits.
+          required: true
+
+  - type: input
+    id: summary
+    attributes:
+      label: Feature Summary
+      description: Briefly describe the feature you want.
+      placeholder: "Example: Add a way to organize saved suit designs into folders"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or Use Case
+      description: What problem would this feature solve?
+      placeholder: |
+        Example:
+        I have a lot of saved suit designs, and it is hard to find the one I want.
+        Folders or categories would make the design list easier to manage.
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: Describe how you think the feature should work.
+      placeholder: |
+        Example:
+        Add a folder/category system to the Designs menu.
+        Users could create folders like "Funny", "Crew", "Horror", or "Testing" and move designs into them.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: feature-area
+    attributes:
+      label: Feature Area
+      description: Which part of DrawableSuits would this affect?
+      options:
+        - Editor UI
+        - Painting tools
+        - Decals
+        - Stickers
+        - Text tool
+        - Mirror tool
+        - UV texture panel
+        - Saving/loading designs
+        - Import/export DSUIT2 codes
+        - Multiplayer sync
+        - Controller support
+        - Modded suit compatibility
+        - Dead body/ragdoll support
+        - Config/options
+        - Performance
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Are there other ways this could be handled?
+      placeholder: |
+        Example:
+        Instead of folders, the design menu could have search, tags, or sorting by date/name.
+    validations:
+      required: false
+
+  - type: textarea
+    id: examples
+    attributes:
+      label: Examples, Mockups, or References
+      description: Add screenshots, drawings, links, or examples from other tools/mods if useful.
+      placeholder: "Drag and drop images here, or describe the example."
+    validations:
+      required: false
+
+  - type: dropdown
+    id: importance
+    attributes:
+      label: How important is this feature to you?
+      options:
+        - Nice to have
+        - Would make the mod easier to use
+        - Important for my use case
+        - Needed for compatibility with another mod
+    validations:
+      required: true
+
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Mod Compatibility Notes
+      description: If this request involves another mod, suit pack, model replacement, or multiplayer setup, describe it here.
+      placeholder: |
+        Example:
+        This would help with More Suits / ModelReplacementAPI / TooManySuits because...
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra-context
+    attributes:
+      label: Additional Context
+      description: Add anything else that may help explain the request.
+      placeholder: "Example: This would be useful when hosting public lobbies because..."
+    validations:
+      required: false
