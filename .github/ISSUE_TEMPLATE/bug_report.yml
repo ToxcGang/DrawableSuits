@@ -1,0 +1,232 @@
+```yml
+name: Bug Report
+description: Report a reproducible DrawableSuits bug
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a DrawableSuits bug.
+
+        Please include as much detail as possible. Logs are especially helpful:
+        - `BepInEx/config/DrawableSuits/Logs/diagnostics.log`
+        - `BepInEx/LogOutput.log`
+
+        Do not paste private information, tokens, or unrelated personal data.
+
+  - type: checkboxes
+    id: pre-checks
+    attributes:
+      label: Before Reporting
+      description: Please confirm these before submitting.
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
+        - label: I am using a supported Lethal Company version for this DrawableSuits release.
+          required: true
+        - label: I checked the README/troubleshooting notes.
+          required: true
+
+  - type: input
+    id: summary
+    attributes:
+      label: Bug Summary
+      description: Briefly describe the problem.
+      placeholder: "Example: Saved suit design does not load after restarting the game"
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: List the exact steps needed to trigger the bug.
+      placeholder: |
+        1. Launch Lethal Company with DrawableSuits installed
+        2. Open the suit editor with F8/F10 or the pause menu
+        3. Draw on the suit
+        4. Press Save
+        5. Restart the game
+        6. Open Designs
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What should have happened?
+      placeholder: "The saved design should appear and load normally."
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened instead?
+      placeholder: "The design list is empty / the texture is missing / the editor freezes / etc."
+    validations:
+      required: true
+
+  - type: input
+    id: drawable-version
+    attributes:
+      label: DrawableSuits Version
+      description: Which version of DrawableSuits are you using?
+      placeholder: "Example: 0.5.77"
+    validations:
+      required: true
+
+  - type: input
+    id: game-version
+    attributes:
+      label: Lethal Company Version
+      description: Which Lethal Company version are you using?
+      placeholder: "Example: v81"
+    validations:
+      required: true
+
+  - type: input
+    id: bepinex-version
+    attributes:
+      label: BepInEx / Mod Manager
+      description: Include your BepInEx version and mod manager if applicable.
+      placeholder: "Example: BepInEx 5.x, Gale, r2modman, Thunderstore Mod Manager"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: install-source
+    attributes:
+      label: Install Source
+      description: Where did you install DrawableSuits from?
+      options:
+        - Thunderstore
+        - GitHub release
+        - Manual/local build
+        - Modpack/profile
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: multiplayer
+    attributes:
+      label: Does this happen in multiplayer?
+      options:
+        - Singleplayer / solo only
+        - Multiplayer only
+        - Both singleplayer and multiplayer
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: suit-type
+    attributes:
+      label: Suit Type
+      description: What kind of suit were you editing?
+      options:
+        - Vanilla suit
+        - Modded suit
+        - Replacement/model swap suit
+        - Dead body/ragdoll suit
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: other-mods
+    attributes:
+      label: Other Installed Mods
+      description: List other mods in the profile, especially suit, model, texture, UI, multiplayer, or terminal mods.
+      placeholder: |
+        - More Suits
+        - ModelReplacementAPI
+        - TooManySuits
+        - LethalConfig
+        - etc.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: isolation-test
+    attributes:
+      label: Isolation Test
+      description: This helps determine whether the bug is caused by another mod.
+      options:
+        - label: I tested with only BepInEx and DrawableSuits installed.
+        - label: The bug still happens with only BepInEx and DrawableSuits installed.
+        - label: I have not tested this yet.
+
+  - type: dropdown
+    id: feature-area
+    attributes:
+      label: Affected Feature
+      description: Which DrawableSuits feature seems related to the bug?
+      options:
+        - Opening/closing the editor
+        - Painting / erasing / fill tool
+        - Decals
+        - Stickers
+        - Text tool
+        - Mirror tool
+        - UV texture panel
+        - Saving/loading designs
+        - Import/export DSUIT2 codes
+        - Multiplayer sync
+        - Controller support
+        - Modded suit compatibility
+        - Dead body/ragdoll support
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: decals-designs
+    attributes:
+      label: Decals, Designs, or DSUIT2 Codes
+      description: If relevant, include decal file type/size, design name, or a DSUIT2 code that triggers the issue.
+      placeholder: |
+        Decal file type:
+        Decal image size:
+        Design name:
+        DSUIT2 code:
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Paste relevant errors from diagnostics.log and/or LogOutput.log. You can also drag and drop log files into the issue.
+      render: text
+      placeholder: |
+        Paste relevant log output here.
+
+        Useful files:
+        - BepInEx/config/DrawableSuits/Logs/diagnostics.log
+        - BepInEx/LogOutput.log
+    validations:
+      required: false
+
+  - type: textarea
+    id: screenshots-video
+    attributes:
+      label: Screenshots or Video
+      description: Add screenshots or a short clip if the issue is visual.
+      placeholder: "Drag and drop images/videos here, or paste links."
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra-context
+    attributes:
+      label: Additional Context
+      description: Add anything else that may help debug the issue.
+      placeholder: "Example: It only happens after switching suits, after joining late, after importing a code, etc."
+    validations:
+      required: false
+```
